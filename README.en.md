@@ -62,7 +62,7 @@ BiliShelf is mainly built to solve these common problems:
 
    Extension stores:
 
-   - Edge: `https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/`
+   - Edge: `[https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/](https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/cnenidkjccfkjjbkcmkkbgjilhohpjbi)`
    - Firefox: `https://addons.mozilla.org/en-GB/firefox/addon/bilishelf/`
 
    GitHub Releases:
