@@ -60,7 +60,7 @@ BiliShelf 主要解决这些常见问题：
 1. 下载：
 
 - (1).前往浏览器扩展商店下载（商店版本一般落后于 Release）：
-- Edge：https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/
+- Edge：[https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/](https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/cnenidkjccfkjjbkcmkkbgjilhohpjbi)
 - Firefox：https://addons.mozilla.org/zh-CN/firefox/addon/bilishelf/
 
 - (2).前往仓库 `Releases` 页面，下载对应浏览器的插件压缩包：
