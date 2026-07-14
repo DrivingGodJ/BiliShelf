@@ -189,6 +189,12 @@ export type HistoryModelSyncStatus = {
   message: string;
   lastError: string | null;
   riskBlocked: boolean;
+  phase: "idle" | "running" | "paused" | "waiting" | "failed" | "completed";
+  nextRetryAt: number | null;
+  retryAutomatic: boolean;
+  retryReason: string | null;
+  retryAttempt: number;
+  riskCount: number;
   resumePageByFolder?: Record<string, number>;
   summary: FavoritesSyncSummary;
   invalidVideosDetected?: number;

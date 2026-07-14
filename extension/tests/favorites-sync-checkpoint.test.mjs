@@ -170,6 +170,7 @@ test("a page checkpoint persists imported relations and the next cursor together
         relationCount: pageOneCheckpoint?.folderItems.length || 0,
         page: pageOneCheckpoint?.active?.nextPage,
         seen: pageOneCheckpoint?.active?.seenBvidKeysByFolder?.["99"],
+        riskRetry: state.syncMeta.favoritesJob.active?.retry,
       };
     `,
   });
@@ -177,6 +178,9 @@ test("a page checkpoint persists imported relations and the next cursor together
   assert.equal(payload.result.relationCount, 2);
   assert.equal(payload.result.page, 2);
   assert.deepEqual(payload.result.seen, ["bvpage1a", "bvpage1b"]);
+  assert.equal(payload.result.riskRetry.automatic, false);
+  assert.equal(payload.result.riskRetry.reason, "risk-control");
+  assert.ok(payload.result.riskRetry.nextRetryAt > 0);
 });
 
 test("completing a durable job clears its checkpoint and retains the final summary", () => {

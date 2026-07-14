@@ -7,6 +7,89 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeRandom(random) {
+  const sampled = typeof random === "function" ? Number(random()) : Math.random();
+  return Number.isFinite(sampled) ? clamp(sampled, 0, 1) : 0.5;
+}
+
+export function resolveTransientRetryPolicy(options = {}) {
+  const attempt = Math.max(1, toPositiveInt(options.attempt, 1));
+  const detectedAt = Math.max(0, Number(options.detectedAt) || Date.now());
+  const retryAfterMs = toPositiveInt(options.retryAfterMs);
+  const exponentialMs = Math.min(2_000 * 2 ** Math.min(attempt - 1, 20), 300_000);
+  const jitterMultiplier = 0.75 + normalizeRandom(options.random) * 0.5;
+  const delayMs = retryAfterMs > 0
+    ? retryAfterMs
+    : Math.min(300_000, Math.round(exponentialMs * jitterMultiplier));
+  return {
+    attempt,
+    delayMs,
+    nextRetryAt: detectedAt + delayMs,
+    automatic: true,
+    reason: retryAfterMs > 0 ? "retry-after" : "transient",
+    riskCount: Math.max(0, toPositiveInt(options.previousRiskCount)),
+  };
+}
+
+export function resolveRiskPausePolicy(options = {}) {
+  const detectedAt = Math.max(0, Number(options.detectedAt) || Date.now());
+  const previousRiskCount = Math.max(0, toPositiveInt(options.previousRiskCount));
+  const baseDelayMs = Math.min(15 * 60_000 * 2 ** Math.min(previousRiskCount, 3), 2 * 60 * 60_000);
+  const jitterMultiplier = 0.9 + normalizeRandom(options.random) * 0.2;
+  const delayMs = Math.min(
+    2 * 60 * 60_000,
+    Math.round(baseDelayMs * jitterMultiplier)
+  );
+  return {
+    attempt: Math.max(1, toPositiveInt(options.attempt, 1)),
+    delayMs,
+    nextRetryAt: detectedAt + delayMs,
+    automatic: false,
+    reason: "risk-control",
+    riskCount: previousRiskCount + 1,
+  };
+}
+
+export function resolveFavoritesFailurePolicy(options = {}) {
+  const status = Number(options.status) || 0;
+  const message = String(options.message || "").toLowerCase();
+  const riskBlocked = status === 412 || message.includes("risk") || message.includes("风控");
+  if (riskBlocked) {
+    return {
+      phase: "paused",
+      ...resolveRiskPausePolicy(options),
+    };
+  }
+
+  const transient =
+    status === 408 ||
+    status === 429 ||
+    status >= 500 ||
+    message.includes("timeout") ||
+    message.includes("network") ||
+    message.includes("temporar");
+  if (transient) {
+    return {
+      phase: "waiting",
+      ...resolveTransientRetryPolicy(options),
+    };
+  }
+
+  return {
+    phase: "failed",
+    attempt: Math.max(1, toPositiveInt(options.attempt, 1)),
+    delayMs: 0,
+    nextRetryAt: null,
+    automatic: false,
+    reason: "permanent",
+    riskCount: Math.max(0, toPositiveInt(options.previousRiskCount)),
+  };
+}
+
+export function resolveSuccessfulRetryAttempt(attempt) {
+  return Math.max(0, toPositiveInt(attempt) - 1);
+}
+
 function resolveFolderPressure(folderMediaCount) {
   const count = toPositiveInt(folderMediaCount);
   if (count >= 5000) return 3;

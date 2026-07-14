@@ -19,9 +19,11 @@ import {
 } from "../shared/ai-provider-settings.js";
 import {
   createFavoritesSyncThrottleState,
+  resolveFavoritesFailurePolicy,
   resolveFavoritesCooldownPolicy,
   resolveFavoritesFolderGapMs,
   resolveFavoritesPageGapMs,
+  resolveSuccessfulRetryAttempt,
   updateFavoritesSyncThrottleState,
 } from "../shared/favorites-sync-throttle.js";
 import {
@@ -288,6 +290,7 @@ const DEFAULT_COVER = "https://i0.hdslb.com/bfs/archive/placeholder.jpg";
 const PAGE_FETCH_MESSAGE_TYPE = "BILISHELF_PAGE_FETCH_JSON";
 const TAG_ENRICH_ALARM = "bilishelf-tag-enrich";
 const STAGE3_RECONCILE_ALARM = "bilishelf-stage3-reconcile";
+const FAVORITES_SYNC_RETRY_ALARM = "bilishelf-favorites-sync-retry";
 const TAG_ENRICH_BATCH_SIZE = 2;
 const STAGE3_RECONCILE_DEFAULT_INTERVAL_MINUTES = 30;
 const STAGE3_RECONCILE_RETRY_DELAY_MINUTES = 5;
@@ -368,6 +371,12 @@ type FavoritesSyncStatus = {
   message: string;
   lastError: string | null;
   riskBlocked: boolean;
+  phase: "idle" | "running" | "paused" | "waiting" | "failed" | "completed";
+  nextRetryAt: number | null;
+  retryAutomatic: boolean;
+  retryReason: string | null;
+  retryAttempt: number;
+  riskCount: number;
   resumePageByFolder: Record<string, number>;
   invalidVideosDetected: number;
   invalidVideoIds: number[];
@@ -377,13 +386,14 @@ type FavoritesSyncStatus = {
   incompleteFolders: FavoritesSyncIncompleteFolder[];
 };
 
-type FavoritesSyncJobPhase = "running" | "paused" | "failed";
+type FavoritesSyncJobPhase = "running" | "paused" | "waiting" | "failed";
 
 type FavoritesSyncRetryState = {
   attempt: number;
   nextRetryAt: number | null;
   automatic: boolean;
   reason: string | null;
+  riskCount: number;
 };
 
 type FavoritesSyncJob = {
@@ -562,6 +572,12 @@ const defaultFavoritesSyncStatus = (): FavoritesSyncStatus => ({
   message: "",
   lastError: null,
   riskBlocked: false,
+  phase: "idle",
+  nextRetryAt: null,
+  retryAutomatic: false,
+  retryReason: null,
+  retryAttempt: 0,
+  riskCount: 0,
   resumePageByFolder: {},
   invalidVideosDetected: 0,
   invalidVideoIds: [],
@@ -701,6 +717,19 @@ function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
     message: normalizeText(raw.message),
     lastError: normalizeText(raw.lastError) || null,
     riskBlocked: Boolean(raw.riskBlocked),
+    phase:
+      raw.phase === "running" ||
+      raw.phase === "paused" ||
+      raw.phase === "waiting" ||
+      raw.phase === "failed" ||
+      raw.phase === "completed"
+        ? raw.phase
+        : "idle",
+    nextRetryAt: toIntOrNull(raw.nextRetryAt),
+    retryAutomatic: Boolean(raw.retryAutomatic),
+    retryReason: normalizeText(raw.retryReason) || null,
+    retryAttempt: Math.max(0, toInt(raw.retryAttempt, 0)),
+    riskCount: Math.max(0, toInt(raw.riskCount, 0)),
     resumePageByFolder,
     invalidVideosDetected: Math.max(
       invalidVideoIds.length,
@@ -764,6 +793,7 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
   const phase: FavoritesSyncJobPhase =
     activeRaw.phase === "running" ||
     activeRaw.phase === "failed" ||
+    activeRaw.phase === "waiting" ||
     activeRaw.phase === "paused"
       ? activeRaw.phase
       : "paused";
@@ -812,7 +842,8 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
       attempt: Math.max(0, toInt(retryRaw.attempt, 0)),
       nextRetryAt: toIntOrNull(retryRaw.nextRetryAt),
       automatic: Boolean(retryRaw.automatic),
-      reason: normalizeText(retryRaw.reason) || null
+      reason: normalizeText(retryRaw.reason) || null,
+      riskCount: Math.max(0, toInt(retryRaw.riskCount, 0))
     }
   };
   if (Object.keys(active.deletionCandidatesByFolder).length === 0) {
@@ -861,7 +892,8 @@ function createFavoritesSyncJob(
       attempt: 0,
       nextRetryAt: null,
       automatic: false,
-      reason: null
+      reason: null,
+      riskCount: 0
     }
   };
 }
@@ -886,12 +918,8 @@ function prepareFavoritesSyncJob(
     meta.active.phase = "running";
     meta.active.updatedAt = Math.max(0, toInt(startedAt, now()));
     meta.active.riskBlocked = false;
-    meta.active.retry = {
-      attempt: 0,
-      nextRetryAt: null,
-      automatic: false,
-      reason: null
-    };
+    meta.active.retry.automatic = false;
+    meta.active.retry.nextRetryAt = null;
     return meta.active;
   }
   meta.active = createFavoritesSyncJob(selected, startedAt);
@@ -925,11 +953,19 @@ function statusFromFavoritesSyncJob(
         : "Starting favorites sync..."
       : job.riskBlocked
         ? "Favorites sync paused"
+        : job.phase === "waiting"
+          ? "Favorites sync waiting to retry"
         : job.phase === "failed"
           ? "Favorites sync failed"
           : "Favorites sync paused",
     lastError: job.lastError,
     riskBlocked: job.riskBlocked,
+    phase: running ? "running" : job.phase,
+    nextRetryAt: job.retry.nextRetryAt,
+    retryAutomatic: job.retry.automatic,
+    retryReason: job.retry.reason,
+    retryAttempt: job.retry.attempt,
+    riskCount: job.retry.riskCount,
     resumePageByFolder,
     invalidVideosDetected: job.invalidVideoIds.length,
     invalidVideoIds: [...job.invalidVideoIds],
@@ -948,9 +984,19 @@ function completeFavoritesSyncJob(
   meta.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
     job.deletionCandidatesByFolder
   );
+  job.retry = {
+    attempt: 0,
+    nextRetryAt: null,
+    automatic: false,
+    reason: null,
+    riskCount: 0
+  };
   meta.lastStatus = {
     ...statusFromFavoritesSyncJob(job, false, finishedAt),
-    message: "Favorites sync completed"
+    message: "Favorites sync completed",
+    phase: "completed",
+    nextRetryAt: null,
+    retryAutomatic: false
   };
   meta.active = null;
   return meta.lastStatus;
@@ -2062,6 +2108,18 @@ function isRetryableStatus(status: number) {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function parseRetryAfterMs(value: unknown, referenceTime = now()) {
+  const text = normalizeText(value);
+  if (!text) return null;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const target = Date.parse(text);
+  if (!Number.isFinite(target)) return null;
+  return Math.max(0, target - referenceTime);
+}
+
 function isRiskControlError(message: string) {
   const text = normalizeText(message);
   return text.includes("(412)") || text.includes(" 412");
@@ -2364,6 +2422,7 @@ class BiliRequestError extends Error {
   stage: SyncFetchStage;
   source: FetchSource;
   url: string;
+  retryAfterMs: number | null;
 
   constructor(params: {
     status: number;
@@ -2371,6 +2430,7 @@ class BiliRequestError extends Error {
     source: FetchSource;
     url: string;
     message: string;
+    retryAfterMs?: number | null;
   }) {
     super(params.message);
     this.name = "BiliRequestError";
@@ -2378,6 +2438,7 @@ class BiliRequestError extends Error {
     this.stage = params.stage;
     this.source = params.source;
     this.url = params.url;
+    this.retryAfterMs = params.retryAfterMs ?? null;
   }
 }
 
@@ -2723,7 +2784,7 @@ async function fetchBiliJsonByExtension<T>(
   stage: SyncFetchStage,
   options: BiliExtensionRequestOptions = {}
 ): Promise<T> {
-  const maxAttempts = 3;
+  const maxAttempts = stage === "folderVideos" ? 1 : 3;
   let lastError: BiliRequestError | null = null;
   let manualCookieHeader = await getBiliCookieHeader();
   if (!manualCookieHeader) {
@@ -2766,6 +2827,7 @@ async function fetchBiliJsonByExtension<T>(
       );
 
       if (!response.ok) {
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
         if (response.status === 401 || response.status === 403) {
           // Login/session may have rotated, refresh cached cookie once.
           manualCookieHeader = await getBiliCookieHeader(true);
@@ -2776,7 +2838,8 @@ async function fetchBiliJsonByExtension<T>(
             stage,
             source: "extension",
             url,
-            message: `Bilibili API request failed (${response.status})`
+            message: `Bilibili API request failed (${response.status})`,
+            retryAfterMs
           });
         }
         if (attempt < maxAttempts && isRetryableStatus(response.status)) {
@@ -2789,14 +2852,15 @@ async function fetchBiliJsonByExtension<T>(
           stage,
           source: "extension",
           url,
-          message: `Bilibili API request failed (${response.status})`
+          message: `Bilibili API request failed (${response.status})`,
+          retryAfterMs
         });
       }
 
       const payload = (await response.json()) as BiliApiResponse<T>;
       if (payload.code !== 0) {
         throw new BiliRequestError({
-          status: response.status,
+          status: payload.code === -412 ? 412 : response.status,
           stage,
           source: "extension",
           url,
@@ -2932,7 +2996,15 @@ function toAid(value: unknown) {
   return parsed > 0 ? parsed : 0;
 }
 
-async function resolveFavoriteMediaBvid(media: Record<string, unknown>) {
+async function resolveFavoriteMediaBvid(
+  media: Record<string, unknown>
+): Promise<{
+  bvid: string;
+  aid: number | null;
+  reason: string | null;
+  riskBlocked: boolean;
+  error?: unknown;
+}> {
   const directBvid = normalizeText(media.bvid ?? media.bv_id);
   const aid = toAid(media.id ?? media.aid);
   if (directBvid) {
@@ -2982,7 +3054,8 @@ async function resolveFavoriteMediaBvid(media: Record<string, unknown>) {
           : String(error),
       riskBlocked: isBiliRequestError(error)
         ? error.status === 412 || isRiskControlError(formatBiliRequestError(error))
-        : isRiskControlError(error instanceof Error ? error.message : String(error))
+        : isRiskControlError(error instanceof Error ? error.message : String(error)),
+      error
     };
   }
 }
@@ -3957,6 +4030,47 @@ function ensureFavoritesSyncJobMeta(state: LocalState) {
   return state.syncMeta.favoritesJob;
 }
 
+function applyFavoritesSyncFailurePolicy(
+  job: FavoritesSyncJob,
+  error: unknown,
+  message: string
+) {
+  const policy = resolveFavoritesFailurePolicy({
+    status: isBiliRequestError(error) ? error.status : 0,
+    message,
+    attempt: job.retry.attempt + 1,
+    detectedAt: now(),
+    retryAfterMs: isBiliRequestError(error) ? error.retryAfterMs : null,
+    previousRiskCount: job.retry.riskCount,
+    random: Math.random
+  });
+  job.phase = policy.phase;
+  job.retry = {
+    attempt: policy.attempt,
+    nextRetryAt: policy.nextRetryAt,
+    automatic: policy.automatic,
+    reason: policy.reason,
+    riskCount: policy.riskCount
+  };
+  if (policy.phase === "paused") job.riskBlocked = true;
+  return policy;
+}
+
+function scheduleFavoritesSyncRetry(job: FavoritesSyncJob | null) {
+  if (
+    !job ||
+    !job.retry.automatic ||
+    !job.retry.nextRetryAt ||
+    !chrome.alarms?.create
+  ) {
+    if (chrome.alarms?.clear) chrome.alarms.clear(FAVORITES_SYNC_RETRY_ALARM);
+    return;
+  }
+  chrome.alarms.create(FAVORITES_SYNC_RETRY_ALARM, {
+    when: Math.max(now() + 1000, job.retry.nextRetryAt)
+  });
+}
+
 async function syncFromBilibiliToState(
   state: LocalState,
   options: {
@@ -4196,7 +4310,7 @@ async function syncFromBilibiliToState(
           folderFailed = true;
           resumePageByFolder[String(remoteFolder.remoteId)] = page;
           if (job) {
-            job.phase = isRisk ? "paused" : "failed";
+            applyFavoritesSyncFailurePolicy(job, error, message);
             job.nextPage = page;
             job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
               Array.from(remoteBvidKeys).sort();
@@ -4235,6 +4349,13 @@ async function syncFromBilibiliToState(
                 folder: remoteFolder.title,
                 message: resolvedIdentity.reason || "Bilibili risk-control blocked BV resolution"
               });
+              if (job) {
+                applyFavoritesSyncFailurePolicy(
+                  job,
+                  resolvedIdentity.error,
+                  resolvedIdentity.reason || "Bilibili risk-control blocked BV resolution"
+                );
+              }
               break;
             }
             skippedMissingBvid += 1;
@@ -4338,7 +4459,6 @@ async function syncFromBilibiliToState(
         if (pageAbortedByRisk) {
           resumePageByFolder[String(remoteFolder.remoteId)] = page;
           if (job) {
-            job.phase = "paused";
             job.nextPage = page;
             job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
               Array.from(remoteBvidKeys).sort();
@@ -4349,6 +4469,16 @@ async function syncFromBilibiliToState(
           break;
         }
         observedRowCount += medias.length;
+        if (job && job.retry.attempt > 0) {
+          const nextAttempt = resolveSuccessfulRetryAttempt(job.retry.attempt);
+          job.retry = {
+            attempt: nextAttempt,
+            nextRetryAt: null,
+            automatic: false,
+            reason: nextAttempt > 0 ? "recovering" : null,
+            riskCount: Math.max(0, job.retry.riskCount - 1)
+          };
+        }
         progressCurrent += medias.length;
         emitProgress({
           folderTitle: remoteFolder.title,
@@ -4487,6 +4617,7 @@ async function syncFromBilibiliToState(
       const isRiskBlocked = isBiliRequestError(error)
         ? error.status === 412 || isRiskControlError(message)
         : isRiskControlError(message);
+      if (job) applyFavoritesSyncFailurePolicy(job, error, message);
       if (isRiskBlocked) {
         riskBlocked = true;
         errors.push({
@@ -4494,13 +4625,11 @@ async function syncFromBilibiliToState(
           message: "Bilibili risk-control (412) detected. Stop and retry later."
         });
         if (job) {
-          job.phase = "paused";
           await checkpointJob();
         }
         break;
       }
       if (job) {
-        job.phase = "failed";
         await checkpointJob();
       }
     }
@@ -4947,6 +5076,16 @@ async function startFavoritesSyncTask(params: {
   if (favoritesSyncTask || favoritesSyncStartPending) {
     return false;
   }
+  const existingState = await readState();
+  const existingJob = existingState.syncMeta.favoritesJob.active;
+  if (
+    existingJob?.phase === "paused" &&
+    !existingJob.retry.automatic &&
+    existingJob.retry.nextRetryAt &&
+    existingJob.retry.nextRetryAt > now()
+  ) {
+    return false;
+  }
   favoritesSyncStartPending = true;
   try {
     const jobId = await withState((state) => {
@@ -4972,6 +5111,7 @@ async function startFavoritesSyncTask(params: {
       });
     }, false)
       .then(async (result) => {
+        let retryJob: FavoritesSyncJob | null = null;
         await withState((state) => {
           const meta = state.syncMeta.favoritesJob;
           const active = meta.active;
@@ -4987,9 +5127,15 @@ async function startFavoritesSyncTask(params: {
           if (result.completed && !result.riskBlocked) {
             completeFavoritesSyncJob(meta, active, now());
           } else {
-            active.phase = result.riskBlocked ? "paused" : "failed";
+            active.phase = result.riskBlocked
+              ? "paused"
+              : active.retry.automatic
+                ? "waiting"
+                : "failed";
+            retryJob = active;
           }
         }, true);
+        scheduleFavoritesSyncRetry(retryJob);
       })
       .catch(async (error) => {
         const message = isBiliRequestError(error)
@@ -4997,10 +5143,11 @@ async function startFavoritesSyncTask(params: {
           : error instanceof Error
             ? error.message
             : String(error);
+        let retryJob: FavoritesSyncJob | null = null;
         await withState((state) => {
           const active = state.syncMeta.favoritesJob.active;
           if (!active || active.id !== jobId) return;
-          active.phase = "failed";
+          applyFavoritesSyncFailurePolicy(active, error, message);
           active.lastError = message;
           active.errors = [
             ...active.errors,
@@ -5008,7 +5155,9 @@ async function startFavoritesSyncTask(params: {
           ].slice(-100);
           active.summary.errorCount = active.errors.length;
           active.updatedAt = now();
+          retryJob = active;
         }, true);
+        scheduleFavoritesSyncRetry(retryJob);
       })
       .finally(() => {
         favoritesSyncTask = null;
@@ -6938,6 +7087,9 @@ export default defineBackground(() => {
   if (chrome.alarms?.clear) {
     chrome.alarms.clear(TAG_ENRICH_ALARM);
   }
+  void readState()
+    .then((state) => scheduleFavoritesSyncRetry(state.syncMeta.favoritesJob.active))
+    .catch(() => undefined);
 
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
@@ -6945,6 +7097,22 @@ export default defineBackground(() => {
         if (chrome.alarms?.clear) {
           chrome.alarms.clear(TAG_ENRICH_ALARM);
         }
+        return;
+      }
+      if (alarm.name === FAVORITES_SYNC_RETRY_ALARM) {
+        if (chrome.alarms?.clear) chrome.alarms.clear(FAVORITES_SYNC_RETRY_ALARM);
+        void (async () => {
+          const state = await readState();
+          const job = state.syncMeta.favoritesJob.active;
+          if (!job?.retry.automatic || !job.retry.nextRetryAt) return;
+          if (job.retry.nextRetryAt > now()) {
+            scheduleFavoritesSyncRetry(job);
+            return;
+          }
+          await startFavoritesSyncTask({
+            selectedRemoteFolderIds: job.selectedRemoteFolderIds
+          });
+        })().catch(() => undefined);
         return;
       }
     });
