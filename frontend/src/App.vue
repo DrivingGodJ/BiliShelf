@@ -15,8 +15,8 @@ import WebDavBackupDialog from "./components/dialogs/WebDavBackupDialog.vue";
 import VideoDetailDialog from "./components/dialogs/VideoDetailDialog.vue";
 import InvalidVideoRecoveryDialog from "./components/dialogs/InvalidVideoRecoveryDialog.vue";
 import FollowingUpImportDialog from "./components/dialogs/FollowingUpImportDialog.vue";
-import FolderSidebar from "./components/FolderSidebar.vue";
 import AiCategoryBrowser from "./components/AiCategoryBrowser.vue";
+import ManagerFolderNavigation from "./components/layout/ManagerFolderNavigation.vue";
 import ManagerHeader from "./components/layout/ManagerHeader.vue";
 import ManagerPanel from "./components/panels/ManagerPanel.vue";
 import FollowingUpPanel from "./components/panels/FollowingUpPanel.vue";
@@ -2559,11 +2559,13 @@ onBeforeUnmount(() => {
     class="mx-auto grid min-h-screen w-full max-w-[1840px] grid-cols-1 gap-5 px-4 py-5 lg:px-6 lg:py-7"
     :class="followingUpsMode ? '' : 'lg:grid-cols-[320px_1fr]'"
   >
-    <FolderSidebar
+    <ManagerFolderNavigation
       v-if="!followingUpsMode"
+      :t="t"
       :folders="folders"
       :active-folder="activeFolder"
       :active-folder-id="selectedFolderId"
+      :result-count="total"
       :show-playback-actions="EXTENSION_LOCAL_API_RUNTIME && !trashMode"
       :has-selected-folder-ai-record="selectedFolderHasAiRecord"
       :can-open-selected-folder-ai-browser="selectedFolderCanOpenAiBrowser"

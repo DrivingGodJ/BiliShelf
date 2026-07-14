@@ -253,18 +253,20 @@ function submitVideoPageJump() {
     @detail="emit('detail', $event)"
   />
 
-  <section class="panel-surface p-4">
-    <div class="flex flex-wrap items-center justify-between gap-3.5">
+  <section
+    class="manager-pagination panel-surface sticky bottom-0 z-30 -mx-1 rounded-2xl border bg-background/95 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_36px_-24px_rgba(15,23,42,0.6)] backdrop-blur md:static md:mx-0 md:p-4 md:shadow-none"
+  >
+    <div class="flex flex-col items-stretch justify-between gap-2.5 sm:flex-row sm:items-center sm:gap-3.5">
       <p class="text-sm text-muted-foreground">
         {{ t("common.page", { page: videoPage, totalPage: videoTotalPages, total }) }}
       </p>
-      <div class="flex flex-wrap items-center gap-2">
-        <span class="text-xs text-muted-foreground">{{ t("common.perPage") }}</span>
+      <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible sm:pb-0">
+        <span class="shrink-0 text-xs text-muted-foreground">{{ t("common.perPage") }}</span>
         <Select
           :model-value="String(videoPageSize)"
           @update:model-value="emit('videoPageSizeChange', String($event))"
         >
-          <SelectTrigger class="h-9 w-[96px]">
+          <SelectTrigger class="h-11 w-[88px] shrink-0 sm:h-9 sm:w-[96px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -280,6 +282,7 @@ function submitVideoPageJump() {
         <Button
           size="sm"
           variant="outline"
+          class="min-h-11 shrink-0 sm:min-h-9"
           :disabled="videoPage <= 1 || loading"
           @click="emit('prevVideoPage')"
         >
@@ -289,6 +292,7 @@ function submitVideoPageJump() {
         <Button
           size="sm"
           variant="outline"
+          class="min-h-11 shrink-0 sm:min-h-9"
           :disabled="videoPage >= videoTotalPages || loading"
           @click="emit('nextVideoPage')"
         >
@@ -300,13 +304,14 @@ function submitVideoPageJump() {
           type="text"
           inputmode="numeric"
           :placeholder="t('common.pageJumpPlaceholder')"
-          class="h-9 w-[90px]"
+          class="h-11 w-[76px] shrink-0 sm:h-9 sm:w-[90px]"
           @update:model-value="handleVideoPageJumpInput(String($event))"
           @keydown.enter.prevent="submitVideoPageJump"
         />
         <Button
           size="sm"
           variant="outline"
+          class="min-h-11 shrink-0 sm:min-h-9"
           :disabled="loading || videoTotalPages <= 1"
           @click="submitVideoPageJump"
         >

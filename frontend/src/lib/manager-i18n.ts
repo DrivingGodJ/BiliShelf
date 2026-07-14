@@ -42,6 +42,7 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "header.syncImport": { "zh-CN": "同步导入", "en-US": "Sync Import" },
   "header.followingUps": { "zh-CN": "关注 UP", "en-US": "Following UPs" },
   "header.syncing": { "zh-CN": "同步中...", "en-US": "Syncing..." },
+  "header.moreActions": { "zh-CN": "更多", "en-US": "More" },
   "header.importData": { "zh-CN": "导入备份", "en-US": "Import Backup" },
   "header.exportBackup": { "zh-CN": "导出备份", "en-US": "Export Backup" },
   "header.exportDialogTitle": {
@@ -56,6 +57,14 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "header.exportCsv": { "zh-CN": "导出 CSV", "en-US": "Export CSV" },
   "header.openTrash": { "zh-CN": "打开回收站", "en-US": "Open Trash" },
   "header.backManager": { "zh-CN": "返回管理页", "en-US": "Back To Manager" },
+  "mobile.browseFolders": { "zh-CN": "收藏夹", "en-US": "Folders" },
+  "mobile.allVideos": { "zh-CN": "全部视频", "en-US": "All videos" },
+  "mobile.resultCount": { "zh-CN": "{count} 条", "en-US": "{count}" },
+  "mobile.folderDrawerTitle": {
+    "zh-CN": "选择收藏夹",
+    "en-US": "Choose a folder",
+  },
+  "mobile.scope": { "zh-CN": "当前范围", "en-US": "Current scope" },
   "view.manager": { "zh-CN": "视图：管理页", "en-US": "View: Manager" },
   "view.trash": { "zh-CN": "视图：回收站", "en-US": "View: Trash Bin" },
   "view.followingUps": { "zh-CN": "视图：关注 UP", "en-US": "View: Following UPs" },

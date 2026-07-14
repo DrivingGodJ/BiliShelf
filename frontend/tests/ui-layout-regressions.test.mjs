@@ -17,11 +17,11 @@ test("manager header keeps both action rows in stable four-column grids", async 
 
   assert.match(
     source,
-    /<div v-if="!props\.trashMode && !props\.followingUpsMode" class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
+    /<div v-if="!props\.trashMode && !props\.followingUpsMode" class="desktop-action-grid mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
   );
   assert.match(
     source,
-    /<div class="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
+    /<div class="desktop-action-grid mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
   );
 });
 
@@ -73,13 +73,13 @@ test("manager header gives trash mode a dedicated single-action row instead of t
 
   assert.match(
     source,
-    /<div v-if="!props\.trashMode && !props\.followingUpsMode" class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
+    /<div v-if="!props\.trashMode && !props\.followingUpsMode" class="desktop-action-grid mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
   );
   assert.match(
     source,
-    /<div v-else class="mt-5 flex justify-start md:justify-end">[\s\S]*@click="emit\('toggle-trash'\)"/s,
+    /<div v-else class="desktop-action-grid mt-5 flex justify-start md:justify-end">[\s\S]*@click="emit\('toggle-trash'\)"/s,
   );
-  assert.equal((source.match(/@click="emit\('toggle-trash'\)"/g) ?? []).length, 2);
+  assert.equal((source.match(/@click="emit\('toggle-trash'\)"/g) ?? []).length, 3);
 });
 
 test("manager header gives following-up mode a dedicated single-action return row instead of a highlighted entry in the main action grid", async () => {
@@ -87,13 +87,13 @@ test("manager header gives following-up mode a dedicated single-action return ro
 
   assert.match(
     source,
-    /<div v-if="!props\.trashMode && !props\.followingUpsMode" class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
+    /<div v-if="!props\.trashMode && !props\.followingUpsMode" class="desktop-action-grid mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">/,
   );
   assert.match(
     source,
-    /<div v-else-if="props\.followingUpsMode" class="mt-5 flex justify-start md:justify-end">[\s\S]*@click="emit\('open-following-ups'\)"/s,
+    /<div v-else-if="props\.followingUpsMode" class="desktop-action-grid mt-5 flex justify-start md:justify-end">[\s\S]*@click="emit\('open-following-ups'\)"/s,
   );
-  assert.equal((source.match(/@click="emit\('open-following-ups'\)"/g) ?? []).length, 2);
+  assert.equal((source.match(/@click="emit\('open-following-ups'\)"/g) ?? []).length, 3);
 });
 
 test("manager header and app remove the AI placeholder entry wiring", async () => {

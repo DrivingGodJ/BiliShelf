@@ -347,11 +347,11 @@ function triggerClear() {
         <Input
           v-model="searchKeyword"
           :placeholder="t('searchPlaceholder')"
-          class="pl-9"
+          class="h-11 pl-9"
         />
       </div>
       <Select :key="`folder-sort-${props.locale}`" v-model="sortBy">
-        <SelectTrigger class="w-full">
+        <SelectTrigger class="h-11 w-full">
           <SelectValue :placeholder="t('sortPlaceholder')" />
         </SelectTrigger>
         <SelectContent>
@@ -459,7 +459,7 @@ function triggerClear() {
       <div class="space-y-2.5">
         <button
           type="button"
-          class="interactive-lift flex w-full items-center gap-2 rounded-xl border border-border/70 bg-accent/35 px-3 py-2.5 text-left text-sm font-medium text-foreground"
+          class="interactive-lift flex min-h-11 w-full items-center gap-2 rounded-xl border border-border/70 bg-accent/35 px-3 py-2.5 text-left text-sm font-medium text-foreground"
           @click="createDialogOpen = true"
         >
           <span
@@ -472,7 +472,7 @@ function triggerClear() {
 
         <button
           type="button"
-          class="interactive-lift w-full rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition"
+          class="interactive-lift min-h-11 w-full rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition"
           :class="
             props.activeFolderId === null
               ? 'border-primary/45 bg-primary/10 text-primary'
@@ -520,7 +520,7 @@ function triggerClear() {
           <template v-else>
             <button
               type="button"
-              class="w-full text-left"
+              class="min-h-11 w-full text-left"
               @click="emit('select', folder.id)"
             >
               <div class="flex items-start justify-between gap-2">
@@ -545,7 +545,7 @@ function triggerClear() {
               <Button
                 size="icon"
                 variant="ghost"
-                class="h-8 w-8"
+                class="h-11 w-11"
                 @click="startEdit(folder)"
               >
                 <Pencil class="h-4 w-4" />
@@ -553,7 +553,7 @@ function triggerClear() {
               <Button
                 size="icon"
                 variant="ghost"
-                class="h-8 w-8 text-red-500"
+                class="h-11 w-11 text-red-500"
                 @click="handleDelete(folder.id)"
               >
                 <Trash2 class="h-4 w-4" />

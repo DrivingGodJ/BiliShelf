@@ -4,6 +4,7 @@ import {
   Bot,
   DatabaseBackup,
   Download,
+  Ellipsis,
   Languages,
   Moon,
   RefreshCcw,
@@ -59,6 +60,7 @@ const emit = defineEmits<{
 }>();
 
 const exportDialogOpen = ref(false);
+const mobileActionsOpen = ref(false);
 const topActionButtonClass = "h-12 w-full justify-start rounded-2xl border border-border/80 bg-card/80 px-4 shadow-sm shadow-black/5";
 const secondaryActionButtonClass = "h-12 w-full justify-start rounded-2xl border border-border/80 bg-card/80 px-4 shadow-sm shadow-black/5";
 const activeViewButtonClass = "border-primary/35 bg-primary/12 text-primary shadow-[0_12px_30px_-18px_hsl(var(--primary)/0.6)] hover:bg-primary/16 hover:text-primary dark:border-primary/30 dark:bg-primary/16";
@@ -144,7 +146,97 @@ function submitExport(format: "json" | "csv") {
       </div>
     </div>
 
-    <div v-if="!props.trashMode && !props.followingUpsMode" class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div class="mt-4 grid grid-cols-2 gap-2 md:hidden">
+      <Button
+        v-if="!props.trashMode && !props.followingUpsMode"
+        class="h-11 justify-start rounded-xl"
+        :disabled="props.syncing || props.exporting || props.importing"
+        @click="emit('sync-import')"
+      >
+        <RefreshCcw class="h-4 w-4" />
+        {{ props.syncing ? props.t("header.syncing") : props.t("header.syncImport") }}
+      </Button>
+      <Button
+        v-if="!props.trashMode && !props.followingUpsMode"
+        variant="outline"
+        class="h-11 justify-start rounded-xl"
+        :aria-expanded="mobileActionsOpen"
+        @click="mobileActionsOpen = !mobileActionsOpen"
+      >
+        <Ellipsis class="h-4 w-4" />
+        {{ props.t("header.moreActions") }}
+      </Button>
+      <Button
+        v-else
+        variant="outline"
+        class="col-span-2 h-11 justify-start rounded-xl"
+        @click="props.followingUpsMode ? emit('open-following-ups') : emit('toggle-trash')"
+      >
+        {{ props.t("header.backManager") }}
+      </Button>
+
+      <Transition name="mobile-actions">
+        <div
+          v-if="mobileActionsOpen && !props.trashMode && !props.followingUpsMode"
+          class="col-span-2 grid grid-cols-2 gap-2 rounded-2xl border bg-card/80 p-2 shadow-inner"
+        >
+          <Button
+            v-if="props.showAiSettings"
+            variant="ghost"
+            class="h-11 justify-start"
+            @click="emit('open-ai-settings')"
+          >
+            <Bot class="h-4 w-4" />
+            {{ props.t("header.aiSettings") }}
+          </Button>
+          <Button
+            v-if="props.showSyncSettings"
+            variant="ghost"
+            class="h-11 justify-start"
+            @click="emit('open-sync-settings')"
+          >
+            <RefreshCcw class="h-4 w-4" />
+            {{ props.t("header.syncSettings") }}
+          </Button>
+          <Button variant="ghost" class="h-11 justify-start" @click="emit('open-tags')">
+            <Tags class="h-4 w-4" />
+            {{ props.t("header.manageTags") }}
+          </Button>
+          <Button variant="ghost" class="h-11 justify-start" @click="emit('open-following-ups')">
+            <UserRoundCheck class="h-4 w-4" />
+            {{ props.t("header.followingUps") }}
+          </Button>
+          <Button variant="ghost" class="h-11 justify-start" @click="emit('toggle-trash')">
+            <Trash2 class="h-4 w-4" />
+            {{ props.t("header.openTrash") }}
+          </Button>
+          <Button variant="ghost" class="h-11 justify-start" @click="openExportDialog">
+            <Download class="h-4 w-4" />
+            {{ props.t("header.exportBackup") }}
+          </Button>
+          <Button
+            variant="ghost"
+            class="h-11 justify-start"
+            :disabled="props.syncing || props.exporting || props.importing"
+            @click="emit('import-file')"
+          >
+            <Upload class="h-4 w-4" />
+            {{ props.t("header.importData") }}
+          </Button>
+          <Button
+            variant="ghost"
+            class="h-11 justify-start"
+            :disabled="props.syncing || props.exporting || props.importing"
+            @click="emit('open-webdav-settings')"
+          >
+            <DatabaseBackup class="h-4 w-4" />
+            {{ props.t("webdav.title") }}
+          </Button>
+        </div>
+      </Transition>
+    </div>
+
+    <div v-if="!props.trashMode && !props.followingUpsMode" class="desktop-action-grid mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <Button
         size="sm"
         variant="outline"
@@ -202,7 +294,7 @@ function submitExport(format: "json" | "csv") {
       </Button>
     </div>
 
-    <div v-else-if="props.followingUpsMode" class="mt-5 flex justify-start md:justify-end">
+    <div v-else-if="props.followingUpsMode" class="desktop-action-grid mt-5 flex justify-start md:justify-end">
       <Button
         size="sm"
         variant="outline"
@@ -218,7 +310,7 @@ function submitExport(format: "json" | "csv") {
       </Button>
     </div>
 
-    <div v-else class="mt-5 flex justify-start md:justify-end">
+    <div v-else class="desktop-action-grid mt-5 flex justify-start md:justify-end">
       <Button
         size="sm"
         variant="outline"
@@ -238,7 +330,7 @@ function submitExport(format: "json" | "csv") {
       </Button>
     </div>
 
-    <div class="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div class="desktop-action-grid mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <Button
         v-if="!props.trashMode"
         size="sm"
@@ -328,3 +420,29 @@ function submitExport(format: "json" | "csv") {
     </Dialog>
   </header>
 </template>
+
+<style scoped>
+.mobile-actions-enter-active,
+.mobile-actions-leave-active {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.mobile-actions-enter-from,
+.mobile-actions-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@media (max-width: 767px) {
+  .desktop-action-grid {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-actions-enter-active,
+  .mobile-actions-leave-active {
+    transition: none;
+  }
+}
+</style>
