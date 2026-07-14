@@ -587,6 +587,7 @@ export type SyncFromBilibiliResult = {
     foldersSynced: number;
     videosProcessed: number;
     videosUpserted: number;
+    skippedMissingBvid: number;
     folderLinksAdded: number;
     tagsBound: number;
     errorCount: number;
@@ -654,6 +655,7 @@ export type HistoryModelSyncStatus = {
     foldersSynced: number;
     videosProcessed: number;
     videosUpserted: number;
+    skippedMissingBvid: number;
     folderLinksAdded: number;
     tagsBound: number;
     errorCount: number;

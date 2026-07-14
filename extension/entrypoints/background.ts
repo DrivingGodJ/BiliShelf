@@ -188,6 +188,21 @@ type LocalState = {
   ai: AiState;
 };
 
+type VideoTagSummary = {
+  tags: string[];
+  systemTags: string[];
+  customTags: string[];
+};
+
+type LocalStateIndexes = {
+  activeFoldersById: Map<number, FolderRecord>;
+  activeVideoIds: Set<number>;
+  folderItemsByVideoId: Map<number, FolderItemRecord[]>;
+  activeFolderIdsByVideoId: Map<number, Set<number>>;
+  activeFolderItemCountByFolderId: Map<number, number>;
+  tagSummaryByVideoId: Map<number, VideoTagSummary>;
+};
+
 type ApiResult = {
   ok: boolean;
   status: number;
@@ -274,6 +289,7 @@ const INVALID_VIDEO_RECOVERY_TIMEOUT_MS = 15_000;
 const INVALID_VIDEO_RECOVERY_GAP_MS = 1_200;
 const BILI_FOLLOWING_UPS_PAGE_SIZE = 50;
 const BILI_FOLLOWING_UPS_PAGE_GAP_MS = 900;
+const REMOTE_FAVORITE_ORDER_FALLBACK_BASE_MS = 1_000_000_000_000;
 
 type SyncFetchStage = "nav" | "folders" | "folderVideos" | "followings";
 type FetchSource = "extension" | "page";
@@ -296,6 +312,7 @@ type FavoritesSyncSummaryStatus = {
   foldersSynced: number;
   videosProcessed: number;
   videosUpserted: number;
+  skippedMissingBvid: number;
   folderLinksAdded: number;
   tagsBound: number;
   errorCount: number;
@@ -403,6 +420,7 @@ const defaultStage3ReconcileMeta = (): Stage3ReconcileMeta => ({
     foldersSynced: 0,
     videosProcessed: 0,
     videosUpserted: 0,
+    skippedMissingBvid: 0,
     folderLinksAdded: 0,
     tagsBound: 0,
     errorCount: 0
@@ -437,6 +455,7 @@ const emptyFavoritesSyncSummary = (): FavoritesSyncSummaryStatus => ({
   foldersSynced: 0,
   videosProcessed: 0,
   videosUpserted: 0,
+  skippedMissingBvid: 0,
   folderLinksAdded: 0,
   tagsBound: 0,
   errorCount: 0
@@ -709,6 +728,10 @@ async function readState() {
                 0,
                 toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.videosUpserted, 0)
               ),
+              skippedMissingBvid: Math.max(
+                0,
+                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.skippedMissingBvid, 0)
+              ),
               folderLinksAdded: Math.max(
                 0,
                 toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.folderLinksAdded, 0)
@@ -829,6 +852,109 @@ function ensureVideoTag(state: LocalState, videoId: number, tagId: number) {
   });
 }
 
+function emptyVideoTagSummary(): VideoTagSummary {
+  return {
+    tags: [],
+    systemTags: [],
+    customTags: []
+  };
+}
+
+function buildLocalStateIndexes(state: LocalState): LocalStateIndexes {
+  const activeFoldersById = new Map<number, FolderRecord>();
+  for (const folder of state.folders) {
+    if (folder.deletedAt === null) {
+      activeFoldersById.set(folder.id, folder);
+    }
+  }
+
+  const activeVideoIds = new Set<number>();
+  for (const video of state.videos) {
+    if (video.deletedAt === null) {
+      activeVideoIds.add(video.id);
+    }
+  }
+
+  const folderItemsByVideoId = new Map<number, FolderItemRecord[]>();
+  const activeFolderIdsByVideoId = new Map<number, Set<number>>();
+  const activeFolderItemCountByFolderId = new Map<number, number>();
+  for (const item of state.folderItems) {
+    const existingItems = folderItemsByVideoId.get(item.videoId);
+    if (existingItems) {
+      existingItems.push(item);
+    } else {
+      folderItemsByVideoId.set(item.videoId, [item]);
+    }
+
+    if (!activeFoldersById.has(item.folderId)) continue;
+
+    let folderIds = activeFolderIdsByVideoId.get(item.videoId);
+    if (!folderIds) {
+      folderIds = new Set<number>();
+      activeFolderIdsByVideoId.set(item.videoId, folderIds);
+    }
+    folderIds.add(item.folderId);
+
+    if (activeVideoIds.has(item.videoId)) {
+      activeFolderItemCountByFolderId.set(
+        item.folderId,
+        (activeFolderItemCountByFolderId.get(item.folderId) ?? 0) + 1
+      );
+    }
+  }
+
+  const activeTagsById = new Map<number, TagRecord>();
+  for (const tag of state.tags) {
+    if (tag.archivedAt === null) {
+      activeTagsById.set(tag.id, tag);
+    }
+  }
+
+  const tagSetsByVideoId = new Map<
+    number,
+    { tags: Set<string>; systemTags: Set<string>; customTags: Set<string> }
+  >();
+  for (const edge of state.videoTags) {
+    const tag = activeTagsById.get(edge.tagId);
+    if (!tag) continue;
+
+    let summary = tagSetsByVideoId.get(edge.videoId);
+    if (!summary) {
+      summary = {
+        tags: new Set<string>(),
+        systemTags: new Set<string>(),
+        customTags: new Set<string>()
+      };
+      tagSetsByVideoId.set(edge.videoId, summary);
+    }
+
+    summary.tags.add(tag.name);
+    if (tag.type === "system") {
+      summary.systemTags.add(tag.name);
+    } else {
+      summary.customTags.add(tag.name);
+    }
+  }
+
+  const tagSummaryByVideoId = new Map<number, VideoTagSummary>();
+  for (const [videoId, summary] of tagSetsByVideoId) {
+    tagSummaryByVideoId.set(videoId, {
+      tags: Array.from(summary.tags),
+      systemTags: Array.from(summary.systemTags),
+      customTags: Array.from(summary.customTags)
+    });
+  }
+
+  return {
+    activeFoldersById,
+    activeVideoIds,
+    folderItemsByVideoId,
+    activeFolderIdsByVideoId,
+    activeFolderItemCountByFolderId,
+    tagSummaryByVideoId
+  };
+}
+
 function getTagSummaryForVideo(state: LocalState, videoId: number) {
   const links = state.videoTags.filter((edge) => edge.videoId === videoId);
   const tags = links
@@ -845,10 +971,13 @@ function getTagSummaryForVideo(state: LocalState, videoId: number) {
   };
 }
 
-function computeAddedAt(state: LocalState, videoId: number, folderId?: number) {
-  const related = state.folderItems.filter((item) => item.videoId === videoId);
-  const active = related.filter((item) => {
-    const folder = state.folders.find((row) => row.id === item.folderId);
+function computeAddedAtFromItems(
+  items: FolderItemRecord[],
+  activeFoldersById: Map<number, FolderRecord>,
+  folderId?: number
+) {
+  const active = items.filter((item) => {
+    const folder = activeFoldersById.get(item.folderId);
     if (!folder || folder.deletedAt !== null) return false;
     if (folderId !== undefined && folder.id !== folderId) return false;
     return true;
@@ -858,12 +987,35 @@ function computeAddedAt(state: LocalState, videoId: number, folderId?: number) {
   return active.reduce((max, item) => Math.max(max, item.addedAt), 0);
 }
 
-function mapVideo(state: LocalState, video: VideoRecord, folderId?: number) {
-  const tagSummary = getTagSummaryForVideo(state, video.id);
+function computeAddedAt(state: LocalState, videoId: number, folderId?: number) {
+  const indexes = buildLocalStateIndexes(state);
+  return computeAddedAtFromItems(
+    indexes.folderItemsByVideoId.get(videoId) ?? [],
+    indexes.activeFoldersById,
+    folderId
+  );
+}
+
+function mapVideo(
+  state: LocalState,
+  video: VideoRecord,
+  folderId?: number,
+  indexes?: LocalStateIndexes
+) {
+  const tagSummary =
+    indexes?.tagSummaryByVideoId.get(video.id) ??
+    (indexes ? emptyVideoTagSummary() : getTagSummaryForVideo(state, video.id));
+  const addedAt = indexes
+    ? computeAddedAtFromItems(
+        indexes.folderItemsByVideoId.get(video.id) ?? [],
+        indexes.activeFoldersById,
+        folderId
+      )
+    : computeAddedAt(state, video.id, folderId);
   return {
     ...video,
     bvid: normalizeOutputBvid(video.bvid),
-    addedAt: computeAddedAt(state, video.id, folderId),
+    addedAt,
     tags: tagSummary.tags,
     systemTags: tagSummary.systemTags,
     customTags: tagSummary.customTags
@@ -893,23 +1045,20 @@ function filterVideoList(
   const uploaderKeyword = normalizeText(args.uploader);
   const customTagKeyword = normalizeText(args.customTag);
   const systemTagKeyword = normalizeText(args.systemTag);
+  const indexes = buildLocalStateIndexes(state);
 
   const rows = state.videos
     .filter((video) => (args.includeDeleted ? video.deletedAt !== null : video.deletedAt === null))
-    .map((video) => mapVideo(state, video, args.folderId))
-    .filter((video) => {
-      const folderIds = state.folderItems
-        .filter((item) => item.videoId === video.id)
-        .map((item) => item.folderId);
-      const activeFolderIds = folderIds.filter((folderId) => {
-        const folder = state.folders.find((row) => row.id === folderId);
-        return !!folder && folder.deletedAt === null;
-      });
+    .map((video) => mapVideo(state, video, args.folderId, indexes))
+    .filter((mappedVideo) => {
+      const activeFolderIds = indexes.activeFolderIdsByVideoId.get(mappedVideo.id) ?? new Set<number>();
 
-      if (!args.includeDeleted && activeFolderIds.length === 0) return false;
-      if (args.folderId !== undefined && !activeFolderIds.includes(args.folderId)) return false;
+      if (!args.includeDeleted && activeFolderIds.size === 0) return false;
+      if (args.folderId !== undefined && !activeFolderIds.has(args.folderId)) return false;
 
-      const allTags = video.tags || [];
+      const tagSummary = indexes.tagSummaryByVideoId.get(mappedVideo.id) ?? emptyVideoTagSummary();
+
+      const allTags = tagSummary.tags;
       if (
         requiredTags.length > 0 &&
         !requiredTags.every((keyword) =>
@@ -920,30 +1069,30 @@ function filterVideoList(
       }
 
       if (qKeyword) {
-        const hitTitle = includesIgnoreCase(video.title, qKeyword);
+        const hitTitle = includesIgnoreCase(mappedVideo.title, qKeyword);
         const hitTag = allTags.some((tagName) => includesIgnoreCase(tagName, qKeyword));
         if (!hitTitle && !hitTag) return false;
       }
 
-      if (titleKeyword && !includesIgnoreCase(video.title, titleKeyword)) return false;
-      if (descriptionKeyword && !includesIgnoreCase(video.description, descriptionKeyword)) return false;
-      if (uploaderKeyword && !includesIgnoreCase(video.uploader, uploaderKeyword)) return false;
+      if (titleKeyword && !includesIgnoreCase(mappedVideo.title, titleKeyword)) return false;
+      if (descriptionKeyword && !includesIgnoreCase(mappedVideo.description, descriptionKeyword)) return false;
+      if (uploaderKeyword && !includesIgnoreCase(mappedVideo.uploader, uploaderKeyword)) return false;
 
       if (
         customTagKeyword &&
-        !(video.customTags || []).some((tagName) => includesIgnoreCase(tagName, customTagKeyword))
+        !tagSummary.customTags.some((tagName) => includesIgnoreCase(tagName, customTagKeyword))
       ) {
         return false;
       }
 
       if (
         systemTagKeyword &&
-        !(video.systemTags || []).some((tagName) => includesIgnoreCase(tagName, systemTagKeyword))
+        !tagSummary.systemTags.some((tagName) => includesIgnoreCase(tagName, systemTagKeyword))
       ) {
         return false;
       }
 
-      const addedAt = video.addedAt ?? 0;
+      const addedAt = mappedVideo.addedAt ?? 0;
       if (args.from !== null && args.from !== undefined && addedAt < args.from) return false;
       if (args.to !== null && args.to !== undefined && addedAt > args.to) return false;
 
@@ -952,10 +1101,56 @@ function filterVideoList(
     .sort((a, b) => {
       const aRank = a.addedAt || a.updatedAt || 0;
       const bRank = b.addedAt || b.updatedAt || 0;
-      return bRank - aRank;
+      return bRank - aRank || b.id - a.id;
     });
 
   return rows;
+}
+
+function listActiveFoldersWithCounts(state: LocalState, indexes = buildLocalStateIndexes(state)) {
+  return activeFolders(state).map((folder) => ({
+    ...folder,
+    itemCount: indexes.activeFolderItemCountByFolderId.get(folder.id) ?? 0
+  }));
+}
+
+function listTagsWithUsageCounts(
+  state: LocalState,
+  args: {
+    page: string | null;
+    pageSize: string | null;
+    type: string | null;
+    search: string;
+  }
+) {
+  const indexes = buildLocalStateIndexes(state);
+  const usageCountByTagId = new Map<number, Set<number>>();
+  for (const edge of state.videoTags) {
+    if (!indexes.activeVideoIds.has(edge.videoId)) continue;
+    let videoIds = usageCountByTagId.get(edge.tagId);
+    if (!videoIds) {
+      videoIds = new Set<number>();
+      usageCountByTagId.set(edge.tagId, videoIds);
+    }
+    videoIds.add(edge.videoId);
+  }
+
+  const items = state.tags
+    .filter((tag) => tag.archivedAt === null)
+    .filter((tag) =>
+      args.type === "system" || args.type === "custom" ? tag.type === args.type : true
+    )
+    .filter((tag) => (args.search ? includesIgnoreCase(tag.name, args.search) : true))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((tag) => ({
+      id: tag.id,
+      name: tag.name,
+      type: tag.type,
+      usageCount: usageCountByTagId.get(tag.id)?.size ?? 0,
+      createdAt: tag.createdAt
+    }));
+
+  return paginate(items, args.page, args.pageSize);
 }
 
 function getPlaybackStorageArea(storage?: StorageAreaLike) {
@@ -1189,6 +1384,21 @@ function toMillis(value: unknown, fallback: number) {
   if (!Number.isFinite(parsed)) return fallback;
   if (parsed > 1e12) return Math.trunc(parsed);
   return Math.trunc(parsed * 1000);
+}
+
+function resolveRemoteFavoriteAddedAt(
+  rawFavTime: unknown,
+  page: number,
+  pageSize: number,
+  indexInPage: number
+) {
+  const parsed = Number(rawFavTime);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed > 1e12 ? Math.trunc(parsed) : Math.trunc(parsed * 1000);
+  }
+
+  const remoteIndex = Math.max(0, (Math.max(1, page) - 1) * pageSize + indexInPage);
+  return REMOTE_FAVORITE_ORDER_FALLBACK_BASE_MS - remoteIndex;
 }
 
 function sleep(ms: number) {
@@ -2535,6 +2745,7 @@ function ensureStage3ReconcileMeta(state: LocalState) {
       foldersSynced: 0,
       videosProcessed: 0,
       videosUpserted: 0,
+      skippedMissingBvid: 0,
       folderLinksAdded: 0,
       tagsBound: 0,
       errorCount: 0
@@ -3075,6 +3286,7 @@ type SyncSummary = {
   foldersSynced: number;
   videosProcessed: number;
   videosUpserted: number;
+  skippedMissingBvid: number;
   folderLinksAdded: number;
   tagsBound: number;
   errorCount: number;
@@ -3120,6 +3332,7 @@ async function syncFromBilibiliToState(
   let foldersSynced = 0;
   let videosProcessed = 0;
   let videosUpserted = 0;
+  let skippedMissingBvid = 0;
   let folderLinksAdded = 0;
   let tagsBound = 0;
   let riskBlocked = false;
@@ -3218,15 +3431,23 @@ async function syncFromBilibiliToState(
         }
         const responseMs = Math.max(0, now() - pageFetchStartedAt);
 
-        for (const media of medias) {
+        for (const [mediaIndex, media] of medias.entries()) {
           const bvid = normalizeText(media.bvid ?? media.bv_id);
-          if (!bvid) continue;
+          if (!bvid) {
+            skippedMissingBvid += 1;
+            continue;
+          }
           remoteBvidKeys.add(normalizeKey(bvid));
           videosProcessed += 1;
           videosSinceCooldown += 1;
           const timestamp = now();
           const publishAt = toMillis(media.pubtime ?? media.ctime, timestamp);
-          const favAt = toMillis(media.fav_time, timestamp);
+          const favAt = resolveRemoteFavoriteAddedAt(
+            media.fav_time,
+            page,
+            pageSize,
+            mediaIndex
+          );
           const existing = state.videos.find(
             (video) => normalizeKey(video.bvid) === normalizeKey(bvid)
           );
@@ -3289,7 +3510,7 @@ async function syncFromBilibiliToState(
               addedAt: favAt
             });
             folderLinksAdded += 1;
-          } else if (favAt > existingLink.addedAt) {
+          } else if (favAt !== existingLink.addedAt) {
             existingLink.addedAt = favAt;
           }
         }
@@ -3378,6 +3599,7 @@ async function syncFromBilibiliToState(
     foldersSynced,
     videosProcessed,
     videosUpserted,
+    skippedMissingBvid,
     folderLinksAdded,
     tagsBound,
     errorCount: errors.length
@@ -4281,15 +4503,7 @@ function handleReadOnlyApi(
   }
 
   if (path === "/folders") {
-    const items = activeFolders(state).map((folder) => {
-      const itemCount = state.folderItems.filter((item) => {
-        if (item.folderId !== folder.id) return false;
-        const video = state.videos.find((row) => row.id === item.videoId);
-        return !!video && video.deletedAt === null;
-      }).length;
-      return { ...folder, itemCount };
-    });
-    return ok({ items });
+    return ok({ items: listActiveFoldersWithCounts(state) });
   }
 
   if (path === "/trash/folders") {
@@ -4343,31 +4557,12 @@ function handleReadOnlyApi(
   }
 
   if (path === "/tags") {
-    const page = params.get("page");
-    const pageSize = params.get("pageSize");
-    const type = params.get("type");
-    const search = normalizeText(params.get("search"));
-    const items = state.tags
-      .filter((tag) => tag.archivedAt === null)
-      .filter((tag) => (type === "system" || type === "custom" ? tag.type === type : true))
-      .filter((tag) => (search ? includesIgnoreCase(tag.name, search) : true))
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((tag) => {
-        const linkedVideoIds = state.videoTags
-          .filter((edge) => edge.tagId === tag.id)
-          .map((edge) => edge.videoId);
-        const usageCount = state.videos.filter(
-          (video) => video.deletedAt === null && linkedVideoIds.includes(video.id)
-        ).length;
-        return {
-          id: tag.id,
-          name: tag.name,
-          type: tag.type,
-          usageCount,
-          createdAt: tag.createdAt
-        };
-      });
-    const data = paginate(items, page, pageSize);
+    const data = listTagsWithUsageCounts(state, {
+      page: params.get("page"),
+      pageSize: params.get("pageSize"),
+      type: params.get("type"),
+      search: normalizeText(params.get("search"))
+    });
     return ok(data);
   }
 

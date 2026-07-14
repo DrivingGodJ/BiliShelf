@@ -50,6 +50,7 @@ export const useLibraryStore = defineStore("library", () => {
   const trashVideoTotal = ref(0);
   const bootstrapped = ref(false);
   let bootstrapPromise: Promise<void> | null = null;
+  let refreshVideosRunId = 0;
 
   const customTags = computed(() =>
     tags.value.filter((tag) => tag.type === "custom")
@@ -138,6 +139,7 @@ export const useLibraryStore = defineStore("library", () => {
     >;
     globalKeyword: string;
   }) {
+    const runId = ++refreshVideosRunId;
     loading.value = true;
     try {
       const filters: VideoFilter = { ...activeFilters.value };
@@ -159,6 +161,8 @@ export const useLibraryStore = defineStore("library", () => {
       const result = params.globalKeyword
         ? await searchVideos({ ...query, q: params.globalKeyword })
         : await fetchVideos(query);
+      if (runId !== refreshVideosRunId) return;
+
       videos.value = result.items.map((video) => ({
         ...video,
         id: toNumericId(video.id),
@@ -179,7 +183,9 @@ export const useLibraryStore = defineStore("library", () => {
         videos.value.some((video) => video.id === id)
       );
     } finally {
-      loading.value = false;
+      if (runId === refreshVideosRunId) {
+        loading.value = false;
+      }
     }
   }
 
