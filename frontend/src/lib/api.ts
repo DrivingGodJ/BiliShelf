@@ -742,6 +742,7 @@ export async function fetchBilibiliSyncFolders(payload?: {
 export async function startHistoryModelSync(payload?: {
   selectedRemoteFolderIds?: number[];
   resumePageByFolder?: Record<string, number>;
+  restart?: boolean;
 }) {
   return request<{
     ok: true;

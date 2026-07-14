@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
   FolderSync,
+  ListRestart,
   RefreshCcw,
   ShieldCheck,
 } from "lucide-vue-next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { SyncRemoteFolder } from "@/lib/api";
+import type { HistoryModelSyncStatus, SyncRemoteFolder } from "@/lib/api";
 import { estimateSelectedVideoCount } from "@/lib/sync-folder-selection.js";
 
 const props = defineProps<{
@@ -26,6 +31,8 @@ const props = defineProps<{
   folders: SyncRemoteFolder[];
   selectedFolderIds: number[];
   resumePage: number;
+  status: HistoryModelSyncStatus | null;
+  nowMs: number;
 }>();
 
 const emit = defineEmits<{
@@ -35,6 +42,8 @@ const emit = defineEmits<{
   "clear-selection": [];
   reload: [];
   submit: [];
+  resume: [];
+  restart: [];
 }>();
 
 const selectedVideoCount = computed(() =>
@@ -48,6 +57,48 @@ const allFoldersSelected = computed(
       props.selectedFolderIds.includes(folder.remoteId)
     )
 );
+
+const hasStatus = computed(
+  () => props.status !== null && props.status.phase !== "idle"
+);
+
+const progressPercent = computed(() => {
+  const status = props.status;
+  if (!status) return 0;
+  if (status.total > 0) {
+    return Math.min(100, Math.round((status.current / status.total) * 100));
+  }
+  if (status.folderTotal > 0) {
+    return Math.min(
+      100,
+      Math.round((status.folderIndex / status.folderTotal) * 100)
+    );
+  }
+  return status.phase === "completed" ? 100 : 0;
+});
+
+const retryRemainingSeconds = computed(() => {
+  const nextRetryAt = props.status?.nextRetryAt;
+  if (!nextRetryAt) return 0;
+  return Math.max(0, Math.ceil((nextRetryAt - props.nowMs) / 1000));
+});
+
+const canResume = computed(() => {
+  const status = props.status;
+  if (!status || status.running) return false;
+  if (status.phase !== "paused" && status.phase !== "failed") return false;
+  return retryRemainingSeconds.value === 0;
+});
+
+const retryTimeLabel = computed(() => {
+  const nextRetryAt = props.status?.nextRetryAt;
+  if (!nextRetryAt) return "";
+  return new Date(nextRetryAt).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+});
 </script>
 
 <template>
@@ -64,6 +115,173 @@ const allFoldersSelected = computed(
       </DialogHeader>
 
       <section class="panel-surface space-y-4 p-4">
+        <section
+          v-if="hasStatus && status"
+          class="overflow-hidden rounded-xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-background to-background"
+          aria-live="polite"
+        >
+          <div class="space-y-4 p-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="space-y-1">
+                <div class="flex items-center gap-2">
+                  <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-primary">
+                    <CheckCircle2
+                      v-if="status.phase === 'completed'"
+                      class="h-4 w-4"
+                    />
+                    <Clock3
+                      v-else-if="status.phase === 'paused' || status.phase === 'waiting'"
+                      class="h-4 w-4"
+                    />
+                    <FolderSync v-else class="h-4 w-4" />
+                  </span>
+                  <h3 class="text-sm font-semibold tracking-tight">
+                    {{ t("sync.statusTitle") }}
+                  </h3>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  {{ status.message || t("sync.statusReady") }}
+                </p>
+              </div>
+              <Badge
+                :variant="status.riskBlocked || status.phase === 'failed' ? 'destructive' : 'secondary'"
+                class="capitalize"
+              >
+                {{ t(`sync.phase.${status.phase}`) }}
+              </Badge>
+            </div>
+
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-3 text-xs">
+                <span class="font-medium">
+                  {{ t("sync.currentWork") }}
+                </span>
+                <span class="tabular-nums text-muted-foreground">
+                  {{ progressPercent }}%
+                </span>
+              </div>
+              <Progress :model-value="progressPercent" class="h-2" />
+              <p class="text-xs text-muted-foreground">
+                {{ status.folderTitle || t("sync.preparing") }}
+                <span v-if="status.currentFolderRemoteId !== null">
+                  · {{ t("sync.page", { page: status.currentPage }) }}
+                </span>
+                <span v-if="status.folderTotal > 0">
+                  · {{ status.folderIndex }}/{{ status.folderTotal }}
+                </span>
+              </p>
+            </div>
+
+            <div
+              v-if="status.nextRetryAt"
+              class="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-100"
+            >
+              <Clock3 class="mt-0.5 h-4 w-4 shrink-0" />
+              <p class="text-xs leading-relaxed">
+                {{
+                  t("sync.retryAt", {
+                    time: retryTimeLabel,
+                    seconds: retryRemainingSeconds,
+                  })
+                }}
+              </p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <div class="rounded-lg border bg-background/75 p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.scanned") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.videosProcessed }}
+                </p>
+              </div>
+              <div class="rounded-lg border bg-background/75 p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.upserted") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.videosUpserted }}
+                </p>
+              </div>
+              <div class="rounded-lg border bg-background/75 p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.linked") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.folderLinksAdded }}
+                </p>
+              </div>
+              <div class="rounded-lg border bg-background/75 p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.skipped") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.skippedMissingBvid }}
+                </p>
+              </div>
+              <div class="rounded-lg border bg-background/75 p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.unresolved") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.unresolvedMissingBvid }}
+                </p>
+              </div>
+              <div class="rounded-lg border bg-background/75 p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.incomplete") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.incompleteFolders }}
+                </p>
+              </div>
+            </div>
+
+            <div
+              v-if="status.unresolvedItems.length || status.incompleteFolders.length || status.errors.length"
+              class="space-y-2 rounded-lg border border-destructive/20 bg-destructive/[0.04] p-3"
+            >
+              <div class="flex items-center gap-2 text-xs font-semibold">
+                <AlertTriangle class="h-4 w-4 text-destructive" />
+                {{ t("sync.diagnostics") }}
+              </div>
+              <ul class="max-h-32 space-y-1 overflow-auto text-xs text-muted-foreground">
+                <li
+                  v-for="item in status.unresolvedItems.slice(0, 5)"
+                  :key="`unresolved-${item.remoteFolderId}-${item.aid}-${item.title}`"
+                >
+                  {{ item.folder }} · {{ item.title || `aid ${item.aid ?? '-'}` }} — {{ item.reason }}
+                </li>
+                <li
+                  v-for="item in status.incompleteFolders.slice(0, 5)"
+                  :key="`incomplete-${item.remoteFolderId}`"
+                >
+                  {{ item.folder }} · {{ item.observed }}/{{ item.expected }} — {{ item.reason }}
+                </li>
+                <li
+                  v-for="(item, index) in status.errors.slice(0, 5)"
+                  :key="`error-${index}-${item.folder}`"
+                >
+                  {{ item.folder }} — {{ item.message }}
+                </li>
+              </ul>
+            </div>
+
+            <div
+              v-if="status.phase === 'paused' || status.phase === 'failed' || status.phase === 'waiting'"
+              class="flex flex-wrap justify-end gap-2"
+            >
+              <Button
+                size="sm"
+                variant="outline"
+                :disabled="loading"
+                @click="emit('restart')"
+              >
+                <ListRestart class="h-3.5 w-3.5" />
+                {{ t("sync.restart") }}
+              </Button>
+              <Button
+                v-if="status.phase !== 'waiting'"
+                size="sm"
+                :disabled="loading || !canResume"
+                @click="emit('resume')"
+              >
+                <RefreshCcw class="h-3.5 w-3.5" />
+                {{ t("sync.resumeNow") }}
+              </Button>
+            </div>
+          </div>
+        </section>
+
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap items-center gap-2">
             <Badge variant="secondary">

@@ -377,6 +377,10 @@ type FavoritesSyncStatus = {
   retryReason: string | null;
   retryAttempt: number;
   riskCount: number;
+  selectedRemoteFolderIds: number[];
+  completedRemoteFolderIds: number[];
+  currentFolderRemoteId: number | null;
+  currentPage: number;
   resumePageByFolder: Record<string, number>;
   invalidVideosDetected: number;
   invalidVideoIds: number[];
@@ -578,6 +582,10 @@ const defaultFavoritesSyncStatus = (): FavoritesSyncStatus => ({
   retryReason: null,
   retryAttempt: 0,
   riskCount: 0,
+  selectedRemoteFolderIds: [],
+  completedRemoteFolderIds: [],
+  currentFolderRemoteId: null,
+  currentPage: 1,
   resumePageByFolder: {},
   invalidVideosDetected: 0,
   invalidVideoIds: [],
@@ -730,6 +738,14 @@ function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
     retryReason: normalizeText(raw.retryReason) || null,
     retryAttempt: Math.max(0, toInt(raw.retryAttempt, 0)),
     riskCount: Math.max(0, toInt(raw.riskCount, 0)),
+    selectedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      raw.selectedRemoteFolderIds
+    ),
+    completedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      raw.completedRemoteFolderIds
+    ),
+    currentFolderRemoteId: toIntOrNull(raw.currentFolderRemoteId),
+    currentPage: Math.max(1, toInt(raw.currentPage, 1)),
     resumePageByFolder,
     invalidVideosDetected: Math.max(
       invalidVideoIds.length,
@@ -966,6 +982,10 @@ function statusFromFavoritesSyncJob(
     retryReason: job.retry.reason,
     retryAttempt: job.retry.attempt,
     riskCount: job.retry.riskCount,
+    selectedRemoteFolderIds: [...job.selectedRemoteFolderIds],
+    completedRemoteFolderIds: [...job.completedRemoteFolderIds],
+    currentFolderRemoteId: job.currentFolderRemoteId,
+    currentPage: Math.max(1, job.nextPage),
     resumePageByFolder,
     invalidVideosDetected: job.invalidVideoIds.length,
     invalidVideoIds: [...job.invalidVideoIds],
@@ -5072,6 +5092,7 @@ function isWriteRequestBlockedByFavoritesSync(method: string, path: string) {
 async function startFavoritesSyncTask(params: {
   selectedRemoteFolderIds: number[];
   resumePageByFolder?: Record<string, number>;
+  restart?: boolean;
 }) {
   if (favoritesSyncTask || favoritesSyncStartPending) {
     return false;
@@ -5089,6 +5110,7 @@ async function startFavoritesSyncTask(params: {
   favoritesSyncStartPending = true;
   try {
     const jobId = await withState((state) => {
+      if (params.restart) state.syncMeta.favoritesJob.active = null;
       const job = prepareFavoritesSyncJob(
         state.syncMeta.favoritesJob,
         params.selectedRemoteFolderIds,
@@ -5715,7 +5737,8 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
       }
       const started = await startFavoritesSyncTask({
         selectedRemoteFolderIds,
-        resumePageByFolder
+        resumePageByFolder,
+        restart: Boolean(body.restart)
       });
       const snapshot = await readState();
       return ok({

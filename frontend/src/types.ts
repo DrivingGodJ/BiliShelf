@@ -195,6 +195,10 @@ export type HistoryModelSyncStatus = {
   retryReason: string | null;
   retryAttempt: number;
   riskCount: number;
+  selectedRemoteFolderIds: number[];
+  completedRemoteFolderIds: number[];
+  currentFolderRemoteId: number | null;
+  currentPage: number;
   resumePageByFolder?: Record<string, number>;
   summary: FavoritesSyncSummary;
   invalidVideosDetected?: number;

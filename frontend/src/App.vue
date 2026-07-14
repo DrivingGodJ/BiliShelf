@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { Button } from "./components/ui/button";
@@ -200,6 +200,7 @@ let invalidVideoRecoveryPollTimer: number | null = null;
 const exportingLibrary = ref(false);
 const importingLibrary = ref(false);
 const syncDialogOpen = ref(false);
+const syncHistoryStatus = shallowRef<HistoryModelSyncStatus | null>(null);
 const followingUps = ref<FollowedUp[]>([]);
 const followingUpKeyword = ref("");
 const followingUpLoading = ref(false);
@@ -1566,6 +1567,23 @@ async function loadSyncFolderOptions(force = false) {
   }
 }
 
+async function refreshHistoryModelSyncStatus() {
+  try {
+    const status = await fetchHistoryModelSyncStatus();
+    syncHistoryStatus.value = status;
+    if (status.selectedRemoteFolderIds.length > 0) {
+      const available = new Set(syncFolders.value.map((item) => item.remoteId));
+      syncSelectedFolderIds.value = status.selectedRemoteFolderIds.filter((id) =>
+        available.has(id)
+      );
+    }
+    return status;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+}
+
 async function loadAutoInitFolderOptions(force = false) {
   if (autoInitFetchingFolders.value) return;
   if (!force && autoInitFolders.value.length > 0) return;
@@ -1681,11 +1699,10 @@ async function confirmAutoInitSetup() {
 
 async function openSyncImportDialog() {
   syncDialogOpen.value = true;
-  if (!TAG_SYNC_ENABLED) {
-    await loadSyncFolderOptions();
-    return;
-  }
-  await Promise.all([loadSyncFolderOptions(), refreshTagEnrichmentState()]);
+  await loadSyncFolderOptions();
+  const tasks: Promise<unknown>[] = [refreshHistoryModelSyncStatus()];
+  if (TAG_SYNC_ENABLED) tasks.push(refreshTagEnrichmentState());
+  await Promise.all(tasks);
 }
 
 function toggleSyncFolder(remoteId: number, checked: boolean) {
@@ -1713,15 +1730,33 @@ async function submitSyncImport() {
     notifyError(t("toast.autoInitPickFolder"));
     return;
   }
-  const targetVideosEstimate = estimateTargetVideosByFolders(
+  void runFavoritesSyncLikeHistory(
     syncSelectedFolderIds.value,
-    syncFolders.value
+    {
+      notify: true,
+      closeDialogOnSuccess: false,
+    }
   );
-  startUnifiedFavoritesSync(
-    syncSelectedFolderIds.value,
-    targetVideosEstimate,
-    syncFolders.value
-  );
+}
+
+async function resumeHistoryModelSyncFromUi() {
+  if (syncingImport.value) return;
+  const folderIds = syncHistoryStatus.value?.selectedRemoteFolderIds.length
+    ? syncHistoryStatus.value.selectedRemoteFolderIds
+    : syncSelectedFolderIds.value;
+  await runFavoritesSyncLikeHistory(folderIds, {
+    notify: true,
+    closeDialogOnSuccess: false,
+  });
+}
+
+async function restartHistoryModelSyncFromUi() {
+  if (syncingImport.value || syncSelectedFolderIds.value.length === 0) return;
+  await runFavoritesSyncLikeHistory(syncSelectedFolderIds.value, {
+    notify: true,
+    closeDialogOnSuccess: false,
+    restart: true,
+  });
 }
 
 type FolderSyncRunResult = {
@@ -1742,6 +1777,7 @@ async function runFavoritesSyncLikeHistory(
     notify: boolean;
     closeDialogOnSuccess: boolean;
     resumePageByFolder?: Record<string, number>;
+    restart?: boolean;
   }
 ): Promise<FolderSyncRunResult> {
   syncingImport.value = true;
@@ -1754,23 +1790,36 @@ async function runFavoritesSyncLikeHistory(
     let startResult = await startHistoryModelSync({
       selectedRemoteFolderIds: uniqueFolderIds,
       resumePageByFolder,
+      restart: options.restart,
     });
+    syncHistoryStatus.value = startResult.status;
     if (!startResult.started && !startResult.status.running) {
       await sleepMs(180);
       startResult = await startHistoryModelSync({
         selectedRemoteFolderIds: uniqueFolderIds,
         resumePageByFolder,
+        restart: options.restart,
       });
+      syncHistoryStatus.value = startResult.status;
     }
-    if (!startResult.started && !startResult.status.running) {
+    if (
+      !startResult.started &&
+      !startResult.status.running &&
+      startResult.status.phase !== "paused" &&
+      startResult.status.phase !== "waiting" &&
+      startResult.status.phase !== "failed"
+    ) {
       throw new Error("Sync task did not start, please retry");
     }
 
-    let status: HistoryModelSyncStatus | null = null;
+    let status: HistoryModelSyncStatus | null = startResult.status;
     const pollStartedAt = Date.now();
     while (true) {
       status = await fetchHistoryModelSyncStatus();
-      if (!status.running) break;
+      syncHistoryStatus.value = status;
+      const waitingForAutomaticRetry =
+        status.phase === "waiting" && status.retryAutomatic;
+      if (!status.running && !waitingForAutomaticRetry) break;
       if (Date.now() - pollStartedAt > 2 * 60 * 60 * 1000) {
         throw new Error("Sync polling exceeded 2 hours timeout");
       }
@@ -2900,6 +2949,8 @@ onBeforeUnmount(() => {
       :folders="syncFolders"
       :selected-folder-ids="syncSelectedFolderIds"
       :resume-page="syncResumePage"
+      :status="syncHistoryStatus"
+      :now-ms="tickNow"
       @update:open="syncDialogOpen = $event"
       @reload="loadSyncFolderOptions(true)"
       @select-all="selectAllSyncFolders"
@@ -2908,6 +2959,8 @@ onBeforeUnmount(() => {
         (remoteId, checked) => toggleSyncFolder(remoteId, checked)
       "
       @submit="submitSyncImport"
+      @resume="resumeHistoryModelSyncFromUi"
+      @restart="restartHistoryModelSyncFromUi"
     />
 
     <ConfirmActionDialog
