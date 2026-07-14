@@ -64,6 +64,10 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "zh-CN": "选择收藏夹",
     "en-US": "Choose a folder",
   },
+  "mobile.folderDrawerDescription": {
+    "zh-CN": "搜索或选择一个收藏夹来更新当前视频列表。",
+    "en-US": "Search or choose a folder to update the current video list.",
+  },
   "mobile.scope": { "zh-CN": "当前范围", "en-US": "Current scope" },
   "view.manager": { "zh-CN": "视图：管理页", "en-US": "View: Manager" },
   "view.trash": { "zh-CN": "视图：回收站", "en-US": "View: Trash Bin" },

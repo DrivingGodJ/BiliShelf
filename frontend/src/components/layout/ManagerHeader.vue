@@ -83,26 +83,26 @@ function submitExport(format: "json" | "csv") {
 </script>
 
 <template>
-  <header class="hero-surface p-5 md:p-6">
-    <div class="grid gap-4 xl:grid-cols-[1fr_auto]">
+  <header class="hero-surface p-3.5 md:p-6">
+    <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 md:gap-4">
       <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2.5">
-          <div class="inline-flex h-10 w-10 items-center justify-center">
-            <BiliShelfMark class="h-10 w-10" />
+        <div class="flex items-center gap-2.5">
+          <div class="inline-flex h-9 w-9 shrink-0 items-center justify-center md:h-10 md:w-10">
+            <BiliShelfMark class="h-9 w-9 md:h-10 md:w-10" />
           </div>
           <div class="min-w-0">
             <h1
-              class="line-clamp-1 text-xl font-extrabold tracking-tight md:text-2xl"
+              class="line-clamp-1 text-lg font-extrabold tracking-tight md:text-2xl"
             >
               {{ props.t("header.title") }}
             </h1>
-            <p class="line-clamp-1 text-sm text-muted-foreground">
+            <p class="hidden line-clamp-1 text-sm text-muted-foreground md:block">
               {{ props.t("header.subtitle") }}
             </p>
           </div>
         </div>
 
-        <div class="mt-4 flex flex-wrap items-center gap-2">
+        <div class="mt-4 hidden flex-wrap items-center gap-2 md:flex">
           <Badge variant="secondary">{{ props.currentViewLabel }}</Badge>
           <Badge
             v-if="!props.trashMode"
@@ -118,9 +118,7 @@ function submitExport(format: "json" | "csv") {
         </div>
       </div>
 
-      <div
-        class="flex flex-wrap items-start justify-start gap-2 xl:justify-end"
-      >
+      <div class="flex flex-nowrap items-start justify-end gap-1.5 md:gap-2">
         <Button size="sm" variant="outline" @click="emit('toggle-locale')">
           <Languages class="h-3.5 w-3.5" />
           {{ props.localeToggleText }}
@@ -146,7 +144,7 @@ function submitExport(format: "json" | "csv") {
       </div>
     </div>
 
-    <div class="mt-4 grid grid-cols-2 gap-2 md:hidden">
+    <div class="mt-3 grid grid-cols-2 gap-2 md:hidden">
       <Button
         v-if="!props.trashMode && !props.followingUpsMode"
         class="h-11 justify-start rounded-xl"

@@ -86,6 +86,7 @@ const emit = defineEmits<{
 
 const fromDatePickerRef = ref<HTMLInputElement | null>(null);
 const toDatePickerRef = ref<HTMLInputElement | null>(null);
+const mobileDateFiltersOpen = ref(false);
 const videoPageJump = ref("");
 
 watch(
@@ -166,8 +167,30 @@ function submitVideoPageJump() {
     @clear="emit('clearSearch')"
   />
 
-  <section class="panel-surface p-4">
-    <div class="flex flex-wrap items-center justify-between gap-3.5">
+  <section class="panel-surface p-3 md:p-4">
+    <div class="flex items-center gap-2 md:hidden">
+      <Button
+        size="sm"
+        variant="outline"
+        class="h-11 min-w-0 flex-1 justify-start"
+        :aria-expanded="mobileDateFiltersOpen"
+        @click="mobileDateFiltersOpen = !mobileDateFiltersOpen"
+      >
+        <CalendarDays class="h-4 w-4" />
+        {{ t("search.applyDateFilter") }}
+      </Button>
+      <Button
+        size="sm"
+        variant="default"
+        class="h-11 min-w-[124px] font-semibold"
+        @click="emit('toggleBatchPanel')"
+      >
+        <ChevronsLeftRight class="h-3.5 w-3.5" />
+        {{ batchPanelOpen ? t("batch.close") : t("batch.open") }}
+      </Button>
+    </div>
+
+    <div class="hidden flex-wrap items-center justify-between gap-3.5 md:flex">
       <div class="flex flex-wrap items-center gap-2 overflow-x-auto pb-1">
         <div class="relative min-w-[190px]">
           <Input
@@ -237,6 +260,33 @@ function submitVideoPageJump() {
         <ChevronsLeftRight class="h-3.5 w-3.5" />
         {{ batchPanelOpen ? t("batch.close") : t("batch.open") }}
       </Button>
+    </div>
+
+    <div v-if="mobileDateFiltersOpen" class="mt-3 space-y-3 border-t pt-3 md:hidden">
+      <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <Input
+          :model-value="fromDate"
+          type="date"
+          class="h-11 min-w-0"
+          @update:model-value="emit('update:fromDate', String($event))"
+        />
+        <span class="text-sm text-muted-foreground">{{ t("search.to") }}</span>
+        <Input
+          :model-value="toDate"
+          type="date"
+          class="h-11 min-w-0"
+          @update:model-value="emit('update:toDate', String($event))"
+        />
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <Button class="h-11" @click="emit('applyDateFilter')">
+          <Filter class="h-3.5 w-3.5" />
+          {{ t("search.applyDateFilter") }}
+        </Button>
+        <Button class="h-11" variant="outline" @click="emit('clearDateFilter')">
+          {{ t("common.clear") }}
+        </Button>
+      </div>
     </div>
   </section>
 

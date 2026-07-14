@@ -5,6 +5,7 @@ import MobileManagerBar from "@/components/layout/MobileManagerBar.vue";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -47,7 +48,7 @@ function handleMobileSelect(folderId: number | null) {
 </script>
 
 <template>
-  <div class="min-h-0">
+  <div class="sticky top-2 z-40 min-h-0 lg:static lg:z-auto">
     <div class="hidden min-h-0 lg:block">
       <FolderSidebar
         :folders="props.folders"
@@ -86,6 +87,9 @@ function handleMobileSelect(folderId: number | null) {
       >
         <DialogHeader class="sr-only">
           <DialogTitle>{{ props.t("mobile.folderDrawerTitle") }}</DialogTitle>
+          <DialogDescription>{{
+            props.t("mobile.folderDrawerDescription")
+          }}</DialogDescription>
         </DialogHeader>
         <FolderSidebar
           :folders="props.folders"
