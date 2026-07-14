@@ -10,25 +10,27 @@ const backgroundPath = path.join(repoRoot, "extension", "entrypoints", "backgrou
 const frontendApiPath = path.join(repoRoot, "frontend", "src", "lib", "api.ts");
 const libraryStorePath = path.join(repoRoot, "frontend", "src", "stores", "library.ts");
 
-test("manager video queries build per-request local indexes before filtering", async () => {
+test("manager video queries reuse revision-bound local indexes", async () => {
   const source = await readFile(backgroundPath, "utf8");
 
   assert.match(source, /function buildLocalStateIndexes\(/);
-  assert.match(source, /const indexes = buildLocalStateIndexes\(state\);/);
+  assert.match(source, /let cachedIndexes: \{ revision: number; value: LocalStateIndexes \} \| null = null;/);
+  assert.match(source, /function getLocalStateIndexes\(state: LocalState\)/);
+  assert.match(source, /cachedIndexes\?\.revision === stateRevision/);
   assert.doesNotMatch(
     source,
     /\.map\(\(video\) => mapVideo\(state, video, args\.folderId\)\)\s*\.filter/
   );
 });
 
-test("manager video queries map each candidate once before applying expensive filters", async () => {
+test("manager video queries slice ids before mapping visible DTOs", async () => {
   const source = await readFile(backgroundPath, "utf8");
 
   assert.match(
     source,
-    /\.filter\(\(video\) => \(args\.includeDeleted \? video\.deletedAt !== null : video\.deletedAt === null\)\)\s*\.map\(\(video\) => mapVideo\(state, video, args\.folderId, indexes\)\)\s*\.filter\(\(mappedVideo\) => \{/
+    /ids\s*\.slice\(start, start \+ pageSize\)\s*\.map\(\(videoId\) => indexes\.videosById\.get\(videoId\)\)/
   );
-  assert.doesNotMatch(source, /const mappedVideo = mapVideo\(state, video, args\.folderId, indexes\);/);
+  assert.match(source, /const data = queryVideoPage\(/);
 });
 
 test("manager folder views sort by the selected folder relation timestamp", async () => {
@@ -40,11 +42,11 @@ test("manager folder views sort by the selected folder relation timestamp", asyn
   );
   assert.match(
     source,
-    /const aRank = a\.addedAt \|\| a\.updatedAt \|\| 0;/
+    /activeAddedAtByFolderAndVideoId\.get\(folderId\)/
   );
-  assert.doesNotMatch(
+  assert.match(
     source,
-    /computeAddedAtFromItems\([^)]*undefined[^)]*\)/
+    /compareVideoIds\(leftId, rightId, folderId\)/
   );
 });
 

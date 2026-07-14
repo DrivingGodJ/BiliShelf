@@ -3,6 +3,53 @@ import assert from "node:assert/strict";
 
 import { runBackgroundScenario } from "./helpers/background-runtime-harness.mjs";
 
+test("background state reads reuse the normalized IndexedDB snapshot", () => {
+  const payload = runBackgroundScenario({
+    exports: ["readState"],
+    preImportSource: `
+      globalThis.__idbStateReads = 0;
+      const database = {
+        objectStoreNames: { contains() { return true; } },
+        transaction() {
+          return {
+            objectStore() {
+              return {
+                get() {
+                  globalThis.__idbStateReads += 1;
+                  const request = {};
+                  queueMicrotask(() => {
+                    request.result = { key: "state", value: {} };
+                    request.onsuccess?.();
+                  });
+                  return request;
+                },
+              };
+            },
+          };
+        },
+      };
+      globalThis.indexedDB = {
+        open() {
+          const request = { result: database };
+          queueMicrotask(() => request.onsuccess?.());
+          return request;
+        },
+      };
+    `,
+    scenarioSource: `
+      const first = await readState();
+      const second = await readState();
+      return {
+        reads: globalThis.__idbStateReads,
+        sameReference: first === second,
+      };
+    `,
+  });
+
+  assert.equal(payload.result.reads, 1);
+  assert.equal(payload.result.sameReference, true);
+});
+
 test("unfiltered manager pagination maps only the requested page", () => {
   const payload = runBackgroundScenario({
     exports: ["handleReadOnlyApi"],

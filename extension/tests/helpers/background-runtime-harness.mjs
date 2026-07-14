@@ -15,6 +15,7 @@ export function runBackgroundScenario({
   exports: exportNames,
   input = {},
   instrumentMapVideo = false,
+  preImportSource = "",
   setupSource = "",
   scenarioSource,
 }) {
@@ -58,6 +59,11 @@ export function runBackgroundScenario({
         },
       },
     };
+
+    if (config.preImportSource) {
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      await new AsyncFunction("input", config.preImportSource)(config.input || {});
+    }
 
     let source = await readFile(${JSON.stringify(backgroundPath)}, "utf8");
     source = source.replace(
@@ -134,6 +140,7 @@ export function runBackgroundScenario({
           exports: exportNames,
           input,
           instrumentMapVideo,
+          preImportSource,
           setupSource,
           scenarioSource,
         }),
