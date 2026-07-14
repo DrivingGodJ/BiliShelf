@@ -332,9 +332,28 @@ type FavoritesSyncSummaryStatus = {
   videosProcessed: number;
   videosUpserted: number;
   skippedMissingBvid: number;
+  unresolvedMissingBvid: number;
+  incompleteFolders: number;
   folderLinksAdded: number;
+  folderLinksRemoved: number;
   tagsBound: number;
   errorCount: number;
+};
+
+type FavoritesSyncUnresolvedItem = {
+  remoteFolderId: number;
+  folder: string;
+  aid: number | null;
+  title: string;
+  reason: string;
+};
+
+type FavoritesSyncIncompleteFolder = {
+  remoteFolderId: number;
+  folder: string;
+  expected: number;
+  observed: number;
+  reason: string;
 };
 
 type FavoritesSyncStatus = {
@@ -354,6 +373,8 @@ type FavoritesSyncStatus = {
   invalidVideoIds: number[];
   summary: FavoritesSyncSummaryStatus;
   errors: Array<{ folder: string; message: string }>;
+  unresolvedItems: FavoritesSyncUnresolvedItem[];
+  incompleteFolders: FavoritesSyncIncompleteFolder[];
 };
 
 type FavoritesSyncJobPhase = "running" | "paused" | "failed";
@@ -375,6 +396,8 @@ type FavoritesSyncJob = {
   folderTotal: number;
   nextPage: number;
   seenBvidKeysByFolder: Record<string, string[]>;
+  observedRowCountByFolder: Record<string, number>;
+  deletionCandidatesByFolder: Record<string, string[]>;
   completedRemoteFolderIds: number[];
   startedAt: number;
   updatedAt: number;
@@ -383,6 +406,8 @@ type FavoritesSyncJob = {
   summary: FavoritesSyncSummaryStatus;
   invalidVideoIds: number[];
   errors: Array<{ folder: string; message: string }>;
+  unresolvedItems: FavoritesSyncUnresolvedItem[];
+  incompleteFolders: FavoritesSyncIncompleteFolder[];
   riskBlocked: boolean;
   lastError: string | null;
   retry: FavoritesSyncRetryState;
@@ -391,6 +416,7 @@ type FavoritesSyncJob = {
 type FavoritesSyncJobMeta = {
   active: FavoritesSyncJob | null;
   lastStatus: FavoritesSyncStatus;
+  deletionCandidatesByFolder: Record<string, string[]>;
 };
 
 type FavoritesSyncProgress = {
@@ -477,7 +503,10 @@ const defaultStage3ReconcileMeta = (): Stage3ReconcileMeta => ({
     videosProcessed: 0,
     videosUpserted: 0,
     skippedMissingBvid: 0,
+    unresolvedMissingBvid: 0,
+    incompleteFolders: 0,
     folderLinksAdded: 0,
+    folderLinksRemoved: 0,
     tagsBound: 0,
     errorCount: 0
   }
@@ -513,7 +542,10 @@ const emptyFavoritesSyncSummary = (): FavoritesSyncSummaryStatus => ({
   videosProcessed: 0,
   videosUpserted: 0,
   skippedMissingBvid: 0,
+  unresolvedMissingBvid: 0,
+  incompleteFolders: 0,
   folderLinksAdded: 0,
+  folderLinksRemoved: 0,
   tagsBound: 0,
   errorCount: 0
 });
@@ -534,7 +566,9 @@ const defaultFavoritesSyncStatus = (): FavoritesSyncStatus => ({
   invalidVideosDetected: 0,
   invalidVideoIds: [],
   summary: emptyFavoritesSyncSummary(),
-  errors: []
+  errors: [],
+  unresolvedItems: [],
+  incompleteFolders: []
 });
 
 function normalizeFavoritesSyncSummary(value: unknown): FavoritesSyncSummaryStatus {
@@ -547,7 +581,10 @@ function normalizeFavoritesSyncSummary(value: unknown): FavoritesSyncSummaryStat
     videosProcessed: Math.max(0, toInt(raw.videosProcessed, 0)),
     videosUpserted: Math.max(0, toInt(raw.videosUpserted, 0)),
     skippedMissingBvid: Math.max(0, toInt(raw.skippedMissingBvid, 0)),
+    unresolvedMissingBvid: Math.max(0, toInt(raw.unresolvedMissingBvid, 0)),
+    incompleteFolders: Math.max(0, toInt(raw.incompleteFolders, 0)),
     folderLinksAdded: Math.max(0, toInt(raw.folderLinksAdded, 0)),
+    folderLinksRemoved: Math.max(0, toInt(raw.folderLinksRemoved, 0)),
     tagsBound: Math.max(0, toInt(raw.tagsBound, 0)),
     errorCount: Math.max(0, toInt(raw.errorCount, 0))
   };
@@ -568,6 +605,72 @@ function normalizeFavoritesSyncErrors(value: unknown) {
     })
     .filter((item): item is { folder: string; message: string } => Boolean(item))
     .slice(-100);
+}
+
+function normalizeFavoritesSyncUnresolvedItems(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Partial<FavoritesSyncUnresolvedItem>;
+      const remoteFolderId = toInt(raw.remoteFolderId);
+      const reason = normalizeText(raw.reason);
+      if (remoteFolderId <= 0 || !reason) return null;
+      return {
+        remoteFolderId,
+        folder: normalizeText(raw.folder) || `Bilibili Favorite ${remoteFolderId}`,
+        aid: toAid(raw.aid) || null,
+        title: normalizeText(raw.title),
+        reason
+      };
+    })
+    .filter((item): item is FavoritesSyncUnresolvedItem => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeFavoritesSyncIncompleteFolders(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Partial<FavoritesSyncIncompleteFolder>;
+      const remoteFolderId = toInt(raw.remoteFolderId);
+      const reason = normalizeText(raw.reason);
+      if (remoteFolderId <= 0 || !reason) return null;
+      return {
+        remoteFolderId,
+        folder: normalizeText(raw.folder) || `Bilibili Favorite ${remoteFolderId}`,
+        expected: Math.max(0, toInt(raw.expected, 0)),
+        observed: Math.max(0, toInt(raw.observed, 0)),
+        reason
+      };
+    })
+    .filter((item): item is FavoritesSyncIncompleteFolder => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeBvidKeysByFolder(value: unknown) {
+  const normalized: Record<string, string[]> = {};
+  if (!value || typeof value !== "object") return normalized;
+  for (const [remoteIdRaw, keysRaw] of Object.entries(value)) {
+    const remoteId = toInt(remoteIdRaw);
+    if (remoteId <= 0 || !Array.isArray(keysRaw)) continue;
+    normalized[String(remoteId)] = Array.from(
+      new Set(keysRaw.map((item) => normalizeKey(item)).filter(Boolean))
+    ).sort();
+  }
+  return normalized;
+}
+
+function normalizeCountByFolder(value: unknown) {
+  const normalized: Record<string, number> = {};
+  if (!value || typeof value !== "object") return normalized;
+  for (const [remoteIdRaw, countRaw] of Object.entries(value)) {
+    const remoteId = toInt(remoteIdRaw);
+    if (remoteId <= 0) continue;
+    normalized[String(remoteId)] = Math.max(0, toInt(countRaw, 0));
+  }
+  return normalized;
 }
 
 function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
@@ -605,7 +708,9 @@ function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
     ),
     invalidVideoIds,
     summary: normalizeFavoritesSyncSummary(raw.summary),
-    errors: normalizeFavoritesSyncErrors(raw.errors)
+    errors: normalizeFavoritesSyncErrors(raw.errors),
+    unresolvedItems: normalizeFavoritesSyncUnresolvedItems(raw.unresolvedItems),
+    incompleteFolders: normalizeFavoritesSyncIncompleteFolders(raw.incompleteFolders)
   };
 }
 
@@ -618,16 +723,23 @@ function normalizeSelectedRemoteFolderIds(value: unknown) {
 
 function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobMeta {
   const raw = value && typeof value === "object"
-    ? value as { active?: unknown; lastStatus?: unknown }
+    ? value as {
+        active?: unknown;
+        lastStatus?: unknown;
+        deletionCandidatesByFolder?: unknown;
+      }
     : {};
   const lastStatus = normalizeFavoritesSyncStatus(raw.lastStatus);
+  const deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+    raw.deletionCandidatesByFolder
+  );
   if (!raw.active || typeof raw.active !== "object") {
-    return { active: null, lastStatus };
+    return { active: null, lastStatus, deletionCandidatesByFolder };
   }
 
   const activeRaw = raw.active as Partial<FavoritesSyncJob>;
   const id = normalizeText(activeRaw.id);
-  if (!id) return { active: null, lastStatus };
+  if (!id) return { active: null, lastStatus, deletionCandidatesByFolder };
 
   const currentFolderRemoteId = toIntOrNull(activeRaw.currentFolderRemoteId);
   const nextPageRaw = Math.max(1, toInt(activeRaw.nextPage, 1));
@@ -635,14 +747,7 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
     typeof activeRaw.seenBvidKeysByFolder === "object"
     ? activeRaw.seenBvidKeysByFolder as Record<string, unknown>
     : {};
-  const seenBvidKeysByFolder: Record<string, string[]> = {};
-  for (const [remoteIdRaw, seenRaw] of Object.entries(rawSeen)) {
-    const remoteId = toInt(remoteIdRaw);
-    if (remoteId <= 0 || !Array.isArray(seenRaw)) continue;
-    seenBvidKeysByFolder[String(remoteId)] = Array.from(
-      new Set(seenRaw.map((item) => normalizeKey(item)).filter(Boolean))
-    ).sort();
-  }
+  const seenBvidKeysByFolder = normalizeBvidKeysByFolder(rawSeen);
 
   let nextPage = currentFolderRemoteId && currentFolderRemoteId > 0
     ? nextPageRaw
@@ -683,6 +788,10 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
     folderTotal: Math.max(0, toInt(activeRaw.folderTotal, 0)),
     nextPage,
     seenBvidKeysByFolder,
+    observedRowCountByFolder: normalizeCountByFolder(activeRaw.observedRowCountByFolder),
+    deletionCandidatesByFolder: normalizeBvidKeysByFolder(
+      activeRaw.deletionCandidatesByFolder
+    ),
     completedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
       activeRaw.completedRemoteFolderIds
     ),
@@ -693,6 +802,10 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
     summary: normalizeFavoritesSyncSummary(activeRaw.summary),
     invalidVideoIds,
     errors: normalizeFavoritesSyncErrors(activeRaw.errors),
+    unresolvedItems: normalizeFavoritesSyncUnresolvedItems(activeRaw.unresolvedItems),
+    incompleteFolders: normalizeFavoritesSyncIncompleteFolders(
+      activeRaw.incompleteFolders
+    ),
     riskBlocked: Boolean(activeRaw.riskBlocked),
     lastError: normalizeText(activeRaw.lastError) || null,
     retry: {
@@ -702,7 +815,12 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
       reason: normalizeText(retryRaw.reason) || null
     }
   };
-  return { active, lastStatus };
+  if (Object.keys(active.deletionCandidatesByFolder).length === 0) {
+    active.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+      deletionCandidatesByFolder
+    );
+  }
+  return { active, lastStatus, deletionCandidatesByFolder };
 }
 
 function defaultFavoritesSyncJobMeta(): FavoritesSyncJobMeta {
@@ -725,6 +843,8 @@ function createFavoritesSyncJob(
     folderTotal: 0,
     nextPage: 1,
     seenBvidKeysByFolder: {},
+    observedRowCountByFolder: {},
+    deletionCandidatesByFolder: {},
     completedRemoteFolderIds: [],
     startedAt: stamp,
     updatedAt: stamp,
@@ -733,6 +853,8 @@ function createFavoritesSyncJob(
     summary: emptyFavoritesSyncSummary(),
     invalidVideoIds: [],
     errors: [],
+    unresolvedItems: [],
+    incompleteFolders: [],
     riskBlocked: false,
     lastError: null,
     retry: {
@@ -773,6 +895,9 @@ function prepareFavoritesSyncJob(
     return meta.active;
   }
   meta.active = createFavoritesSyncJob(selected, startedAt);
+  meta.active.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+    meta.deletionCandidatesByFolder
+  );
   return meta.active;
 }
 
@@ -809,7 +934,9 @@ function statusFromFavoritesSyncJob(
     invalidVideosDetected: job.invalidVideoIds.length,
     invalidVideoIds: [...job.invalidVideoIds],
     summary: { ...job.summary },
-    errors: job.errors.slice(-30)
+    errors: job.errors.slice(-30),
+    unresolvedItems: job.unresolvedItems.slice(-100),
+    incompleteFolders: job.incompleteFolders.slice(-100)
   };
 }
 
@@ -818,6 +945,9 @@ function completeFavoritesSyncJob(
   job: FavoritesSyncJob,
   finishedAt = now()
 ) {
+  meta.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+    job.deletionCandidatesByFolder
+  );
   meta.lastStatus = {
     ...statusFromFavoritesSyncJob(job, false, finishedAt),
     message: "Favorites sync completed"
@@ -1064,40 +1194,9 @@ async function readState() {
             lastRunAt: toIntOrNull(raw.syncMeta?.stage3Reconcile?.lastRunAt),
             lastError: normalizeText(raw.syncMeta?.stage3Reconcile?.lastError) || null,
             lastRemoteMediaId: toIntOrNull(raw.syncMeta?.stage3Reconcile?.lastRemoteMediaId),
-            lastSummary: {
-              foldersDetected: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.foldersDetected, 0)
-              ),
-              foldersSynced: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.foldersSynced, 0)
-              ),
-              videosProcessed: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.videosProcessed, 0)
-              ),
-              videosUpserted: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.videosUpserted, 0)
-              ),
-              skippedMissingBvid: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.skippedMissingBvid, 0)
-              ),
-              folderLinksAdded: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.folderLinksAdded, 0)
-              ),
-              tagsBound: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.tagsBound, 0)
-              ),
-              errorCount: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.errorCount, 0)
-              )
-            }
+            lastSummary: normalizeFavoritesSyncSummary(
+              raw.syncMeta?.stage3Reconcile?.lastSummary
+            )
           },
           favoritesJob: normalizeFavoritesSyncJobMeta(raw.syncMeta?.favoritesJob)
         },
@@ -2820,7 +2919,7 @@ async function fetchRemoteFoldersFromBilibili(forceRefresh = false) {
       title: normalizeText(item.title),
       mediaCount: toInt((item as { media_count?: unknown }).media_count ?? 0, 0)
     }))
-    .filter((item) => item.remoteId > 0 && item.title && item.mediaCount > 0) as RemoteFolder[];
+    .filter((item) => item.remoteId > 0 && item.title) as RemoteFolder[];
   remoteFoldersCache = {
     items,
     expiresAt: nowTs + REMOTE_FOLDERS_CACHE_TTL_MS
@@ -2831,6 +2930,61 @@ async function fetchRemoteFoldersFromBilibili(forceRefresh = false) {
 function toAid(value: unknown) {
   const parsed = toInt(value, 0);
   return parsed > 0 ? parsed : 0;
+}
+
+async function resolveFavoriteMediaBvid(media: Record<string, unknown>) {
+  const directBvid = normalizeText(media.bvid ?? media.bv_id);
+  const aid = toAid(media.id ?? media.aid);
+  if (directBvid) {
+    return {
+      bvid: directBvid,
+      aid: aid || null,
+      reason: null as string | null,
+      riskBlocked: false
+    };
+  }
+  if (!aid) {
+    return {
+      bvid: "",
+      aid: null,
+      reason: "Remote favorite has neither BV id nor aid",
+      riskBlocked: false
+    };
+  }
+  try {
+    const detail = await fetchBiliJson<Record<string, unknown>>(
+      `${BILI_VIEW_API}?aid=${encodeURIComponent(String(aid))}`,
+      "folderVideos"
+    );
+    const resolvedBvid = normalizeText(detail.bvid);
+    if (resolvedBvid) {
+      return {
+        bvid: resolvedBvid,
+        aid,
+        reason: null as string | null,
+        riskBlocked: false
+      };
+    }
+    return {
+      bvid: "",
+      aid,
+      reason: "Bilibili view response did not include a BV id",
+      riskBlocked: false
+    };
+  } catch (error) {
+    return {
+      bvid: "",
+      aid,
+      reason: isBiliRequestError(error)
+        ? formatBiliRequestError(error)
+        : error instanceof Error
+          ? error.message
+          : String(error),
+      riskBlocked: isBiliRequestError(error)
+        ? error.status === 412 || isRiskControlError(formatBiliRequestError(error))
+        : isRiskControlError(error instanceof Error ? error.message : String(error))
+    };
+  }
 }
 
 function upsertVideoFromRemoteDetail(state: LocalState, detail: Record<string, unknown>) {
@@ -3247,16 +3401,7 @@ function ensureStage3ReconcileMeta(state: LocalState) {
     meta.enabled = true;
   }
   if (!meta.lastSummary) {
-    meta.lastSummary = {
-      foldersDetected: 0,
-      foldersSynced: 0,
-      videosProcessed: 0,
-      videosUpserted: 0,
-      skippedMissingBvid: 0,
-      folderLinksAdded: 0,
-      tagsBound: 0,
-      errorCount: 0
-    };
+    meta.lastSummary = emptyFavoritesSyncSummary();
   }
   return meta;
 }
@@ -3794,10 +3939,23 @@ type SyncSummary = {
   videosProcessed: number;
   videosUpserted: number;
   skippedMissingBvid: number;
+  unresolvedMissingBvid: number;
+  incompleteFolders: number;
   folderLinksAdded: number;
+  folderLinksRemoved: number;
   tagsBound: number;
   errorCount: number;
 };
+
+function ensureFavoritesSyncJobMeta(state: LocalState) {
+  if (!state.syncMeta) {
+    state.syncMeta = defaultState().syncMeta;
+  }
+  if (!state.syncMeta.favoritesJob) {
+    state.syncMeta.favoritesJob = defaultFavoritesSyncJobMeta();
+  }
+  return state.syncMeta.favoritesJob;
+}
 
 async function syncFromBilibiliToState(
   state: LocalState,
@@ -3809,7 +3967,11 @@ async function syncFromBilibiliToState(
     onCheckpoint?: (state: LocalState, job: FavoritesSyncJob) => Promise<void> | void;
   }
 ) {
+  const favoritesJobMeta = ensureFavoritesSyncJobMeta(state);
   const job = options.job ?? null;
+  const deletionCandidatesByFolder = job
+    ? job.deletionCandidatesByFolder
+    : favoritesJobMeta.deletionCandidatesByFolder;
   const selectedIdSet = new Set(
     (options.selectedRemoteFolderIds ?? job?.selectedRemoteFolderIds ?? [])
       .map((id) => Number(id))
@@ -3843,11 +4005,18 @@ async function syncFromBilibiliToState(
   let videosProcessed = job?.summary.videosProcessed ?? 0;
   let videosUpserted = job?.summary.videosUpserted ?? 0;
   let skippedMissingBvid = job?.summary.skippedMissingBvid ?? 0;
+  let unresolvedMissingBvid = job?.summary.unresolvedMissingBvid ?? 0;
+  let incompleteFolderCount = job?.summary.incompleteFolders ?? 0;
   let folderLinksAdded = job?.summary.folderLinksAdded ?? 0;
+  let folderLinksRemoved = job?.summary.folderLinksRemoved ?? 0;
   let tagsBound = job?.summary.tagsBound ?? 0;
   let riskBlocked = false;
   const invalidVideoIdSet = new Set<number>(job?.invalidVideoIds ?? []);
   const errors: Array<{ folder: string; message: string }> = job?.errors.slice() ?? [];
+  const unresolvedItems: FavoritesSyncUnresolvedItem[] =
+    job?.unresolvedItems.slice() ?? [];
+  const incompleteFolders: FavoritesSyncIncompleteFolder[] =
+    job?.incompleteFolders.slice() ?? [];
   let progressCurrent = job?.current ?? 0;
   let videosSinceCooldown = 0;
   const resumePageByFolder: Record<string, number> = {};
@@ -3877,12 +4046,17 @@ async function syncFromBilibiliToState(
       videosProcessed,
       videosUpserted,
       skippedMissingBvid,
+      unresolvedMissingBvid,
+      incompleteFolders: incompleteFolderCount,
       folderLinksAdded,
+      folderLinksRemoved,
       tagsBound,
       errorCount: errors.length
     };
     job.invalidVideoIds = Array.from(invalidVideoIdSet).sort((a, b) => a - b);
     job.errors = errors.slice(-100);
+    job.unresolvedItems = unresolvedItems.slice(-100);
+    job.incompleteFolders = incompleteFolders.slice(-100);
     job.lastError = errors.at(-1)?.message ?? null;
     job.riskBlocked = riskBlocked;
     job.updatedAt = now();
@@ -3943,8 +4117,30 @@ async function syncFromBilibiliToState(
         });
       }
       let folderFailed = false;
+      let folderIncompleteReason = "";
       const remoteBvidKeys = new Set<string>(
         job?.seenBvidKeysByFolder[String(remoteFolder.remoteId)] ?? []
+      );
+      let observedRowCount = job?.observedRowCountByFolder[
+        String(remoteFolder.remoteId)
+      ] ?? 0;
+      let expectedRemoteCount = Math.max(0, toInt(remoteFolder.mediaCount, 0));
+      for (let index = incompleteFolders.length - 1; index >= 0; index -= 1) {
+        if (incompleteFolders[index]?.remoteFolderId === remoteFolder.remoteId) {
+          incompleteFolders.splice(index, 1);
+        }
+      }
+      incompleteFolderCount = incompleteFolders.length;
+      if (page === 1) {
+        for (let index = unresolvedItems.length - 1; index >= 0; index -= 1) {
+          if (unresolvedItems[index]?.remoteFolderId === remoteFolder.remoteId) {
+            unresolvedItems.splice(index, 1);
+          }
+        }
+        unresolvedMissingBvid = unresolvedItems.length;
+      }
+      let folderHasUnresolved = unresolvedItems.some(
+        (item) => item.remoteFolderId === remoteFolder.remoteId
       );
       if (page > 1 && remoteBvidKeys.size === 0) {
         for (const item of state.folderItems) {
@@ -3953,11 +4149,14 @@ async function syncFromBilibiliToState(
           const key = normalizeKey(video?.bvid);
           if (key) remoteBvidKeys.add(key);
         }
+        if (!job) observedRowCount = Math.max(observedRowCount, remoteBvidKeys.size);
       }
       if (job) {
         job.nextPage = page;
         job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
           Array.from(remoteBvidKeys).sort();
+        job.observedRowCountByFolder[String(remoteFolder.remoteId)] =
+          observedRowCount;
       }
       while (true) {
         const query = new URLSearchParams({
@@ -4006,16 +4205,57 @@ async function syncFromBilibiliToState(
           break;
         }
 
-        const medias = folderMediaData.medias ?? [];
+        const medias = Array.isArray(folderMediaData.medias)
+          ? folderMediaData.medias
+          : [];
+        const responseTotal = Number(folderMediaData.info?.media_count);
+        if (Number.isFinite(responseTotal) && responseTotal >= 0) {
+          expectedRemoteCount = Math.trunc(responseTotal);
+        }
         if (medias.length === 0) {
+          if (folderMediaData.has_more === true || observedRowCount < expectedRemoteCount) {
+            folderIncompleteReason = folderMediaData.has_more === true
+              ? "Remote response reported more pages but returned an empty page"
+              : "Remote response ended before the reported total was observed";
+          }
           break;
         }
         const responseMs = Math.max(0, now() - pageFetchStartedAt);
 
+        let pageAbortedByRisk = false;
         for (const [mediaIndex, media] of medias.entries()) {
-          const bvid = normalizeText(media.bvid ?? media.bv_id);
+          const resolvedIdentity = await resolveFavoriteMediaBvid(media);
+          const bvid = resolvedIdentity.bvid;
           if (!bvid) {
+            if (resolvedIdentity.riskBlocked) {
+              riskBlocked = true;
+              folderFailed = true;
+              pageAbortedByRisk = true;
+              errors.push({
+                folder: remoteFolder.title,
+                message: resolvedIdentity.reason || "Bilibili risk-control blocked BV resolution"
+              });
+              break;
+            }
             skippedMissingBvid += 1;
+            folderHasUnresolved = true;
+            const unresolved: FavoritesSyncUnresolvedItem = {
+              remoteFolderId: remoteFolder.remoteId,
+              folder: remoteFolder.title,
+              aid: resolvedIdentity.aid,
+              title: normalizeText(media.title),
+              reason: resolvedIdentity.reason || "BV id could not be resolved"
+            };
+            const exists = unresolvedItems.some(
+              (item) =>
+                item.remoteFolderId === unresolved.remoteFolderId &&
+                item.aid === unresolved.aid &&
+                item.title === unresolved.title
+            );
+            if (!exists) {
+              unresolvedItems.push(unresolved);
+              unresolvedMissingBvid += 1;
+            }
             continue;
           }
           remoteBvidKeys.add(normalizeKey(bvid));
@@ -4095,6 +4335,20 @@ async function syncFromBilibiliToState(
             existingLink.addedAt = favAt;
           }
         }
+        if (pageAbortedByRisk) {
+          resumePageByFolder[String(remoteFolder.remoteId)] = page;
+          if (job) {
+            job.phase = "paused";
+            job.nextPage = page;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+              Array.from(remoteBvidKeys).sort();
+            job.observedRowCountByFolder[String(remoteFolder.remoteId)] =
+              observedRowCount;
+            await checkpointJob();
+          }
+          break;
+        }
+        observedRowCount += medias.length;
         progressCurrent += medias.length;
         emitProgress({
           folderTitle: remoteFolder.title,
@@ -4114,6 +4368,10 @@ async function syncFromBilibiliToState(
           pageSize,
           medias.length
         );
+        if (!remoteHasMore && observedRowCount !== expectedRemoteCount) {
+          folderIncompleteReason =
+            "Remote response total does not match the number of observed rows";
+        }
         if (remoteHasMore) {
           page += 1;
           resumePageByFolder[String(remoteFolder.remoteId)] = page;
@@ -4121,6 +4379,8 @@ async function syncFromBilibiliToState(
             job.nextPage = page;
             job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
               Array.from(remoteBvidKeys).sort();
+            job.observedRowCountByFolder[String(remoteFolder.remoteId)] =
+              observedRowCount;
             await checkpointJob();
           }
         }
@@ -4139,22 +4399,65 @@ async function syncFromBilibiliToState(
         await sleep(resolveFavoritesPageGapMs(throttleState));
       }
 
-      if (!folderFailed) {
-        const folderVideoIdSet = new Set(
-          state.videos
-            .filter((video) => remoteBvidKeys.has(normalizeKey(video.bvid)))
-            .map((video) => video.id)
-        );
-        state.folderItems = state.folderItems.filter((item) => {
-          if (item.folderId !== localFolder.id) return true;
-          return folderVideoIdSet.has(item.videoId);
+      const incompleteReason = folderFailed
+        ? riskBlocked
+          ? "Bilibili risk-control interrupted the folder scan"
+          : "A remote request failed before the folder scan completed"
+        : folderHasUnresolved
+          ? "One or more remote rows could not be resolved to a BV id"
+          : folderIncompleteReason;
+
+      if (incompleteReason) {
+        incompleteFolders.push({
+          remoteFolderId: remoteFolder.remoteId,
+          folder: remoteFolder.title,
+          expected: expectedRemoteCount,
+          observed: observedRowCount,
+          reason: incompleteReason
         });
-        markOrphanVideosDeleted(state);
+        incompleteFolderCount = incompleteFolders.length;
+        if (job) {
+          if (!folderFailed) {
+            job.nextPage = 1;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] = [];
+            job.observedRowCountByFolder[String(remoteFolder.remoteId)] = 0;
+          }
+          await checkpointJob();
+        }
+      } else {
+        const existingLocalKeys = new Set<string>();
+        for (const item of state.folderItems) {
+          if (item.folderId !== localFolder.id) continue;
+          const video = state.videos.find((candidate) => candidate.id === item.videoId);
+          const key = normalizeKey(video?.bvid);
+          if (key) existingLocalKeys.add(key);
+        }
+        const omittedKeys = Array.from(existingLocalKeys)
+          .filter((key) => !remoteBvidKeys.has(key))
+          .sort();
+        const priorCandidates = new Set(
+          deletionCandidatesByFolder[String(remoteFolder.remoteId)] ?? []
+        );
+        const confirmedRemovalKeys = new Set(
+          omittedKeys.filter((key) => priorCandidates.has(key))
+        );
+        if (confirmedRemovalKeys.size > 0) {
+          state.folderItems = state.folderItems.filter((item) => {
+            if (item.folderId !== localFolder.id) return true;
+            const video = state.videos.find((candidate) => candidate.id === item.videoId);
+            if (!confirmedRemovalKeys.has(normalizeKey(video?.bvid))) return true;
+            folderLinksRemoved += 1;
+            return false;
+          });
+          markOrphanVideosDeleted(state);
+        }
+        deletionCandidatesByFolder[String(remoteFolder.remoteId)] = omittedKeys;
         if (job) {
           job.completedRemoteFolderIds = Array.from(
             new Set([...job.completedRemoteFolderIds, remoteFolder.remoteId])
           ).sort((left, right) => left - right);
           delete job.seenBvidKeysByFolder[String(remoteFolder.remoteId)];
+          delete job.observedRowCountByFolder[String(remoteFolder.remoteId)];
           job.currentFolderRemoteId = null;
           job.currentFolderTitle = remoteFolder.title;
           job.currentFolderIndex = folderPosition;
@@ -4209,7 +4512,10 @@ async function syncFromBilibiliToState(
     videosProcessed,
     videosUpserted,
     skippedMissingBvid,
+    unresolvedMissingBvid,
+    incompleteFolders: incompleteFolderCount,
     folderLinksAdded,
+    folderLinksRemoved,
     tagsBound,
     errorCount: errors.length
   };
@@ -4223,6 +4529,8 @@ async function syncFromBilibiliToState(
     job.summary = { ...summary };
     job.invalidVideoIds = invalidVideoIds;
     job.errors = errors.slice(-100);
+    job.unresolvedItems = unresolvedItems.slice(-100);
+    job.incompleteFolders = incompleteFolders.slice(-100);
     job.riskBlocked = riskBlocked;
     job.lastError = returnedErrors.at(-1)?.message ?? null;
     job.current = videosProcessed;
@@ -4237,7 +4545,9 @@ async function syncFromBilibiliToState(
       ? foldersToSync.every((folder) =>
           job.completedRemoteFolderIds.includes(folder.remoteId)
         )
-      : !riskBlocked && Object.keys(resumePageByFolder).length === 0,
+      : !riskBlocked &&
+        incompleteFolders.length === 0 &&
+        Object.keys(resumePageByFolder).length === 0,
     hasMore: false,
     nextOffset: null,
     hasMorePage: false,
@@ -4246,6 +4556,8 @@ async function syncFromBilibiliToState(
     resumePageByFolder,
     invalidVideosDetected: invalidVideoIds.length,
     invalidVideoIds,
+    unresolvedItems: unresolvedItems.slice(-100),
+    incompleteFolders: incompleteFolders.slice(-100),
     errors: returnedErrors,
     errorsOmitted,
     syncedAt: now()
@@ -4265,7 +4577,9 @@ function getFavoritesSyncStatus(state: LocalState) {
     resumePageByFolder: { ...status.resumePageByFolder },
     invalidVideoIds: [...status.invalidVideoIds],
     summary: { ...status.summary },
-    errors: status.errors.slice(-30)
+    errors: status.errors.slice(-30),
+    unresolvedItems: status.unresolvedItems.slice(-100),
+    incompleteFolders: status.incompleteFolders.slice(-100)
   };
 }
 
@@ -4665,6 +4979,8 @@ async function startFavoritesSyncTask(params: {
           active.summary = { ...result.summary };
           active.invalidVideoIds = [...result.invalidVideoIds];
           active.errors = [...result.errors];
+          active.unresolvedItems = [...result.unresolvedItems];
+          active.incompleteFolders = [...result.incompleteFolders];
           active.riskBlocked = Boolean(result.riskBlocked);
           active.lastError = result.errors.at(-1)?.message ?? null;
           active.updatedAt = now();

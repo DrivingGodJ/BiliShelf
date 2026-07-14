@@ -67,19 +67,18 @@ test("favorites sync counts remote media skipped because bvid is missing", async
 
   assert.match(source, /skippedMissingBvid: number;/);
   assert.match(apiSource, /skippedMissingBvid: number;/);
+  assert.match(source, /unresolvedMissingBvid: number;/);
+  assert.match(apiSource, /unresolvedMissingBvid: number;/);
   assert.match(source, /skippedMissingBvid: 0/);
   assert.match(
     source,
     /let skippedMissingBvid = job\?\.summary\.skippedMissingBvid \?\? 0;/
   );
-  assert.match(
-    source,
-    /if \(!bvid\) \{\s*skippedMissingBvid \+= 1;\s*continue;\s*\}/
-  );
-  assert.match(
-    source,
-    /skippedMissingBvid,\s*folderLinksAdded,\s*tagsBound,\s*errorCount: errors\.length/
-  );
+  assert.match(source, /async function resolveFavoriteMediaBvid\(/);
+  assert.match(source, /const resolvedIdentity = await resolveFavoriteMediaBvid\(media\);/);
+  assert.match(source, /skippedMissingBvid \+= 1;/);
+  assert.match(source, /unresolvedItems\.push\(unresolved\);/);
+  assert.match(source, /unresolvedItems: unresolvedItems\.slice\(-100\)/);
 });
 
 test("video refresh ignores stale responses from older page requests", async () => {

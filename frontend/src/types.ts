@@ -169,7 +169,10 @@ export type FavoritesSyncSummary = {
   videosProcessed: number;
   videosUpserted: number;
   skippedMissingBvid: number;
+  unresolvedMissingBvid: number;
+  incompleteFolders: number;
   folderLinksAdded: number;
+  folderLinksRemoved: number;
   tagsBound: number;
   errorCount: number;
 };
@@ -191,4 +194,18 @@ export type HistoryModelSyncStatus = {
   invalidVideosDetected?: number;
   invalidVideoIds?: number[];
   errors: Array<{ folder: string; message: string }>;
+  unresolvedItems: Array<{
+    remoteFolderId: number;
+    folder: string;
+    aid: number | null;
+    title: string;
+    reason: string;
+  }>;
+  incompleteFolders: Array<{
+    remoteFolderId: number;
+    folder: string;
+    expected: number;
+    observed: number;
+    reason: string;
+  }>;
 };

@@ -589,7 +589,10 @@ export type SyncFromBilibiliResult = {
     videosProcessed: number;
     videosUpserted: number;
     skippedMissingBvid: number;
+    unresolvedMissingBvid: number;
+    incompleteFolders: number;
     folderLinksAdded: number;
+    folderLinksRemoved: number;
     tagsBound: number;
     errorCount: number;
   };
@@ -600,6 +603,20 @@ export type SyncFromBilibiliResult = {
   riskBlocked?: boolean;
   invalidVideosDetected?: number;
   invalidVideoIds?: number[];
+  unresolvedItems: Array<{
+    remoteFolderId: number;
+    folder: string;
+    aid: number | null;
+    title: string;
+    reason: string;
+  }>;
+  incompleteFolders: Array<{
+    remoteFolderId: number;
+    folder: string;
+    expected: number;
+    observed: number;
+    reason: string;
+  }>;
   errors: Array<{ folder: string; message: string }>;
   errorsOmitted?: number;
   syncedAt: number;
