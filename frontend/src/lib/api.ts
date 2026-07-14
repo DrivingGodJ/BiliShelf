@@ -8,6 +8,7 @@ import type {
   FollowedUp,
   FolderAiCategories,
   Folder,
+  HistoryModelSyncStatus,
   Pagination,
   Tag,
   Video,
@@ -637,33 +638,7 @@ export type SyncRemoteFolder = {
   mediaCount: number;
 };
 
-export type HistoryModelSyncStatus = {
-  running: boolean;
-  startedAt: number | null;
-  finishedAt: number | null;
-  total: number;
-  current: number;
-  folderTitle: string;
-  folderIndex: number;
-  folderTotal: number;
-  message: string;
-  lastError: string | null;
-  riskBlocked: boolean;
-  resumePageByFolder?: Record<string, number>;
-  summary: {
-    foldersDetected: number;
-    foldersSynced: number;
-    videosProcessed: number;
-    videosUpserted: number;
-    skippedMissingBvid: number;
-    folderLinksAdded: number;
-    tagsBound: number;
-    errorCount: number;
-  };
-  invalidVideosDetected?: number;
-  invalidVideoIds?: number[];
-  errors: Array<{ folder: string; message: string }>;
-};
+export type { HistoryModelSyncStatus } from "../types";
 
 export type TagEnrichmentStatus = {
   paused: boolean;

@@ -68,7 +68,10 @@ test("favorites sync counts remote media skipped because bvid is missing", async
   assert.match(source, /skippedMissingBvid: number;/);
   assert.match(apiSource, /skippedMissingBvid: number;/);
   assert.match(source, /skippedMissingBvid: 0/);
-  assert.match(source, /let skippedMissingBvid = 0;/);
+  assert.match(
+    source,
+    /let skippedMissingBvid = job\?\.summary\.skippedMissingBvid \?\? 0;/
+  );
   assert.match(
     source,
     /if \(!bvid\) \{\s*skippedMissingBvid \+= 1;\s*continue;\s*\}/

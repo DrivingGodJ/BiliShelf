@@ -162,6 +162,7 @@ type SyncMeta = {
   bidirectionalSync: BidirectionalSyncMeta;
   webdav: WebDavMeta;
   stage3Reconcile: Stage3ReconcileMeta;
+  favoritesJob: FavoritesSyncJobMeta;
 };
 
 type AiProvider = SharedAiProvider;
@@ -355,6 +356,43 @@ type FavoritesSyncStatus = {
   errors: Array<{ folder: string; message: string }>;
 };
 
+type FavoritesSyncJobPhase = "running" | "paused" | "failed";
+
+type FavoritesSyncRetryState = {
+  attempt: number;
+  nextRetryAt: number | null;
+  automatic: boolean;
+  reason: string | null;
+};
+
+type FavoritesSyncJob = {
+  id: string;
+  phase: FavoritesSyncJobPhase;
+  selectedRemoteFolderIds: number[];
+  currentFolderRemoteId: number | null;
+  currentFolderTitle: string;
+  currentFolderIndex: number;
+  folderTotal: number;
+  nextPage: number;
+  seenBvidKeysByFolder: Record<string, string[]>;
+  completedRemoteFolderIds: number[];
+  startedAt: number;
+  updatedAt: number;
+  total: number;
+  current: number;
+  summary: FavoritesSyncSummaryStatus;
+  invalidVideoIds: number[];
+  errors: Array<{ folder: string; message: string }>;
+  riskBlocked: boolean;
+  lastError: string | null;
+  retry: FavoritesSyncRetryState;
+};
+
+type FavoritesSyncJobMeta = {
+  active: FavoritesSyncJob | null;
+  lastStatus: FavoritesSyncStatus;
+};
+
 type FavoritesSyncProgress = {
   total: number;
   current: number;
@@ -463,7 +501,8 @@ const defaultState = (): LocalState => ({
     tagEnrichment: defaultTagEnrichmentMeta(),
     bidirectionalSync: defaultBidirectionalSyncMeta(),
     webdav: defaultWebDavMeta(),
-    stage3Reconcile: defaultStage3ReconcileMeta()
+    stage3Reconcile: defaultStage3ReconcileMeta(),
+    favoritesJob: defaultFavoritesSyncJobMeta()
   },
   ai: createDefaultAiState(now())
 });
@@ -498,6 +537,295 @@ const defaultFavoritesSyncStatus = (): FavoritesSyncStatus => ({
   errors: []
 });
 
+function normalizeFavoritesSyncSummary(value: unknown): FavoritesSyncSummaryStatus {
+  const raw = value && typeof value === "object"
+    ? value as Partial<FavoritesSyncSummaryStatus>
+    : {};
+  return {
+    foldersDetected: Math.max(0, toInt(raw.foldersDetected, 0)),
+    foldersSynced: Math.max(0, toInt(raw.foldersSynced, 0)),
+    videosProcessed: Math.max(0, toInt(raw.videosProcessed, 0)),
+    videosUpserted: Math.max(0, toInt(raw.videosUpserted, 0)),
+    skippedMissingBvid: Math.max(0, toInt(raw.skippedMissingBvid, 0)),
+    folderLinksAdded: Math.max(0, toInt(raw.folderLinksAdded, 0)),
+    tagsBound: Math.max(0, toInt(raw.tagsBound, 0)),
+    errorCount: Math.max(0, toInt(raw.errorCount, 0))
+  };
+}
+
+function normalizeFavoritesSyncErrors(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as { folder?: unknown; message?: unknown };
+      const message = normalizeText(raw.message);
+      if (!message) return null;
+      return {
+        folder: normalizeText(raw.folder) || "__sync__",
+        message
+      };
+    })
+    .filter((item): item is { folder: string; message: string } => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
+  const raw = value && typeof value === "object"
+    ? value as Partial<FavoritesSyncStatus>
+    : {};
+  const resumePageByFolder: Record<string, number> = {};
+  const rawResume = raw.resumePageByFolder && typeof raw.resumePageByFolder === "object"
+    ? raw.resumePageByFolder
+    : {};
+  for (const [remoteIdRaw, pageRaw] of Object.entries(rawResume)) {
+    const remoteId = toInt(remoteIdRaw);
+    const page = toInt(pageRaw);
+    if (remoteId > 0 && page > 1) resumePageByFolder[String(remoteId)] = page;
+  }
+  const invalidVideoIds = Array.isArray(raw.invalidVideoIds)
+    ? Array.from(new Set(raw.invalidVideoIds.map((id) => toInt(id)).filter((id) => id > 0)))
+    : [];
+  return {
+    running: false,
+    startedAt: toIntOrNull(raw.startedAt),
+    finishedAt: toIntOrNull(raw.finishedAt),
+    total: Math.max(0, toInt(raw.total, 0)),
+    current: Math.max(0, toInt(raw.current, 0)),
+    folderTitle: normalizeText(raw.folderTitle),
+    folderIndex: Math.max(0, toInt(raw.folderIndex, 0)),
+    folderTotal: Math.max(0, toInt(raw.folderTotal, 0)),
+    message: normalizeText(raw.message),
+    lastError: normalizeText(raw.lastError) || null,
+    riskBlocked: Boolean(raw.riskBlocked),
+    resumePageByFolder,
+    invalidVideosDetected: Math.max(
+      invalidVideoIds.length,
+      toInt(raw.invalidVideosDetected, 0)
+    ),
+    invalidVideoIds,
+    summary: normalizeFavoritesSyncSummary(raw.summary),
+    errors: normalizeFavoritesSyncErrors(raw.errors)
+  };
+}
+
+function normalizeSelectedRemoteFolderIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.map((id) => toInt(id)).filter((id) => id > 0))
+  ).sort((left, right) => left - right);
+}
+
+function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobMeta {
+  const raw = value && typeof value === "object"
+    ? value as { active?: unknown; lastStatus?: unknown }
+    : {};
+  const lastStatus = normalizeFavoritesSyncStatus(raw.lastStatus);
+  if (!raw.active || typeof raw.active !== "object") {
+    return { active: null, lastStatus };
+  }
+
+  const activeRaw = raw.active as Partial<FavoritesSyncJob>;
+  const id = normalizeText(activeRaw.id);
+  if (!id) return { active: null, lastStatus };
+
+  const currentFolderRemoteId = toIntOrNull(activeRaw.currentFolderRemoteId);
+  const nextPageRaw = Math.max(1, toInt(activeRaw.nextPage, 1));
+  const rawSeen = activeRaw.seenBvidKeysByFolder &&
+    typeof activeRaw.seenBvidKeysByFolder === "object"
+    ? activeRaw.seenBvidKeysByFolder as Record<string, unknown>
+    : {};
+  const seenBvidKeysByFolder: Record<string, string[]> = {};
+  for (const [remoteIdRaw, seenRaw] of Object.entries(rawSeen)) {
+    const remoteId = toInt(remoteIdRaw);
+    if (remoteId <= 0 || !Array.isArray(seenRaw)) continue;
+    seenBvidKeysByFolder[String(remoteId)] = Array.from(
+      new Set(seenRaw.map((item) => normalizeKey(item)).filter(Boolean))
+    ).sort();
+  }
+
+  let nextPage = currentFolderRemoteId && currentFolderRemoteId > 0
+    ? nextPageRaw
+    : 1;
+  if (
+    currentFolderRemoteId &&
+    nextPage > 1 &&
+    !Array.isArray(rawSeen[String(currentFolderRemoteId)])
+  ) {
+    nextPage = 1;
+    seenBvidKeysByFolder[String(currentFolderRemoteId)] = [];
+  }
+
+  const phase: FavoritesSyncJobPhase =
+    activeRaw.phase === "running" ||
+    activeRaw.phase === "failed" ||
+    activeRaw.phase === "paused"
+      ? activeRaw.phase
+      : "paused";
+  const invalidVideoIds = Array.isArray(activeRaw.invalidVideoIds)
+    ? Array.from(new Set(activeRaw.invalidVideoIds.map((id) => toInt(id)).filter((id) => id > 0)))
+    : [];
+  const retryRaw = activeRaw.retry && typeof activeRaw.retry === "object"
+    ? activeRaw.retry as Partial<FavoritesSyncRetryState>
+    : {};
+  const active: FavoritesSyncJob = {
+    id,
+    phase: phase === "running" ? "paused" : phase,
+    selectedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      activeRaw.selectedRemoteFolderIds
+    ),
+    currentFolderRemoteId:
+      currentFolderRemoteId && currentFolderRemoteId > 0
+        ? currentFolderRemoteId
+        : null,
+    currentFolderTitle: normalizeText(activeRaw.currentFolderTitle),
+    currentFolderIndex: Math.max(0, toInt(activeRaw.currentFolderIndex, 0)),
+    folderTotal: Math.max(0, toInt(activeRaw.folderTotal, 0)),
+    nextPage,
+    seenBvidKeysByFolder,
+    completedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      activeRaw.completedRemoteFolderIds
+    ),
+    startedAt: Math.max(0, toInt(activeRaw.startedAt, 0)),
+    updatedAt: Math.max(0, toInt(activeRaw.updatedAt, 0)),
+    total: Math.max(0, toInt(activeRaw.total, 0)),
+    current: Math.max(0, toInt(activeRaw.current, 0)),
+    summary: normalizeFavoritesSyncSummary(activeRaw.summary),
+    invalidVideoIds,
+    errors: normalizeFavoritesSyncErrors(activeRaw.errors),
+    riskBlocked: Boolean(activeRaw.riskBlocked),
+    lastError: normalizeText(activeRaw.lastError) || null,
+    retry: {
+      attempt: Math.max(0, toInt(retryRaw.attempt, 0)),
+      nextRetryAt: toIntOrNull(retryRaw.nextRetryAt),
+      automatic: Boolean(retryRaw.automatic),
+      reason: normalizeText(retryRaw.reason) || null
+    }
+  };
+  return { active, lastStatus };
+}
+
+function defaultFavoritesSyncJobMeta(): FavoritesSyncJobMeta {
+  return normalizeFavoritesSyncJobMeta();
+}
+
+function createFavoritesSyncJob(
+  selectedRemoteFolderIds: number[],
+  startedAt = now()
+): FavoritesSyncJob {
+  const selected = normalizeSelectedRemoteFolderIds(selectedRemoteFolderIds);
+  const stamp = Math.max(0, toInt(startedAt, now()));
+  return {
+    id: `favorites-${stamp}-${selected.join("-") || "all"}`,
+    phase: "running",
+    selectedRemoteFolderIds: selected,
+    currentFolderRemoteId: null,
+    currentFolderTitle: "",
+    currentFolderIndex: 0,
+    folderTotal: 0,
+    nextPage: 1,
+    seenBvidKeysByFolder: {},
+    completedRemoteFolderIds: [],
+    startedAt: stamp,
+    updatedAt: stamp,
+    total: 0,
+    current: 0,
+    summary: emptyFavoritesSyncSummary(),
+    invalidVideoIds: [],
+    errors: [],
+    riskBlocked: false,
+    lastError: null,
+    retry: {
+      attempt: 0,
+      nextRetryAt: null,
+      automatic: false,
+      reason: null
+    }
+  };
+}
+
+function equalRemoteFolderSelection(left: number[], right: number[]) {
+  const normalizedLeft = normalizeSelectedRemoteFolderIds(left);
+  const normalizedRight = normalizeSelectedRemoteFolderIds(right);
+  return normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((id, index) => id === normalizedRight[index]);
+}
+
+function prepareFavoritesSyncJob(
+  meta: FavoritesSyncJobMeta,
+  selectedRemoteFolderIds: number[],
+  startedAt = now()
+) {
+  const selected = normalizeSelectedRemoteFolderIds(selectedRemoteFolderIds);
+  if (meta.active && equalRemoteFolderSelection(
+    meta.active.selectedRemoteFolderIds,
+    selected
+  )) {
+    meta.active.phase = "running";
+    meta.active.updatedAt = Math.max(0, toInt(startedAt, now()));
+    meta.active.riskBlocked = false;
+    meta.active.retry = {
+      attempt: 0,
+      nextRetryAt: null,
+      automatic: false,
+      reason: null
+    };
+    return meta.active;
+  }
+  meta.active = createFavoritesSyncJob(selected, startedAt);
+  return meta.active;
+}
+
+function statusFromFavoritesSyncJob(
+  job: FavoritesSyncJob,
+  running = false,
+  finishedAt: number | null = null
+): FavoritesSyncStatus {
+  const resumePageByFolder: Record<string, number> = {};
+  if (job.currentFolderRemoteId && job.nextPage > 1) {
+    resumePageByFolder[String(job.currentFolderRemoteId)] = job.nextPage;
+  }
+  return {
+    running,
+    startedAt: job.startedAt || null,
+    finishedAt,
+    total: job.total,
+    current: job.current,
+    folderTitle: job.currentFolderTitle,
+    folderIndex: job.currentFolderIndex,
+    folderTotal: job.folderTotal,
+    message: running
+      ? job.currentFolderTitle
+        ? `Syncing: ${job.currentFolderTitle}`
+        : "Starting favorites sync..."
+      : job.riskBlocked
+        ? "Favorites sync paused"
+        : job.phase === "failed"
+          ? "Favorites sync failed"
+          : "Favorites sync paused",
+    lastError: job.lastError,
+    riskBlocked: job.riskBlocked,
+    resumePageByFolder,
+    invalidVideosDetected: job.invalidVideoIds.length,
+    invalidVideoIds: [...job.invalidVideoIds],
+    summary: { ...job.summary },
+    errors: job.errors.slice(-30)
+  };
+}
+
+function completeFavoritesSyncJob(
+  meta: FavoritesSyncJobMeta,
+  job: FavoritesSyncJob,
+  finishedAt = now()
+) {
+  meta.lastStatus = {
+    ...statusFromFavoritesSyncJob(job, false, finishedAt),
+    message: "Favorites sync completed"
+  };
+  meta.active = null;
+  return meta.lastStatus;
+}
+
 const defaultInvalidVideoRecoveryStatus = (): InvalidVideoRecoveryStatus => ({
   running: false,
   total: 0,
@@ -531,7 +859,7 @@ let biliCookieHeaderCache: { value: string; expiresAt: number } | null = null;
 let nextBiliRequestAt = 0;
 let biliRequestThrottleQueue: Promise<void> = Promise.resolve();
 let favoritesSyncTask: Promise<void> | null = null;
-let favoritesSyncStatus: FavoritesSyncStatus = defaultFavoritesSyncStatus();
+let favoritesSyncStartPending = false;
 let invalidVideoRecoveryTask: Promise<void> | null = null;
 let invalidVideoRecoveryStatus: InvalidVideoRecoveryStatus =
   defaultInvalidVideoRecoveryStatus();
@@ -770,7 +1098,8 @@ async function readState() {
                 toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.errorCount, 0)
               )
             }
-          }
+          },
+          favoritesJob: normalizeFavoritesSyncJobMeta(raw.syncMeta?.favoritesJob)
         },
         ai: normalizeAiState(raw.ai, base.ai.updatedAt)
       };
@@ -2640,7 +2969,8 @@ function ensureTagEnrichmentMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.tagEnrichment) {
@@ -2661,7 +2991,8 @@ function ensureBidirectionalSyncMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.bidirectionalSync) {
@@ -2859,7 +3190,8 @@ function ensureWebDavMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.webdav) {
@@ -2899,7 +3231,8 @@ function ensureStage3ReconcileMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.webdav) {
@@ -3472,10 +3805,13 @@ async function syncFromBilibiliToState(
     selectedRemoteFolderIds?: number[];
     resumePageByFolder?: Record<string, number>;
     onProgress?: (progress: FavoritesSyncProgress) => void;
+    job?: FavoritesSyncJob;
+    onCheckpoint?: (state: LocalState, job: FavoritesSyncJob) => Promise<void> | void;
   }
 ) {
+  const job = options.job ?? null;
   const selectedIdSet = new Set(
-    (options.selectedRemoteFolderIds ?? [])
+    (options.selectedRemoteFolderIds ?? job?.selectedRemoteFolderIds ?? [])
       .map((id) => Number(id))
       .filter((id) => Number.isFinite(id) && id > 0)
   );
@@ -3503,16 +3839,16 @@ async function syncFromBilibiliToState(
     0
   );
 
-  let foldersSynced = 0;
-  let videosProcessed = 0;
-  let videosUpserted = 0;
-  let skippedMissingBvid = 0;
-  let folderLinksAdded = 0;
-  let tagsBound = 0;
+  let foldersSynced = job?.summary.foldersSynced ?? 0;
+  let videosProcessed = job?.summary.videosProcessed ?? 0;
+  let videosUpserted = job?.summary.videosUpserted ?? 0;
+  let skippedMissingBvid = job?.summary.skippedMissingBvid ?? 0;
+  let folderLinksAdded = job?.summary.folderLinksAdded ?? 0;
+  let tagsBound = job?.summary.tagsBound ?? 0;
   let riskBlocked = false;
-  const invalidVideoIdSet = new Set<number>();
-  const errors: Array<{ folder: string; message: string }> = [];
-  let progressCurrent = 0;
+  const invalidVideoIdSet = new Set<number>(job?.invalidVideoIds ?? []);
+  const errors: Array<{ folder: string; message: string }> = job?.errors.slice() ?? [];
+  let progressCurrent = job?.current ?? 0;
   let videosSinceCooldown = 0;
   const resumePageByFolder: Record<string, number> = {};
   for (const [remoteIdRaw, pageRaw] of Object.entries(options.resumePageByFolder ?? {})) {
@@ -3522,6 +3858,36 @@ async function syncFromBilibiliToState(
       resumePageByFolder[String(remoteId)] = page;
     }
   }
+  if (job?.currentFolderRemoteId && job.nextPage > 1) {
+    resumePageByFolder[String(job.currentFolderRemoteId)] = job.nextPage;
+  }
+  if (job) {
+    job.phase = "running";
+    job.folderTotal = foldersToSync.length;
+    job.total = totalEstimate;
+    job.summary.foldersDetected = foldersToSync.length;
+    job.updatedAt = now();
+  }
+  const checkpointJob = async () => {
+    if (!job) return;
+    job.current = progressCurrent;
+    job.summary = {
+      foldersDetected: foldersToSync.length,
+      foldersSynced,
+      videosProcessed,
+      videosUpserted,
+      skippedMissingBvid,
+      folderLinksAdded,
+      tagsBound,
+      errorCount: errors.length
+    };
+    job.invalidVideoIds = Array.from(invalidVideoIdSet).sort((a, b) => a - b);
+    job.errors = errors.slice(-100);
+    job.lastError = errors.at(-1)?.message ?? null;
+    job.riskBlocked = riskBlocked;
+    job.updatedAt = now();
+    await options.onCheckpoint?.(state, job);
+  };
   const emitProgress = (progress: Omit<FavoritesSyncProgress, "total" | "current">) => {
     options.onProgress?.({
       total: totalEstimate,
@@ -3530,36 +3896,69 @@ async function syncFromBilibiliToState(
     });
   };
 
-  for (const remoteFolder of foldersToSync) {
+  for (const [folderOffset, remoteFolder] of foldersToSync.entries()) {
+    if (job?.completedRemoteFolderIds.includes(remoteFolder.remoteId)) continue;
+    const folderPosition = folderOffset + 1;
     try {
       let throttleState: FavoritesSyncThrottleState =
         createFavoritesSyncThrottleState({
           folderMediaCount: Number(remoteFolder.mediaCount || 0),
           totalVideosProcessed: videosProcessed
         });
-      if (foldersSynced > 0) {
+      if (folderOffset > 0) {
         await sleep(resolveFavoritesFolderGapMs(throttleState));
       }
       const localFolder = ensureLocalFolderByRemoteId(state, remoteFolder);
-      foldersSynced += 1;
+      const isResumingCurrentFolder =
+        job?.currentFolderRemoteId === remoteFolder.remoteId;
+      if (!isResumingCurrentFolder) foldersSynced += 1;
+      if (job) {
+        job.currentFolderRemoteId = remoteFolder.remoteId;
+        job.currentFolderTitle = remoteFolder.title;
+        job.currentFolderIndex = folderPosition;
+        job.folderTotal = foldersToSync.length;
+        job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] ??= [];
+      }
       emitProgress({
         folderTitle: remoteFolder.title,
-        folderIndex: foldersSynced,
+        folderIndex: folderPosition,
         folderTotal: foldersToSync.length,
         message: `Syncing: ${remoteFolder.title}`
       });
       const pageSize = 20;
-      let page = Math.max(1, toInt(resumePageByFolder[String(remoteFolder.remoteId)] || 1));
+      let page = Math.max(
+        1,
+        toInt(
+          isResumingCurrentFolder
+            ? job?.nextPage
+            : resumePageByFolder[String(remoteFolder.remoteId)] || 1
+        )
+      );
       if (page > 1) {
         emitProgress({
           folderTitle: remoteFolder.title,
-          folderIndex: foldersSynced,
+          folderIndex: folderPosition,
           folderTotal: foldersToSync.length,
           message: `Resuming from page ${page}: ${remoteFolder.title}`
         });
       }
       let folderFailed = false;
-      const remoteBvidKeys = new Set<string>();
+      const remoteBvidKeys = new Set<string>(
+        job?.seenBvidKeysByFolder[String(remoteFolder.remoteId)] ?? []
+      );
+      if (page > 1 && remoteBvidKeys.size === 0) {
+        for (const item of state.folderItems) {
+          if (item.folderId !== localFolder.id) continue;
+          const video = state.videos.find((candidate) => candidate.id === item.videoId);
+          const key = normalizeKey(video?.bvid);
+          if (key) remoteBvidKeys.add(key);
+        }
+      }
+      if (job) {
+        job.nextPage = page;
+        job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+          Array.from(remoteBvidKeys).sort();
+      }
       while (true) {
         const query = new URLSearchParams({
           media_id: String(remoteFolder.remoteId),
@@ -3596,6 +3995,14 @@ async function syncFromBilibiliToState(
             riskBlocked = true;
           }
           folderFailed = true;
+          resumePageByFolder[String(remoteFolder.remoteId)] = page;
+          if (job) {
+            job.phase = isRisk ? "paused" : "failed";
+            job.nextPage = page;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+              Array.from(remoteBvidKeys).sort();
+            await checkpointJob();
+          }
           break;
         }
 
@@ -3691,7 +4098,7 @@ async function syncFromBilibiliToState(
         progressCurrent += medias.length;
         emitProgress({
           folderTitle: remoteFolder.title,
-          folderIndex: foldersSynced,
+          folderIndex: folderPosition,
           folderTotal: foldersToSync.length,
           message: `Syncing page ${page}: ${remoteFolder.title}`
         });
@@ -3707,6 +4114,16 @@ async function syncFromBilibiliToState(
           pageSize,
           medias.length
         );
+        if (remoteHasMore) {
+          page += 1;
+          resumePageByFolder[String(remoteFolder.remoteId)] = page;
+          if (job) {
+            job.nextPage = page;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+              Array.from(remoteBvidKeys).sort();
+            await checkpointJob();
+          }
+        }
         const cooldownPolicy = resolveFavoritesCooldownPolicy(throttleState);
         if (
           videosSinceCooldown >= cooldownPolicy.thresholdVideos &&
@@ -3719,8 +4136,6 @@ async function syncFromBilibiliToState(
           delete resumePageByFolder[String(remoteFolder.remoteId)];
           break;
         }
-        page += 1;
-        resumePageByFolder[String(remoteFolder.remoteId)] = page;
         await sleep(resolveFavoritesPageGapMs(throttleState));
       }
 
@@ -3735,6 +4150,17 @@ async function syncFromBilibiliToState(
           return folderVideoIdSet.has(item.videoId);
         });
         markOrphanVideosDeleted(state);
+        if (job) {
+          job.completedRemoteFolderIds = Array.from(
+            new Set([...job.completedRemoteFolderIds, remoteFolder.remoteId])
+          ).sort((left, right) => left - right);
+          delete job.seenBvidKeysByFolder[String(remoteFolder.remoteId)];
+          job.currentFolderRemoteId = null;
+          job.currentFolderTitle = remoteFolder.title;
+          job.currentFolderIndex = folderPosition;
+          job.nextPage = 1;
+          await checkpointJob();
+        }
       }
 
       if (riskBlocked) {
@@ -3742,6 +4168,7 @@ async function syncFromBilibiliToState(
           folder: "__sync__",
           message: "Bilibili risk-control (412) detected. Stop and retry later."
         });
+        if (job) await checkpointJob();
         break;
       }
     } catch (error) {
@@ -3763,7 +4190,15 @@ async function syncFromBilibiliToState(
           folder: "__sync__",
           message: "Bilibili risk-control (412) detected. Stop and retry later."
         });
+        if (job) {
+          job.phase = "paused";
+          await checkpointJob();
+        }
         break;
+      }
+      if (job) {
+        job.phase = "failed";
+        await checkpointJob();
       }
     }
   }
@@ -3784,9 +4219,25 @@ async function syncFromBilibiliToState(
   const errorsOmitted = Math.max(0, errors.length - returnedErrors.length);
   const invalidVideoIds = Array.from(invalidVideoIdSet).sort((a, b) => a - b);
 
+  if (job) {
+    job.summary = { ...summary };
+    job.invalidVideoIds = invalidVideoIds;
+    job.errors = errors.slice(-100);
+    job.riskBlocked = riskBlocked;
+    job.lastError = returnedErrors.at(-1)?.message ?? null;
+    job.current = videosProcessed;
+    job.updatedAt = now();
+    if (riskBlocked) job.phase = "paused";
+  }
+
   return {
     ok: true,
     summary,
+    completed: job
+      ? foldersToSync.every((folder) =>
+          job.completedRemoteFolderIds.includes(folder.remoteId)
+        )
+      : !riskBlocked && Object.keys(resumePageByFolder).length === 0,
     hasMore: false,
     nextOffset: null,
     hasMorePage: false,
@@ -3801,30 +4252,20 @@ async function syncFromBilibiliToState(
   };
 }
 
-function getFavoritesSyncStatus() {
+function getFavoritesSyncStatus(state: LocalState) {
+  const meta = state.syncMeta.favoritesJob;
+  const status = meta.active
+    ? statusFromFavoritesSyncJob(
+        meta.active,
+        Boolean(favoritesSyncTask) && meta.active.phase === "running"
+      )
+    : meta.lastStatus;
   return {
-    ...favoritesSyncStatus,
-    resumePageByFolder: { ...favoritesSyncStatus.resumePageByFolder },
-    invalidVideoIds: [...favoritesSyncStatus.invalidVideoIds],
-    summary: { ...favoritesSyncStatus.summary },
-    errors: favoritesSyncStatus.errors.slice(0, 30)
-  };
-}
-
-function updateFavoritesSyncStatus(patch: Partial<FavoritesSyncStatus>) {
-  favoritesSyncStatus = {
-    ...favoritesSyncStatus,
-    ...patch,
-    resumePageByFolder: patch.resumePageByFolder
-      ? { ...patch.resumePageByFolder }
-      : { ...favoritesSyncStatus.resumePageByFolder },
-    summary: patch.summary
-      ? { ...patch.summary }
-      : { ...favoritesSyncStatus.summary },
-    invalidVideoIds: patch.invalidVideoIds
-      ? [...patch.invalidVideoIds]
-      : [...favoritesSyncStatus.invalidVideoIds],
-    errors: patch.errors ? [...patch.errors] : [...favoritesSyncStatus.errors]
+    ...status,
+    resumePageByFolder: { ...status.resumePageByFolder },
+    invalidVideoIds: [...status.invalidVideoIds],
+    summary: { ...status.summary },
+    errors: status.errors.slice(-30)
   };
 }
 
@@ -4185,102 +4626,82 @@ function isWriteRequestBlockedByFavoritesSync(method: string, path: string) {
   return true;
 }
 
-function startFavoritesSyncTask(params: {
+async function startFavoritesSyncTask(params: {
   selectedRemoteFolderIds: number[];
   resumePageByFolder?: Record<string, number>;
 }) {
-  if (favoritesSyncTask) {
+  if (favoritesSyncTask || favoritesSyncStartPending) {
     return false;
   }
+  favoritesSyncStartPending = true;
+  try {
+    const jobId = await withState((state) => {
+      const job = prepareFavoritesSyncJob(
+        state.syncMeta.favoritesJob,
+        params.selectedRemoteFolderIds,
+        now()
+      );
+      return job.id;
+    }, true);
 
-  const resumePageByFolder: Record<string, number> = {};
-  for (const [remoteIdRaw, pageRaw] of Object.entries(params.resumePageByFolder ?? {})) {
-    const remoteId = toInt(remoteIdRaw);
-    const page = toInt(pageRaw);
-    if (remoteId > 0 && page > 1) {
-      resumePageByFolder[String(remoteId)] = page;
-    }
-  }
-
-  const startedAt = now();
-  updateFavoritesSyncStatus({
-    running: true,
-    startedAt,
-    finishedAt: null,
-    total: 0,
-    current: 0,
-    folderTitle: "",
-    folderIndex: 0,
-    folderTotal: 0,
-    message: "Starting favorites sync...",
-    lastError: null,
-    riskBlocked: false,
-    resumePageByFolder,
-    invalidVideosDetected: 0,
-    invalidVideoIds: [],
-    summary: emptyFavoritesSyncSummary(),
-    errors: []
-  });
-
-  favoritesSyncTask = withState(
-    async (state) =>
-      syncFromBilibiliToState(state, {
-        selectedRemoteFolderIds: params.selectedRemoteFolderIds,
-        resumePageByFolder,
-        onProgress: (progress) => {
-          updateFavoritesSyncStatus({
-            total: progress.total,
-            current: progress.current,
-            folderTitle: progress.folderTitle,
-            folderIndex: progress.folderIndex,
-            folderTotal: progress.folderTotal,
-            message: progress.message
-          });
+    favoritesSyncTask = withState(async (state) => {
+      const job = state.syncMeta.favoritesJob.active;
+      if (!job || job.id !== jobId) {
+        throw new Error("Favorites sync checkpoint is no longer active");
+      }
+      return syncFromBilibiliToState(state, {
+        selectedRemoteFolderIds: job.selectedRemoteFolderIds,
+        job,
+        onCheckpoint: async () => {
+          await writeState(state);
         }
-      }),
-    true
-  )
-    .then((result) => {
-      updateFavoritesSyncStatus({
-        running: false,
-        finishedAt: now(),
-        total: Math.max(favoritesSyncStatus.total, result.summary.videosProcessed),
-        current: result.summary.videosProcessed,
-        message: "Favorites sync completed",
-        lastError:
-          result.errors.length > 0
-            ? result.errors[result.errors.length - 1]?.message || null
-            : null,
-        riskBlocked: Boolean(result.riskBlocked),
-        resumePageByFolder: result.resumePageByFolder ?? {},
-        invalidVideosDetected: Math.max(0, toInt(result.invalidVideosDetected, 0)),
-        invalidVideoIds: Array.isArray(result.invalidVideoIds)
-          ? result.invalidVideoIds.map((id) => toInt(id)).filter((id) => id > 0)
-          : [],
-        summary: result.summary,
-        errors: result.errors
       });
-    })
-    .catch((error) => {
-      const message = isBiliRequestError(error)
-        ? formatBiliRequestError(error)
-        : error instanceof Error
-          ? error.message
-          : String(error);
-      updateFavoritesSyncStatus({
-        running: false,
-        finishedAt: now(),
-        message: "Favorites sync failed",
-        lastError: message,
-        invalidVideosDetected: 0,
-        invalidVideoIds: []
+    }, false)
+      .then(async (result) => {
+        await withState((state) => {
+          const meta = state.syncMeta.favoritesJob;
+          const active = meta.active;
+          if (!active || active.id !== jobId) return;
+          active.summary = { ...result.summary };
+          active.invalidVideoIds = [...result.invalidVideoIds];
+          active.errors = [...result.errors];
+          active.riskBlocked = Boolean(result.riskBlocked);
+          active.lastError = result.errors.at(-1)?.message ?? null;
+          active.updatedAt = now();
+          if (result.completed && !result.riskBlocked) {
+            completeFavoritesSyncJob(meta, active, now());
+          } else {
+            active.phase = result.riskBlocked ? "paused" : "failed";
+          }
+        }, true);
+      })
+      .catch(async (error) => {
+        const message = isBiliRequestError(error)
+          ? formatBiliRequestError(error)
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        await withState((state) => {
+          const active = state.syncMeta.favoritesJob.active;
+          if (!active || active.id !== jobId) return;
+          active.phase = "failed";
+          active.lastError = message;
+          active.errors = [
+            ...active.errors,
+            { folder: "__sync__", message }
+          ].slice(-100);
+          active.summary.errorCount = active.errors.length;
+          active.updatedAt = now();
+        }, true);
+      })
+      .finally(() => {
+        favoritesSyncTask = null;
       });
-    })
-    .finally(() => {
-      favoritesSyncTask = null;
-    });
 
-  return true;
+    return true;
+  } finally {
+    favoritesSyncStartPending = false;
+  }
 }
 
 function buildExportPayload(state: LocalState) {
@@ -4787,7 +5208,8 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
     }
 
     if (method === "GET" && path === "/sync/bilibili/history-model/status") {
-      return ok(getFavoritesSyncStatus());
+      const snapshot = await readState();
+      return ok(getFavoritesSyncStatus(snapshot));
     }
 
     if (method === "GET" && path === "/sync/bilibili/tag-enrichment/status") {
@@ -4826,14 +5248,15 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           resumePageByFolder[String(remoteId)] = page;
         }
       }
-      const started = startFavoritesSyncTask({
+      const started = await startFavoritesSyncTask({
         selectedRemoteFolderIds,
         resumePageByFolder
       });
+      const snapshot = await readState();
       return ok({
         ok: true,
         started,
-        status: getFavoritesSyncStatus()
+        status: getFavoritesSyncStatus(snapshot)
       });
     }
 

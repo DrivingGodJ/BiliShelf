@@ -162,3 +162,33 @@ export type FollowingUpImportStatus = {
   failed: number;
   lastError: string | null;
 };
+
+export type FavoritesSyncSummary = {
+  foldersDetected: number;
+  foldersSynced: number;
+  videosProcessed: number;
+  videosUpserted: number;
+  skippedMissingBvid: number;
+  folderLinksAdded: number;
+  tagsBound: number;
+  errorCount: number;
+};
+
+export type HistoryModelSyncStatus = {
+  running: boolean;
+  startedAt: number | null;
+  finishedAt: number | null;
+  total: number;
+  current: number;
+  folderTitle: string;
+  folderIndex: number;
+  folderTotal: number;
+  message: string;
+  lastError: string | null;
+  riskBlocked: boolean;
+  resumePageByFolder?: Record<string, number>;
+  summary: FavoritesSyncSummary;
+  invalidVideosDetected?: number;
+  invalidVideoIds?: number[];
+  errors: Array<{ folder: string; message: string }>;
+};
