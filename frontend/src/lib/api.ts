@@ -658,14 +658,36 @@ export type SyncRemoteFolder = {
 export type { HistoryModelSyncStatus } from "../types";
 
 export type TagEnrichmentStatus = {
+  phase: "idle" | "running" | "waiting" | "paused" | "completed" | "failed";
   paused: boolean;
   running: boolean;
   cursorAfterVideoId: number;
+  total: number;
   totalMissing: number;
+  processed: number;
+  succeeded: number;
+  empty: number;
+  failed: number;
+  tagsBound: number;
   lastBatchProcessed: number;
+  lastBatchSucceeded: number;
+  lastBatchEmpty: number;
+  lastBatchFailed: number;
   lastBatchBound: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  nextRunAt: number | null;
+  retryAttempt: number;
+  riskCount: number;
   lastRunAt: number | null;
+  updatedAt: number;
   lastError: string | null;
+  errors: Array<{
+    videoId: number;
+    bvid: string;
+    message: string;
+    occurredAt: number;
+  }>;
 };
 
 export type BidirectionalSyncSettings = {
@@ -763,19 +785,25 @@ export async function fetchTagEnrichmentStatus() {
 }
 
 export async function pauseTagEnrichment() {
-  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/pause", {
+  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/stop", {
     method: "POST",
   });
 }
 
 export async function resumeTagEnrichment() {
-  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/resume", {
+  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/start", {
     method: "POST",
   });
 }
 
 export async function runTagEnrichmentNow() {
   return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/run", {
+    method: "POST",
+  });
+}
+
+export async function restartTagEnrichment() {
+  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/restart", {
     method: "POST",
   });
 }

@@ -427,8 +427,59 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "en-US": "Resume enrichment",
   },
   "sync.runTagEnrichNow": {
-    "zh-CN": "立即补全",
-    "en-US": "Run one batch now",
+    "zh-CN": "立即执行",
+    "en-US": "Run now",
+  },
+  "sync.startTagEnrich": {
+    "zh-CN": "开始",
+    "en-US": "Start",
+  },
+  "sync.stopTagEnrich": {
+    "zh-CN": "停止",
+    "en-US": "Stop",
+  },
+  "sync.tag.phase.idle": { "zh-CN": "未开始", "en-US": "Idle" },
+  "sync.tag.phase.running": { "zh-CN": "执行中", "en-US": "Running" },
+  "sync.tag.phase.waiting": { "zh-CN": "等待中", "en-US": "Waiting" },
+  "sync.tag.phase.paused": { "zh-CN": "已停止", "en-US": "Stopped" },
+  "sync.tag.phase.completed": { "zh-CN": "已完成", "en-US": "Completed" },
+  "sync.tag.phase.failed": { "zh-CN": "失败", "en-US": "Failed" },
+  "sync.tag.phaseDetail.idle": {
+    "zh-CN": "当前没有运行中的标签任务",
+    "en-US": "No tag task is active",
+  },
+  "sync.tag.phaseDetail.running": {
+    "zh-CN": "正在读取当前批次",
+    "en-US": "Fetching the current batch",
+  },
+  "sync.tag.phaseDetail.waiting": {
+    "zh-CN": "当前批次已保存，等待下次执行",
+    "en-US": "Current batch saved; waiting for the next run",
+  },
+  "sync.tag.phaseDetail.paused": {
+    "zh-CN": "任务进度已保存",
+    "en-US": "Task progress is saved",
+  },
+  "sync.tag.phaseDetail.completed": {
+    "zh-CN": "本轮标签队列已处理完毕",
+    "en-US": "The current tag queue is complete",
+  },
+  "sync.tag.phaseDetail.failed": {
+    "zh-CN": "任务需要重新开始",
+    "en-US": "The task needs to be started again",
+  },
+  "sync.tag.progress": {
+    "zh-CN": "已处理 {processed}/{total}，剩余 {missing}",
+    "en-US": "Processed {processed}/{total}; {missing} remaining",
+  },
+  "sync.tag.succeeded": { "zh-CN": "成功视频", "en-US": "Succeeded" },
+  "sync.tag.empty": { "zh-CN": "空标签", "en-US": "No tags" },
+  "sync.tag.failed": { "zh-CN": "失败请求", "en-US": "Failures" },
+  "sync.tag.bound": { "zh-CN": "绑定标签", "en-US": "Tags bound" },
+  "sync.tag.lastBatch": { "zh-CN": "本批尝试", "en-US": "Last batch" },
+  "sync.tag.nextRun": {
+    "zh-CN": "下次执行：{time}（约 {seconds} 秒）",
+    "en-US": "Next run: {time} (about {seconds}s)",
   },
   "sync.settings.title": {
     "zh-CN": "B站监听设置",
@@ -1273,6 +1324,18 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "zh-CN": "检测到风控（412），请在冷却结束后手动继续。",
     "en-US":
       "Risk-control detected (412). Resume manually after cooldown.",
+  },
+  "toast.tagEnrichStopped": {
+    "zh-CN": "标签补全任务已停止，进度已保存",
+    "en-US": "Tag enrichment stopped with progress saved",
+  },
+  "toast.tagEnrichStarted": {
+    "zh-CN": "标签补全任务已开始",
+    "en-US": "Tag enrichment started",
+  },
+  "toast.tagEnrichNoPending": {
+    "zh-CN": "当前没有待补全的标签",
+    "en-US": "No tags are pending enrichment",
   },
   "toast.autoInitDone": {
     "zh-CN": "初始化同步完成",

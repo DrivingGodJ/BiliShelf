@@ -16,6 +16,7 @@ import VideoDetailDialog from "./components/dialogs/VideoDetailDialog.vue";
 import InvalidVideoRecoveryDialog from "./components/dialogs/InvalidVideoRecoveryDialog.vue";
 import FollowingUpImportDialog from "./components/dialogs/FollowingUpImportDialog.vue";
 import AiCategoryBrowser from "./components/AiCategoryBrowser.vue";
+import TagEnrichmentStatusBar from "./components/sync/TagEnrichmentStatusBar.vue";
 import ManagerFolderNavigation from "./components/layout/ManagerFolderNavigation.vue";
 import ManagerHeader from "./components/layout/ManagerHeader.vue";
 import ManagerPanel from "./components/panels/ManagerPanel.vue";
@@ -885,14 +886,6 @@ const autoInitPhase1Progress = computed(() => {
   return Math.max(0, Math.min(100, (imported / target) * 100));
 });
 
-const autoInitTagProgress = computed(() => {
-  const imported = Math.max(0, autoInitState.value.phase1Imported);
-  const missing = Math.max(0, tagEnrichmentStatus.value?.totalMissing ?? 0);
-  if (imported <= 0) return missing <= 0 ? 100 : 0;
-  const done = Math.max(0, imported - missing);
-  return Math.max(0, Math.min(100, (done / imported) * 100));
-});
-
 const autoInitCooldownRemainMs = computed(() => {
   if (
     autoInitState.value.status !== "cooldown" ||
@@ -913,11 +906,10 @@ const autoInitStatusText = computed(() => {
 
 const showAutoInitProgressPanel = computed(() => {
   if (trashMode.value) return false;
-  const hasPhaseState =
+  return (
     autoInitState.value.status !== "idle" ||
-    autoInitState.value.folderIds.length > 0;
-  const hasTagBacklog = (tagEnrichmentStatus.value?.totalMissing ?? 0) > 0;
-  return hasPhaseState || hasTagBacklog;
+    autoInitState.value.folderIds.length > 0
+  );
 });
 
 function handleStorageSync(event: StorageEvent) {
@@ -1065,7 +1057,7 @@ async function pauseTagEnrichmentFromUi() {
   tagEnrichmentLoading.value = true;
   try {
     tagEnrichmentStatus.value = await pauseTagEnrichment();
-    notifySuccess(t("toast.tagEnrichPaused"));
+    notifySuccess(t("toast.tagEnrichStopped"));
   } catch (error) {
     notifyError(t("toast.tagEnrichPauseFail"), error);
   } finally {
@@ -1079,7 +1071,12 @@ async function resumeTagEnrichmentFromUi() {
   tagEnrichmentLoading.value = true;
   try {
     tagEnrichmentStatus.value = await resumeTagEnrichment();
-    notifySuccess(t("toast.tagEnrichResumed"));
+    notifySuccess(
+      tagEnrichmentStatus.value.phase === "completed" &&
+        tagEnrichmentStatus.value.totalMissing === 0
+        ? t("toast.tagEnrichNoPending")
+        : t("toast.tagEnrichStarted")
+    );
   } catch (error) {
     notifyError(t("toast.tagEnrichResumeFail"), error);
   } finally {
@@ -1538,7 +1535,7 @@ function startTagEnrichmentPolling() {
   tagEnrichmentPollTimer = window.setInterval(() => {
     if (route.name !== "manager") return;
     void refreshTagEnrichmentState();
-  }, 15_000);
+  }, 5_000);
 }
 
 function stopTagEnrichmentPolling() {
@@ -2680,76 +2677,25 @@ onBeforeUnmount(() => {
           <Progress :model-value="autoInitPhase1Progress" />
         </div>
 
-        <div v-if="TAG_SYNC_ENABLED" class="space-y-1.5">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-muted-foreground">{{
-              t("autoInit.phase2Title")
-            }}</span>
-            <span>
-              {{
-                t("autoInit.phase2Summary", {
-                  missing: tagEnrichmentStatus?.totalMissing ?? 0,
-                  processed: tagEnrichmentStatus?.lastBatchProcessed ?? 0,
-                  bound: tagEnrichmentStatus?.lastBatchBound ?? 0,
-                })
-              }}
-            </span>
-          </div>
-          <Progress :model-value="autoInitTagProgress" />
-          <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-            <Button
-              size="sm"
-              variant="outline"
-              :disabled="tagEnrichmentLoading"
-              @click="refreshTagEnrichmentState"
-            >
-              {{ t("sync.reloadTagEnrich") }}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              :disabled="
-                tagEnrichmentLoading || (tagEnrichmentStatus?.paused ?? true)
-              "
-              @click="pauseTagEnrichmentFromUi"
-            >
-              {{ t("sync.pauseTagEnrich") }}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              :disabled="
-                tagEnrichmentLoading || !(tagEnrichmentStatus?.paused ?? false)
-              "
-              @click="resumeTagEnrichmentFromUi"
-            >
-              {{ t("sync.resumeTagEnrich") }}
-            </Button>
-            <Button
-              size="sm"
-              :disabled="
-                tagEnrichmentLoading || (tagEnrichmentStatus?.paused ?? false)
-              "
-              @click="runTagEnrichmentNowFromUi"
-            >
-              {{ t("sync.runTagEnrichNow") }}
-            </Button>
-          </div>
-        </div>
-
         <p
           v-if="autoInitState.lastError"
           class="text-xs text-amber-600 dark:text-amber-400 whitespace-pre-wrap"
         >
           {{ autoInitState.lastError }}
         </p>
-        <p
-          v-if="TAG_SYNC_ENABLED && tagEnrichmentStatus?.lastError"
-          class="text-xs text-amber-600 dark:text-amber-400 whitespace-pre-wrap"
-        >
-          {{ tagEnrichmentStatus.lastError }}
-        </p>
       </section>
+
+      <TagEnrichmentStatusBar
+        v-if="TAG_SYNC_ENABLED && !trashMode && !followingUpsMode"
+        :status="tagEnrichmentStatus"
+        :loading="tagEnrichmentLoading"
+        :now-ms="tickNow"
+        :t="t"
+        @refresh="refreshTagEnrichmentState"
+        @start="resumeTagEnrichmentFromUi"
+        @stop="pauseTagEnrichmentFromUi"
+        @run="runTagEnrichmentNowFromUi"
+      />
 
       <AiCategoryBrowser
         v-if="AI_CATEGORIES_ENABLED && !trashMode && aiCategoryBrowserOpen"

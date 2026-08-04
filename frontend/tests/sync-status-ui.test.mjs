@@ -16,6 +16,14 @@ const dialogPath = path.join(
   "dialogs",
   "SyncImportDialog.vue",
 );
+const tagStatusPath = path.join(
+  repoRoot,
+  "frontend",
+  "src",
+  "components",
+  "sync",
+  "TagEnrichmentStatusBar.vue",
+);
 const apiPath = path.join(repoRoot, "frontend", "src", "lib", "api.ts");
 const typesPath = path.join(repoRoot, "frontend", "src", "types.ts");
 const i18nPath = path.join(repoRoot, "frontend", "src", "lib", "manager-i18n.ts");
@@ -85,6 +93,53 @@ test("sync diagnostics have matching Chinese and English copy", async () => {
     "sync.unresolved",
     "sync.incomplete",
     "sync.diagnostics",
+  ]) {
+    assert.match(source, new RegExp(`"${key}"`));
+  }
+});
+
+test("tag status bar exposes persisted progress and explicit task controls", async () => {
+  const [component, app, api] = await Promise.all([
+    readFile(tagStatusPath, "utf8"),
+    readFile(appPath, "utf8"),
+    readFile(apiPath, "utf8"),
+  ]);
+
+  assert.match(api, /phase: "idle" \| "running" \| "waiting" \| "paused"/);
+  assert.match(api, /nextRunAt: number \| null;/);
+  assert.match(api, /processed: number;/);
+  assert.match(api, /succeeded: number;/);
+  assert.match(api, /empty: number;/);
+  assert.match(api, /failed: number;/);
+  assert.match(api, /errors: Array</);
+  assert.match(component, /aria-live="polite"/);
+  assert.match(component, /status\?\.processed/);
+  assert.match(component, /status\?\.totalMissing/);
+  assert.match(component, /status\?\.nextRunAt/);
+  assert.match(component, /emit\('start'\)/);
+  assert.match(component, /emit\('stop'\)/);
+  assert.match(component, /emit\('run'\)/);
+  assert.match(app, /<TagEnrichmentStatusBar/);
+  assert.match(app, /@start="resumeTagEnrichmentFromUi"/);
+  assert.match(app, /@stop="pauseTagEnrichmentFromUi"/);
+});
+
+test("tag task controls and phases have matching Chinese and English copy", async () => {
+  const source = await readFile(i18nPath, "utf8");
+
+  for (const key of [
+    "sync.startTagEnrich",
+    "sync.stopTagEnrich",
+    "sync.runTagEnrichNow",
+    "sync.tag.phase.running",
+    "sync.tag.phase.waiting",
+    "sync.tag.phase.paused",
+    "sync.tag.phase.completed",
+    "sync.tag.progress",
+    "sync.tag.nextRun",
+    "sync.tag.succeeded",
+    "sync.tag.empty",
+    "sync.tag.failed",
   ]) {
     assert.match(source, new RegExp(`"${key}"`));
   }

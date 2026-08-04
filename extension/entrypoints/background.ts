@@ -116,14 +116,48 @@ type VideoTagRecord = {
 
 type FollowedUpRecord = StoredFollowedUpRecord;
 
+type TagEnrichmentPhase =
+  | "idle"
+  | "running"
+  | "waiting"
+  | "paused"
+  | "completed"
+  | "failed";
+
+type TagEnrichmentErrorItem = {
+  videoId: number;
+  bvid: string;
+  message: string;
+  occurredAt: number;
+};
+
 type TagEnrichmentMeta = {
+  phase: TagEnrichmentPhase;
   paused: boolean;
   cursorAfterVideoId: number;
+  total: number;
   totalMissing: number;
+  processed: number;
+  succeeded: number;
+  empty: number;
+  failed: number;
+  tagsBound: number;
   lastBatchProcessed: number;
+  lastBatchSucceeded: number;
+  lastBatchEmpty: number;
+  lastBatchFailed: number;
   lastBatchBound: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  nextRunAt: number | null;
+  retryAttempt: number;
+  riskCount: number;
   lastRunAt: number | null;
+  updatedAt: number;
   lastError: string | null;
+  checkedEmptyVideoIds: number[];
+  skippedVideoIds: number[];
+  errors: TagEnrichmentErrorItem[];
 };
 
 type BidirectionalSyncMeta = {
@@ -292,6 +326,9 @@ const TAG_ENRICH_ALARM = "bilishelf-tag-enrich";
 const STAGE3_RECONCILE_ALARM = "bilishelf-stage3-reconcile";
 const FAVORITES_SYNC_RETRY_ALARM = "bilishelf-favorites-sync-retry";
 const TAG_ENRICH_BATCH_SIZE = 2;
+const TAG_ENRICH_BATCH_DELAY_MIN_MS = 45_000;
+const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 30_000;
+const TAG_ENRICH_RESTORE_DELAY_MS = 5_000;
 const STAGE3_RECONCILE_DEFAULT_INTERVAL_MINUTES = 30;
 const STAGE3_RECONCILE_RETRY_DELAY_MINUTES = 5;
 const STAGE3_RECONCILE_RISK_DELAY_MINUTES = 20;
@@ -472,14 +509,115 @@ type CookiesApi = {
 };
 
 const defaultTagEnrichmentMeta = (): TagEnrichmentMeta => ({
+  phase: "idle",
   paused: false,
   cursorAfterVideoId: 0,
+  total: 0,
   totalMissing: 0,
+  processed: 0,
+  succeeded: 0,
+  empty: 0,
+  failed: 0,
+  tagsBound: 0,
   lastBatchProcessed: 0,
+  lastBatchSucceeded: 0,
+  lastBatchEmpty: 0,
+  lastBatchFailed: 0,
   lastBatchBound: 0,
+  startedAt: null,
+  finishedAt: null,
+  nextRunAt: null,
+  retryAttempt: 0,
+  riskCount: 0,
   lastRunAt: null,
-  lastError: null
+  updatedAt: now(),
+  lastError: null,
+  checkedEmptyVideoIds: [],
+  skippedVideoIds: [],
+  errors: []
 });
+
+function normalizeTagEnrichmentPhase(
+  value: unknown,
+  paused: boolean
+): TagEnrichmentPhase {
+  const phase = normalizeText(value) as TagEnrichmentPhase;
+  if (
+    phase === "idle" ||
+    phase === "running" ||
+    phase === "waiting" ||
+    phase === "paused" ||
+    phase === "completed" ||
+    phase === "failed"
+  ) {
+    return paused ? "paused" : phase;
+  }
+  return paused ? "paused" : "idle";
+}
+
+function normalizePositiveIntList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.map((item) => toInt(item)).filter((item) => item > 0))
+  ).sort((left, right) => left - right);
+}
+
+function normalizeTagEnrichmentMeta(raw: unknown): TagEnrichmentMeta {
+  const source = raw && typeof raw === "object"
+    ? raw as Partial<TagEnrichmentMeta>
+    : {};
+  const paused = Boolean(source.paused) || source.phase === "paused";
+  const processed = Math.max(0, toInt(source.processed));
+  const totalMissing = Math.max(0, toInt(source.totalMissing));
+  const errors = Array.isArray(source.errors)
+    ? source.errors
+        .map((item) => {
+          const candidate = item && typeof item === "object"
+            ? item as Partial<TagEnrichmentErrorItem>
+            : {};
+          const videoId = Math.max(0, toInt(candidate.videoId));
+          const message = normalizeText(candidate.message);
+          if (!videoId || !message) return null;
+          return {
+            videoId,
+            bvid: normalizeText(candidate.bvid),
+            message,
+            occurredAt: Math.max(0, toInt(candidate.occurredAt))
+          };
+        })
+        .filter((item): item is TagEnrichmentErrorItem => Boolean(item))
+        .slice(-100)
+    : [];
+
+  return {
+    phase: normalizeTagEnrichmentPhase(source.phase, paused),
+    paused,
+    cursorAfterVideoId: Math.max(0, toInt(source.cursorAfterVideoId)),
+    total: Math.max(processed + totalMissing, Math.max(0, toInt(source.total))),
+    totalMissing,
+    processed,
+    succeeded: Math.max(0, toInt(source.succeeded)),
+    empty: Math.max(0, toInt(source.empty)),
+    failed: Math.max(0, toInt(source.failed)),
+    tagsBound: Math.max(0, toInt(source.tagsBound)),
+    lastBatchProcessed: Math.max(0, toInt(source.lastBatchProcessed)),
+    lastBatchSucceeded: Math.max(0, toInt(source.lastBatchSucceeded)),
+    lastBatchEmpty: Math.max(0, toInt(source.lastBatchEmpty)),
+    lastBatchFailed: Math.max(0, toInt(source.lastBatchFailed)),
+    lastBatchBound: Math.max(0, toInt(source.lastBatchBound)),
+    startedAt: toIntOrNull(source.startedAt),
+    finishedAt: toIntOrNull(source.finishedAt),
+    nextRunAt: toIntOrNull(source.nextRunAt),
+    retryAttempt: Math.max(0, toInt(source.retryAttempt)),
+    riskCount: Math.max(0, toInt(source.riskCount)),
+    lastRunAt: toIntOrNull(source.lastRunAt),
+    updatedAt: Math.max(0, toInt(source.updatedAt, now())),
+    lastError: normalizeText(source.lastError) || null,
+    checkedEmptyVideoIds: normalizePositiveIntList(source.checkedEmptyVideoIds),
+    skippedVideoIds: normalizePositiveIntList(source.skippedVideoIds),
+    errors
+  };
+}
 
 const defaultBidirectionalSyncMeta = (): BidirectionalSyncMeta => ({
   biliToLocalEnabled: false,
@@ -1051,6 +1189,7 @@ let cachedIndexes: { revision: number; value: LocalStateIndexes } | null = null;
 const videoQueryResultCache = new Map<string, { revision: number; ids: number[] }>();
 let stateQueue: Promise<void> = Promise.resolve();
 let tagEnrichmentTask: Promise<void> | null = null;
+let tagEnrichmentStopRequested = false;
 let biliCookieHeaderCache: { value: string; expiresAt: number } | null = null;
 let nextBiliRequestAt = 0;
 let biliRequestThrottleQueue: Promise<void> = Promise.resolve();
@@ -1211,15 +1350,7 @@ async function readState() {
           ),
         })).filter((item) => item.uid > 0 && item.name),
         syncMeta: {
-          tagEnrichment: {
-            paused: Boolean(raw.syncMeta?.tagEnrichment?.paused),
-            cursorAfterVideoId: toInt(raw.syncMeta?.tagEnrichment?.cursorAfterVideoId, 0),
-            totalMissing: toInt(raw.syncMeta?.tagEnrichment?.totalMissing, 0),
-            lastBatchProcessed: toInt(raw.syncMeta?.tagEnrichment?.lastBatchProcessed, 0),
-            lastBatchBound: toInt(raw.syncMeta?.tagEnrichment?.lastBatchBound, 0),
-            lastRunAt: toIntOrNull(raw.syncMeta?.tagEnrichment?.lastRunAt),
-            lastError: normalizeText(raw.syncMeta?.tagEnrichment?.lastError) || null
-          },
+          tagEnrichment: normalizeTagEnrichmentMeta(raw.syncMeta?.tagEnrichment),
           bidirectionalSync: {
             biliToLocalEnabled: Boolean(raw.syncMeta?.bidirectionalSync?.biliToLocalEnabled),
             localToBiliEnabled: false,
@@ -3517,11 +3648,21 @@ function getStage3ReconcileStatus(state: LocalState) {
 function collectMissingSystemTagCandidates(
   state: LocalState,
   limit: number,
-  cursorAfterVideoId = 0
+  cursorAfterVideoId = 0,
+  meta = ensureTagEnrichmentMeta(state)
 ) {
   const hasSystemTagVideoIds = getVideoIdSetWithSystemTags(state);
+  const terminalVideoIds = new Set([
+    ...meta.checkedEmptyVideoIds,
+    ...meta.skippedVideoIds
+  ]);
   const missingVideos = state.videos
-    .filter((video) => video.deletedAt === null && !hasSystemTagVideoIds.has(video.id))
+    .filter(
+      (video) =>
+        video.deletedAt === null &&
+        !hasSystemTagVideoIds.has(video.id) &&
+        !terminalVideoIds.has(video.id)
+    )
     .sort((a, b) => a.id - b.id);
   const threshold = Math.max(0, cursorAfterVideoId);
   const preferred = missingVideos.filter((video) => video.id > threshold);
@@ -3535,9 +3676,15 @@ function collectMissingSystemTagCandidates(
 function collectMissingSystemTagCandidateDtos(
   state: LocalState,
   limit: number,
-  cursorAfterVideoId = 0
+  cursorAfterVideoId = 0,
+  meta = ensureTagEnrichmentMeta(state)
 ) {
-  const batch = collectMissingSystemTagCandidates(state, limit, cursorAfterVideoId);
+  const batch = collectMissingSystemTagCandidates(
+    state,
+    limit,
+    cursorAfterVideoId,
+    meta
+  );
   return {
     total: batch.total,
     items: batch.items
@@ -3545,9 +3692,16 @@ function collectMissingSystemTagCandidateDtos(
   };
 }
 
-function countMissingSystemTagVideos(state: LocalState) {
-  const hasSystemTagVideoIds = getVideoIdSetWithSystemTags(state);
-  return state.videos.filter((video) => video.deletedAt === null && !hasSystemTagVideoIds.has(video.id)).length;
+function countMissingSystemTagVideos(
+  state: LocalState,
+  meta = ensureTagEnrichmentMeta(state)
+) {
+  return collectMissingSystemTagCandidates(
+    state,
+    Number.MAX_SAFE_INTEGER,
+    0,
+    meta
+  ).total;
 }
 
 function bindSystemTagsToVideo(state: LocalState, videoId: number, tagNames: string[]) {
@@ -3569,24 +3723,118 @@ function bindSystemTagsToVideo(state: LocalState, videoId: number, tagNames: str
   return boundCount;
 }
 
+function resolveTagEnrichmentBatchNextRunAt(
+  detectedAt = now(),
+  random: () => number = Math.random
+) {
+  const sampled = Math.min(1, Math.max(0, Number(random()) || 0));
+  return detectedAt + TAG_ENRICH_BATCH_DELAY_MIN_MS +
+    Math.round(sampled * TAG_ENRICH_BATCH_DELAY_JITTER_MS);
+}
+
+function scheduleTagEnrichment(meta: TagEnrichmentMeta | null) {
+  if (
+    !meta ||
+    meta.paused ||
+    meta.phase !== "waiting" ||
+    !meta.nextRunAt ||
+    !chrome.alarms?.create
+  ) {
+    if (chrome.alarms?.clear) chrome.alarms.clear(TAG_ENRICH_ALARM);
+    return;
+  }
+  chrome.alarms.create(TAG_ENRICH_ALARM, {
+    when: Math.max(now() + 1000, meta.nextRunAt)
+  });
+}
+
+function toTagEnrichmentErrorItem(
+  candidate: { id: number; bvid: string },
+  message: string,
+  occurredAt = now()
+): TagEnrichmentErrorItem {
+  return {
+    videoId: candidate.id,
+    bvid: normalizeText(candidate.bvid),
+    message: normalizeText(message) || "Tag enrichment request failed",
+    occurredAt
+  };
+}
+
+function applyTagEnrichmentFailurePolicy(
+  meta: TagEnrichmentMeta,
+  error: unknown,
+  message: string
+) {
+  return resolveFavoritesFailurePolicy({
+    status: isBiliRequestError(error) ? error.status : 0,
+    message,
+    attempt: meta.retryAttempt + 1,
+    detectedAt: now(),
+    retryAfterMs: isBiliRequestError(error) ? error.retryAfterMs : null,
+    previousRiskCount: meta.riskCount,
+    random: Math.random
+  });
+}
+
 async function runTagEnrichmentBatch() {
+  if (favoritesSyncTask || favoritesSyncStartPending) {
+    const deferred = await withState((state) => {
+      const meta = ensureTagEnrichmentMeta(state);
+      if (!meta.paused && (meta.phase === "running" || meta.phase === "waiting")) {
+        meta.phase = "waiting";
+        meta.nextRunAt = now() + TAG_ENRICH_BATCH_DELAY_MIN_MS;
+        meta.updatedAt = now();
+      }
+      return { ...meta };
+    }, true);
+    scheduleTagEnrichment(deferred);
+    return;
+  }
+
   const plan = await withState((state) => {
     const meta = ensureTagEnrichmentMeta(state);
+    const activeVideoIds = new Set(
+      state.videos
+        .filter((video) => video.deletedAt === null)
+        .map((video) => video.id)
+    );
+    meta.checkedEmptyVideoIds = meta.checkedEmptyVideoIds.filter((id) =>
+      activeVideoIds.has(id)
+    );
+    meta.skippedVideoIds = meta.skippedVideoIds.filter((id) =>
+      activeVideoIds.has(id)
+    );
     const batch = collectMissingSystemTagCandidateDtos(
       state,
       TAG_ENRICH_BATCH_SIZE,
-      meta.cursorAfterVideoId
+      meta.cursorAfterVideoId,
+      meta
     );
     meta.totalMissing = batch.total;
+    meta.total = Math.max(meta.total, meta.processed + batch.total);
     meta.lastBatchProcessed = 0;
+    meta.lastBatchSucceeded = 0;
+    meta.lastBatchEmpty = 0;
+    meta.lastBatchFailed = 0;
     meta.lastBatchBound = 0;
-    if (meta.paused) {
+    meta.updatedAt = now();
+    if (meta.paused || meta.phase === "paused") {
       return {
         paused: true as const,
         candidates: [] as Array<{ id: number; bvid: string }>,
         cursorAfterVideoId: meta.cursorAfterVideoId,
         totalMissing: batch.total
       };
+    }
+    if (batch.items.length > 0) {
+      meta.phase = "running";
+      meta.nextRunAt = null;
+    } else {
+      meta.phase = "completed";
+      meta.finishedAt = now();
+      meta.nextRunAt = null;
+      meta.lastError = null;
     }
     return {
       paused: false as const,
@@ -3603,27 +3851,49 @@ async function runTagEnrichmentBatch() {
   }
 
   const fetchedTagMap = new Map<number, string[]>();
-  let riskBlocked = false;
+  const emptyVideoIds = new Set<number>();
+  const skippedVideoIds = new Set<number>();
+  const batchErrors: TagEnrichmentErrorItem[] = [];
+  let failure:
+    | ReturnType<typeof resolveFavoritesFailurePolicy>
+    | null = null;
   let lastProcessedVideoId = plan.cursorAfterVideoId;
-  let lastErrorMessage: string | null = null;
+  let attempted = 0;
   for (const candidate of plan.candidates) {
+    if (tagEnrichmentStopRequested) break;
+    attempted += 1;
     lastProcessedVideoId = candidate.id;
     const bvid = normalizeText(candidate.bvid);
-    if (!bvid) continue;
+    if (!bvid) {
+      skippedVideoIds.add(candidate.id);
+      batchErrors.push(
+        toTagEnrichmentErrorItem(candidate, "Video has no BV id")
+      );
+      continue;
+    }
     try {
       const names = await fetchArchiveTagNames(bvid);
       if (names.length > 0) {
         fetchedTagMap.set(candidate.id, names);
+      } else {
+        emptyVideoIds.add(candidate.id);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      lastErrorMessage = message;
-      if ((error instanceof BiliRequestError && error.status === 412) || isRiskControlError(message)) {
-        riskBlocked = true;
+      batchErrors.push(toTagEnrichmentErrorItem(candidate, message));
+      const current = await readState();
+      const meta = ensureTagEnrichmentMeta(current);
+      failure = applyTagEnrichmentFailurePolicy(meta, error, message);
+      if (failure.phase === "failed") {
+        skippedVideoIds.add(candidate.id);
+      } else {
+        lastProcessedVideoId = plan.cursorAfterVideoId;
         break;
       }
     }
-    await sleep(1600 + Math.floor(Math.random() * 900));
+    if (!tagEnrichmentStopRequested) {
+      await sleep(1600 + Math.floor(Math.random() * 900));
+    }
   }
 
   const result = await withState((state) => {
@@ -3637,34 +3907,94 @@ async function runTagEnrichmentBatch() {
       }
     }
 
-    meta.lastRunAt = now();
-    meta.lastBatchProcessed = plan.candidates.length;
+    meta.checkedEmptyVideoIds = normalizePositiveIntList([
+      ...meta.checkedEmptyVideoIds,
+      ...emptyVideoIds
+    ]);
+    meta.skippedVideoIds = normalizePositiveIntList([
+      ...meta.skippedVideoIds,
+      ...skippedVideoIds
+    ]);
+    meta.errors = [...meta.errors, ...batchErrors].slice(-100);
+    const terminalCount = fetchedTagMap.size + emptyVideoIds.size + skippedVideoIds.size;
+    const timestamp = now();
+    meta.lastRunAt = timestamp;
+    meta.updatedAt = timestamp;
+    meta.lastBatchProcessed = attempted;
+    meta.lastBatchSucceeded = fetchedTagMap.size;
+    meta.lastBatchEmpty = emptyVideoIds.size;
+    meta.lastBatchFailed = batchErrors.length;
     meta.lastBatchBound = bound;
-    meta.totalMissing = countMissingSystemTagVideos(state);
-    meta.cursorAfterVideoId = lastProcessedVideoId;
-    meta.lastError = riskBlocked
-      ? lastErrorMessage || "Risk-control blocked (412). Run tag enrichment manually after cooldown."
-      : null;
+    meta.processed += terminalCount;
+    meta.succeeded += fetchedTagMap.size;
+    meta.empty += emptyVideoIds.size;
+    meta.failed += batchErrors.length;
+    meta.tagsBound += bound;
+    if (terminalCount > 0) meta.cursorAfterVideoId = lastProcessedVideoId;
+    meta.totalMissing = countMissingSystemTagVideos(state, meta);
+    meta.total = Math.max(meta.total, meta.processed + meta.totalMissing);
+
+    if (meta.paused || tagEnrichmentStopRequested) {
+      meta.phase = "paused";
+      meta.paused = true;
+      meta.nextRunAt = null;
+    } else if (failure && failure.phase !== "failed") {
+      meta.phase = failure.phase;
+      meta.paused = failure.phase === "paused";
+      meta.nextRunAt = failure.nextRetryAt;
+      meta.retryAttempt = failure.attempt;
+      meta.riskCount = failure.riskCount;
+      meta.lastError = batchErrors.at(-1)?.message ?? "Tag enrichment failed";
+    } else if (meta.totalMissing > 0) {
+      meta.phase = "waiting";
+      meta.paused = false;
+      meta.nextRunAt = resolveTagEnrichmentBatchNextRunAt(timestamp);
+      meta.retryAttempt = resolveSuccessfulRetryAttempt(meta.retryAttempt);
+      meta.riskCount = Math.max(0, meta.riskCount - 1);
+      meta.lastError = batchErrors.length > 0
+        ? batchErrors.at(-1)?.message ?? null
+        : null;
+    } else {
+      meta.phase = "completed";
+      meta.paused = false;
+      meta.finishedAt = timestamp;
+      meta.nextRunAt = null;
+      meta.retryAttempt = 0;
+      meta.riskCount = 0;
+      meta.lastError = null;
+      meta.cursorAfterVideoId = 0;
+    }
     if (meta.totalMissing <= 0) {
       meta.cursorAfterVideoId = 0;
-      meta.lastError = null;
     }
 
-    return {
-      missing: meta.totalMissing
-    };
+    return { ...meta };
   }, true);
 
-  if (!riskBlocked && result.missing <= 0 && chrome.alarms?.clear) {
-    chrome.alarms.clear(TAG_ENRICH_ALARM);
-  }
+  scheduleTagEnrichment(result);
 }
 
 function triggerTagEnrichment() {
   if (tagEnrichmentTask) return tagEnrichmentTask;
+  tagEnrichmentStopRequested = false;
   tagEnrichmentTask = runTagEnrichmentBatch()
-    .catch((error) => {
+    .catch(async (error) => {
       console.warn("[tag-enrich] failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      const meta = await withState((state) => {
+        const current = ensureTagEnrichmentMeta(state);
+        if (current.paused) return { ...current };
+        const failure = applyTagEnrichmentFailurePolicy(current, error, message);
+        current.phase = failure.phase;
+        current.paused = failure.phase === "paused";
+        current.nextRunAt = failure.nextRetryAt;
+        current.retryAttempt = failure.attempt;
+        current.riskCount = failure.riskCount;
+        current.lastError = message;
+        current.updatedAt = now();
+        return { ...current };
+      }, true);
+      scheduleTagEnrichment(meta);
     })
     .finally(() => {
       tagEnrichmentTask = null;
@@ -3672,29 +4002,163 @@ function triggerTagEnrichment() {
   return tagEnrichmentTask;
 }
 
+async function startTagEnrichmentTask(
+  options: { reset?: boolean; immediate?: boolean; force?: boolean } = {}
+) {
+  if (!TAG_SYNC_ENABLED) return false;
+  tagEnrichmentStopRequested = false;
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    if (
+      current.phase === "paused" &&
+      current.nextRunAt &&
+      current.nextRunAt > now() &&
+      current.riskCount > 0
+    ) {
+      return { ...current };
+    }
+    if (current.paused && !options.force && !options.reset) {
+      return { ...current };
+    }
+    if (options.reset) {
+      const fresh = defaultTagEnrichmentMeta();
+      state.syncMeta.tagEnrichment = fresh;
+    }
+    const next = ensureTagEnrichmentMeta(state);
+    const pending = countMissingSystemTagVideos(state, next);
+    if (
+      next.phase === "idle" ||
+      next.phase === "completed" ||
+      next.phase === "failed" ||
+      options.reset
+    ) {
+      next.total = pending;
+      next.processed = 0;
+      next.succeeded = 0;
+      next.empty = 0;
+      next.failed = 0;
+      next.tagsBound = 0;
+      next.errors = [];
+      next.startedAt = now();
+      next.finishedAt = null;
+      next.cursorAfterVideoId = 0;
+    } else if (!next.startedAt) {
+      next.startedAt = now();
+    }
+    next.totalMissing = pending;
+    next.total = Math.max(next.total, next.processed + pending);
+    next.paused = false;
+    next.lastError = null;
+    next.updatedAt = now();
+    if (pending <= 0) {
+      next.phase = "completed";
+      next.finishedAt = now();
+      next.nextRunAt = null;
+    } else {
+      next.phase = "waiting";
+      next.finishedAt = null;
+      next.nextRunAt = options.immediate === false
+        ? resolveTagEnrichmentBatchNextRunAt(now())
+        : now() + 1000;
+    }
+    return { ...next };
+  }, true);
+
+  scheduleTagEnrichment(meta);
+  if (meta.phase === "waiting" && options.immediate !== false) {
+    void triggerTagEnrichment();
+  }
+  return meta.totalMissing > 0;
+}
+
+async function pauseTagEnrichmentTask() {
+  tagEnrichmentStopRequested = true;
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    current.phase = "paused";
+    current.paused = true;
+    current.nextRunAt = null;
+    current.updatedAt = now();
+    return { ...current };
+  }, true);
+  scheduleTagEnrichment(null);
+  return meta;
+}
+
+async function restoreTagEnrichmentTask() {
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    if (current.paused || current.phase === "paused") return { ...current };
+    if (current.phase === "running") {
+      current.phase = "waiting";
+      current.nextRunAt = now() + TAG_ENRICH_RESTORE_DELAY_MS;
+      current.updatedAt = now();
+    } else if (current.phase === "waiting" && !current.nextRunAt) {
+      current.nextRunAt = now() + TAG_ENRICH_RESTORE_DELAY_MS;
+      current.updatedAt = now();
+    }
+    return { ...current };
+  }, true);
+  scheduleTagEnrichment(meta);
+}
+
 function getTagEnrichmentStatus(state: LocalState) {
   if (!TAG_SYNC_ENABLED) {
     return {
+      phase: "paused" as const,
       paused: true,
       running: false,
       cursorAfterVideoId: 0,
+      total: 0,
       totalMissing: 0,
+      processed: 0,
+      succeeded: 0,
+      empty: 0,
+      failed: 0,
+      tagsBound: 0,
       lastBatchProcessed: 0,
+      lastBatchSucceeded: 0,
+      lastBatchEmpty: 0,
+      lastBatchFailed: 0,
       lastBatchBound: 0,
+      startedAt: null,
+      finishedAt: null,
+      nextRunAt: null,
+      retryAttempt: 0,
+      riskCount: 0,
       lastRunAt: null,
-      lastError: "Tag sync is disabled"
+      updatedAt: 0,
+      lastError: "Tag sync is disabled",
+      errors: []
     };
   }
   const meta = ensureTagEnrichmentMeta(state);
   return {
+    phase: meta.phase,
     paused: meta.paused,
-    running: Boolean(tagEnrichmentTask),
+    running: Boolean(tagEnrichmentTask) || meta.phase === "running",
     cursorAfterVideoId: meta.cursorAfterVideoId,
+    total: meta.total,
     totalMissing: meta.totalMissing,
+    processed: meta.processed,
+    succeeded: meta.succeeded,
+    empty: meta.empty,
+    failed: meta.failed,
+    tagsBound: meta.tagsBound,
     lastBatchProcessed: meta.lastBatchProcessed,
+    lastBatchSucceeded: meta.lastBatchSucceeded,
+    lastBatchEmpty: meta.lastBatchEmpty,
+    lastBatchFailed: meta.lastBatchFailed,
     lastBatchBound: meta.lastBatchBound,
+    startedAt: meta.startedAt,
+    finishedAt: meta.finishedAt,
+    nextRunAt: meta.nextRunAt,
+    retryAttempt: meta.retryAttempt,
+    riskCount: meta.riskCount,
     lastRunAt: meta.lastRunAt,
-    lastError: meta.lastError
+    updatedAt: meta.updatedAt,
+    lastError: meta.lastError,
+    errors: meta.errors.slice(-20)
   };
 }
 
@@ -5077,7 +5541,7 @@ function isWriteRequestBlockedByFavoritesSync(method: string, path: string) {
   // Keep sync control and probe endpoints callable while sync is running.
   if (path.startsWith("/sync/bilibili/history-model/")) return false;
   if (path === "/sync/bilibili/history-model/status") return false;
-  if (path === "/sync/bilibili/tag-enrichment/status") return false;
+  if (path.startsWith("/sync/bilibili/tag-enrichment/")) return false;
   if (path === "/sync/bilibili/bidirectional/settings") return false;
   if (path === "/ai/settings") return false;
   if (path === "/ai/settings/test") return false;
@@ -5158,6 +5622,14 @@ async function startFavoritesSyncTask(params: {
           }
         }, true);
         scheduleFavoritesSyncRetry(retryJob);
+        if (
+          TAG_SYNC_ENABLED &&
+          result.completed &&
+          !result.riskBlocked &&
+          result.summary.videosProcessed > 0
+        ) {
+          await startTagEnrichmentTask({ immediate: false });
+        }
       })
       .catch(async (error) => {
         const message = isBiliRequestError(error)
@@ -5748,6 +6220,31 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
       });
     }
 
+    if (method === "POST" && path.startsWith("/sync/bilibili/tag-enrichment/")) {
+      if (!TAG_SYNC_ENABLED) {
+        const snapshot = await readState();
+        return ok(getTagEnrichmentStatus(snapshot));
+      }
+      if (
+        path === "/sync/bilibili/tag-enrichment/stop" ||
+        path === "/sync/bilibili/tag-enrichment/pause"
+      ) {
+        await pauseTagEnrichmentTask();
+      } else if (path === "/sync/bilibili/tag-enrichment/restart") {
+        await startTagEnrichmentTask({ reset: true, immediate: true, force: true });
+      } else if (
+        path === "/sync/bilibili/tag-enrichment/start" ||
+        path === "/sync/bilibili/tag-enrichment/resume" ||
+        path === "/sync/bilibili/tag-enrichment/run"
+      ) {
+        await startTagEnrichmentTask({ immediate: true, force: true });
+      } else {
+        return fail(404, `Route not found: ${method} ${path}`);
+      }
+      const snapshot = await readState();
+      return ok(getTagEnrichmentStatus(snapshot));
+    }
+
     if (method === "POST" && path === "/sync/bilibili/following-ups/start") {
       const started = startFollowingUpImportTask();
       return ok({
@@ -5883,59 +6380,6 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         if (method === "GET" && path === "/health") {
           return ok({ ok: true });
         }
-
-      if (method === "POST" && path === "/sync/bilibili/tag-enrichment/pause") {
-        if (!TAG_SYNC_ENABLED) {
-          return ok({
-            ok: true,
-            ...getTagEnrichmentStatus(state)
-          });
-        }
-        const meta = ensureTagEnrichmentMeta(state);
-        meta.paused = true;
-        meta.lastError = null;
-        if (chrome.alarms?.clear) {
-          chrome.alarms.clear(TAG_ENRICH_ALARM);
-        }
-        return ok({
-          ok: true,
-          ...getTagEnrichmentStatus(state)
-        });
-      }
-
-      if (method === "POST" && path === "/sync/bilibili/tag-enrichment/resume") {
-        if (!TAG_SYNC_ENABLED) {
-          return ok({
-            ok: true,
-            ...getTagEnrichmentStatus(state)
-          });
-        }
-        const meta = ensureTagEnrichmentMeta(state);
-        meta.paused = false;
-        meta.lastError = null;
-        void triggerTagEnrichment();
-        return ok({
-          ok: true,
-          ...getTagEnrichmentStatus(state)
-        });
-      }
-
-      if (method === "POST" && path === "/sync/bilibili/tag-enrichment/run") {
-        if (!TAG_SYNC_ENABLED) {
-          return ok({
-            ok: true,
-            ...getTagEnrichmentStatus(state)
-          });
-        }
-        const meta = ensureTagEnrichmentMeta(state);
-        if (!meta.paused) {
-          void triggerTagEnrichment();
-        }
-        return ok({
-          ok: true,
-          ...getTagEnrichmentStatus(state)
-        });
-      }
 
       if (method === "GET" && path === "/sync/bilibili/bidirectional/settings") {
         const meta = ensureBidirectionalSyncMeta(state);
@@ -7107,19 +7551,29 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
 }
 
 export default defineBackground(() => {
-  if (chrome.alarms?.clear) {
-    chrome.alarms.clear(TAG_ENRICH_ALARM);
-  }
   void readState()
     .then((state) => scheduleFavoritesSyncRetry(state.syncMeta.favoritesJob.active))
     .catch(() => undefined);
+  void restoreTagEnrichmentTask().catch((error) => {
+    console.warn("[tag-enrich] restore failed:", error);
+  });
 
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === TAG_ENRICH_ALARM) {
-        if (chrome.alarms?.clear) {
-          chrome.alarms.clear(TAG_ENRICH_ALARM);
-        }
+        if (chrome.alarms?.clear) chrome.alarms.clear(TAG_ENRICH_ALARM);
+        void (async () => {
+          const state = await readState();
+          const meta = ensureTagEnrichmentMeta(state);
+          if (meta.paused || meta.phase !== "waiting") return;
+          if (meta.nextRunAt && meta.nextRunAt > now()) {
+            scheduleTagEnrichment(meta);
+            return;
+          }
+          await triggerTagEnrichment();
+        })().catch((error) => {
+          console.warn("[tag-enrich] alarm failed:", error);
+        });
         return;
       }
       if (alarm.name === FAVORITES_SYNC_RETRY_ALARM) {

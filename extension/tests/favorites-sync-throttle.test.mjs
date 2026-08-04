@@ -186,51 +186,52 @@ test("background persists retry policy and wires only automatic retries to alarm
   assert.match(source, /stage === "folderVideos" \? 1 : 3/);
 });
 
-test("background startup does not auto-trigger tag enrichment requests", async () => {
+test("background startup restores persisted tag enrichment scheduling", async () => {
   const source = await readFile(
     path.join(repoRoot, "extension", "entrypoints", "background.ts"),
     "utf8"
   );
 
-  assert.doesNotMatch(source, /triggerTagEnrichment\("startup"\)/);
-});
-
-test("background favorites sync completion does not auto-trigger tag enrichment requests", async () => {
-  const source = await readFile(
-    path.join(repoRoot, "extension", "entrypoints", "background.ts"),
-    "utf8"
-  );
-
-  assert.doesNotMatch(
+  assert.match(source, /void restoreTagEnrichmentTask\(\)/);
+  assert.match(
     source,
-    /result\.summary\.videosProcessed > 0[\s\S]{0,240}scheduleTagEnrichment\(1\)/
+    /current\.phase === "running"[\s\S]*current\.phase = "waiting"[\s\S]*TAG_ENRICH_RESTORE_DELAY_MS/
   );
-  assert.doesNotMatch(
+});
+
+test("completed favorites sync schedules low-frequency tag enrichment", async () => {
+  const source = await readFile(
+    path.join(repoRoot, "extension", "entrypoints", "background.ts"),
+    "utf8"
+  );
+
+  assert.match(
     source,
-    /result\.summary\.videosProcessed > 0[\s\S]{0,240}triggerTagEnrichment\("sync"\)/
+    /result\.summary\.videosProcessed > 0[\s\S]{0,240}startTagEnrichmentTask\(\{ immediate: false \}\)/
   );
 });
 
-test("background alarm handler does not resume tag enrichment requests", async () => {
+test("background alarm resumes only persisted waiting tag tasks", async () => {
   const source = await readFile(
     path.join(repoRoot, "extension", "entrypoints", "background.ts"),
     "utf8"
   );
 
-  assert.doesNotMatch(source, /triggerTagEnrichment\("alarm"\)/);
+  assert.match(
+    source,
+    /alarm\.name === TAG_ENRICH_ALARM[\s\S]*meta\.phase !== "waiting"[\s\S]*await triggerTagEnrichment\(\)/
+  );
 });
 
-test("background startup clears stale tag enrichment alarms", async () => {
+test("tag enrichment schedules persisted next-run timestamps", async () => {
   const source = await readFile(
     path.join(repoRoot, "extension", "entrypoints", "background.ts"),
     "utf8"
   );
 
-  const startupIndex = source.indexOf("export default defineBackground(() => {");
-  assert.notEqual(startupIndex, -1);
-  const startupBlock = source.slice(startupIndex, startupIndex + 600);
-
-  assert.match(startupBlock, /chrome\.alarms\.clear\(TAG_ENRICH_ALARM\)/);
+  assert.match(source, /function scheduleTagEnrichment\(meta: TagEnrichmentMeta \| null\)/);
+  assert.match(source, /chrome\.alarms\.create\(TAG_ENRICH_ALARM, \{[\s\S]*meta\.nextRunAt/);
+  assert.match(source, /TAG_ENRICH_BATCH_DELAY_MIN_MS = 45_000/);
 });
 
 test("background tag enrichment status bypasses the serialized withState queue", async () => {
