@@ -106,7 +106,7 @@ import type {
 } from "./types";
 
 const uiStore = useAppUiStore();
-const { locale, isDark } = storeToRefs(uiStore);
+const { locale, isDark, videoCardWidth } = storeToRefs(uiStore);
 const router = useRouter();
 const route = useRoute();
 
@@ -151,6 +151,7 @@ const {
   trashFolders,
   trashVideos,
   keyword,
+  searchScope,
   selectedFolderId,
   selectedVideoIds,
   selectedTrashFolderIds,
@@ -411,6 +412,7 @@ const {
   router,
   trashMode,
   keyword,
+  searchScope,
   selectedFolderId,
   fromDate,
   toDate,
@@ -644,6 +646,7 @@ const {
 
 const {
   handleSearchSubmit,
+  handleSearchScopeChange,
   applyDateFilter,
   clearDateFilter,
   handleSelectFolder,
@@ -652,6 +655,7 @@ const {
 } = useManagerFilterActions({
   trashMode,
   keyword,
+  searchScope,
   fromDate,
   toDate,
   selectedFolderId,
@@ -2553,7 +2557,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main
-    class="mx-auto grid min-h-screen w-full max-w-[1840px] grid-cols-1 gap-5 px-4 py-5 lg:px-6 lg:py-7"
+    class="mx-auto grid min-h-screen w-full max-w-[1840px] grid-cols-1 gap-5 px-4 py-5 lg:h-[100dvh] lg:min-h-0 lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden lg:px-6 lg:py-7"
     :class="followingUpsMode ? '' : 'lg:grid-cols-[320px_1fr]'"
   >
     <ManagerFolderNavigation
@@ -2580,7 +2584,7 @@ onBeforeUnmount(() => {
       @open-ai-browser="openAiCategoryBrowser"
     />
 
-    <section class="min-w-0 space-y-4">
+    <section class="min-w-0 space-y-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
       <ManagerHeader
         :t="t"
         :trash-mode="trashMode"
@@ -2728,6 +2732,8 @@ onBeforeUnmount(() => {
         :t="t"
         :locale="locale"
         :keyword="keyword"
+        :search-scope="searchScope"
+        :current-folder-available="selectedFolderId !== null"
         :tags="tags"
         :from-date="fromDate"
         :to-date="toDate"
@@ -2748,10 +2754,13 @@ onBeforeUnmount(() => {
         :total="total"
         :video-page-size="videoPageSize"
         :page-size-options="PAGE_SIZE_OPTIONS"
+        :video-card-width="videoCardWidth"
         @update:keyword="keyword = $event"
+        @update:search-scope="handleSearchScopeChange"
         @update:from-date="fromDate = $event"
         @update:to-date="toDate = $event"
         @update:batch-target-folder-id="batchTargetFolderId = $event"
+        @update:video-card-width="uiStore.setVideoCardWidth($event)"
         @append-field-token="handleAppendFieldToken"
         @search="handleSearchSubmit"
         @clear-search="clearSearch"

@@ -10,7 +10,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Locale } from "@/stores/app-ui";
+import {
+  VIDEO_CARD_WIDTH_MAX,
+  VIDEO_CARD_WIDTH_MIN,
+  type Locale,
+} from "@/stores/app-ui";
+import type { SearchScope } from "@/stores/library";
 import type { Folder, Tag, Video } from "@/types";
 import {
   CalendarDays,
@@ -19,6 +24,7 @@ import {
   ChevronRight,
   Copy,
   Filter,
+  Grid2X2,
   MoveRight,
   Trash2,
 } from "lucide-vue-next";
@@ -37,6 +43,8 @@ const props = defineProps<{
   t: (key: string, vars?: Record<string, string | number>) => string;
   locale: Locale;
   keyword: string;
+  searchScope: SearchScope;
+  currentFolderAvailable: boolean;
   tags: Tag[];
   fromDate: string;
   toDate: string;
@@ -57,13 +65,16 @@ const props = defineProps<{
   total: number;
   videoPageSize: number;
   pageSizeOptions: number[];
+  videoCardWidth: number;
 }>();
 
 const emit = defineEmits<{
   "update:keyword": [value: string];
+  "update:searchScope": [value: SearchScope];
   "update:fromDate": [value: string];
   "update:toDate": [value: string];
   "update:batchTargetFolderId": [value: number | null];
+  "update:videoCardWidth": [value: number];
   appendFieldToken: [field: SearchFieldToken];
   search: [];
   clearSearch: [];
@@ -154,20 +165,49 @@ function submitVideoPageJump() {
   videoPageJump.value = String(target);
   emit("jumpVideoPage", target);
 }
+
+function handleVideoCardWidthInput(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  if (!target) return;
+  emit("update:videoCardWidth", Number(target.value));
+}
 </script>
 
 <template>
   <SearchBar
     :keyword="keyword"
     :tags="tags"
+    :search-scope="searchScope"
+    :current-folder-available="currentFolderAvailable"
     :locale="locale"
     @update:keyword="emit('update:keyword', String($event))"
+    @update:search-scope="emit('update:searchScope', $event)"
     @append-field-token="emit('appendFieldToken', $event)"
     @search="emit('search')"
     @clear="emit('clearSearch')"
   />
 
   <section class="panel-surface p-3 md:p-4">
+    <div class="mb-3 flex items-center gap-3 border-b border-border/70 pb-3">
+      <Grid2X2 class="h-4 w-4 shrink-0 text-muted-foreground" />
+      <label for="video-card-width" class="shrink-0 text-xs font-medium text-muted-foreground">
+        {{ t("video.cardSize") }}
+      </label>
+      <input
+        id="video-card-width"
+        :value="videoCardWidth"
+        type="range"
+        :min="VIDEO_CARD_WIDTH_MIN"
+        :max="VIDEO_CARD_WIDTH_MAX"
+        step="20"
+        class="h-8 min-w-0 flex-1 cursor-pointer accent-primary sm:max-w-[260px]"
+        @input="handleVideoCardWidthInput"
+      />
+      <output for="video-card-width" class="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+        {{ videoCardWidth }}px
+      </output>
+    </div>
+
     <div class="flex items-center gap-2 md:hidden">
       <Button
         size="sm"
@@ -296,6 +336,7 @@ function submitVideoPageJump() {
     :selected-ids="selectedVideoIds"
     :batch-mode="batchPanelOpen"
     :locale="locale"
+    :card-width="videoCardWidth"
     @set-selection="emit('setSelection', $event)"
     @select-all="emit('selectAllVisible')"
     @clear-selection="emit('clearVideoSelection')"

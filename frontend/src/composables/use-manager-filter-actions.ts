@@ -1,10 +1,12 @@
 import type { Ref } from "vue";
 import { toggleFieldTokenKeyword, type SearchFieldToken } from "@/lib/search-keyword";
 import type { Locale } from "@/stores/app-ui";
+import type { SearchScope } from "@/stores/library";
 
 type UseManagerFilterActionsParams = {
   trashMode: Ref<boolean>;
   keyword: Ref<string>;
+  searchScope: Ref<SearchScope>;
   fromDate: Ref<string>;
   toDate: Ref<string>;
   selectedFolderId: Ref<number | null>;
@@ -20,6 +22,7 @@ export function useManagerFilterActions(params: UseManagerFilterActionsParams) {
   const {
     trashMode,
     keyword,
+    searchScope,
     fromDate,
     toDate,
     selectedFolderId,
@@ -32,6 +35,15 @@ export function useManagerFilterActions(params: UseManagerFilterActionsParams) {
   } = params;
 
   async function handleSearchSubmit() {
+    videoPage.value = 1;
+    await syncManagerQueryToRoute();
+    await refreshVideos();
+  }
+
+  async function handleSearchScopeChange(scope: SearchScope) {
+    searchScope.value = scope;
+    selectedVideoIds.value = [];
+    batchPanelOpen.value = false;
     videoPage.value = 1;
     await syncManagerQueryToRoute();
     await refreshVideos();
@@ -79,6 +91,7 @@ export function useManagerFilterActions(params: UseManagerFilterActionsParams) {
 
   return {
     handleSearchSubmit,
+    handleSearchScopeChange,
     applyDateFilter,
     clearDateFilter,
     handleSelectFolder,

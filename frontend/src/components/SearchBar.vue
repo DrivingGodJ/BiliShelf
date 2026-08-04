@@ -5,6 +5,8 @@ import type { Tag as TagItem } from "../types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import type { SearchScope } from "../stores/library";
 
 type FieldToken =
   | "title"
@@ -26,6 +28,8 @@ const props = withDefaults(
   defineProps<{
     keyword: string;
     tags: TagItem[];
+    searchScope: SearchScope;
+    currentFolderAvailable: boolean;
     locale?: Locale;
   }>(),
   {
@@ -35,6 +39,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   "update:keyword": [string];
+  "update:searchScope": [SearchScope];
   appendFieldToken: [FieldToken];
   search: [];
   clear: [];
@@ -44,6 +49,9 @@ const SEARCH_TEXT: Record<
   | "searchPlaceholder"
   | "search"
   | "reset"
+  | "searchScope"
+  | "allFolders"
+  | "currentFolder"
   | "fieldTokens"
   | "customTags"
   | "emptyCustomTag"
@@ -64,6 +72,9 @@ const SEARCH_TEXT: Record<
   },
   search: { "zh-CN": "搜索", "en-US": "Search" },
   reset: { "zh-CN": "清空", "en-US": "Reset" },
+  searchScope: { "zh-CN": "搜索范围", "en-US": "Search scope" },
+  allFolders: { "zh-CN": "全部收藏夹", "en-US": "All folders" },
+  currentFolder: { "zh-CN": "当前收藏夹", "en-US": "Current folder" },
   fieldTokens: { "zh-CN": "快速筛选字段", "en-US": "Quick Filter Tokens" },
   customTags: { "zh-CN": "自定义标签", "en-US": "Custom Tags" },
   emptyCustomTag: {
@@ -82,6 +93,12 @@ const SEARCH_TEXT: Record<
 
 function t(key: keyof typeof SEARCH_TEXT) {
   return SEARCH_TEXT[key][props.locale];
+}
+
+function updateSearchScope(value: string | number) {
+  if (value === "all" || value === "folder") {
+    emit("update:searchScope", value);
+  }
 }
 
 const fieldTokenDefs = computed<
@@ -278,6 +295,29 @@ function hasCustomTagToken(name: string) {
           <Filter class="h-4 w-4" />
         </Button>
       </div>
+    </div>
+
+    <div class="mt-3 flex flex-wrap items-center gap-2">
+      <span class="text-xs font-medium text-muted-foreground">
+        {{ t("searchScope") }}
+      </span>
+      <Tabs
+        :model-value="currentFolderAvailable ? searchScope : 'all'"
+        @update:model-value="updateSearchScope"
+      >
+        <TabsList class="h-9 p-0.5">
+          <TabsTrigger value="all" class="h-8 px-3 text-xs">
+            {{ t("allFolders") }}
+          </TabsTrigger>
+          <TabsTrigger
+            value="folder"
+            class="h-8 px-3 text-xs"
+            :disabled="!currentFolderAvailable"
+          >
+            {{ t("currentFolder") }}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
     </div>
 
     <div :class="mobileFiltersOpen ? 'block' : 'hidden md:block'">

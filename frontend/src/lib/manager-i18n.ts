@@ -130,6 +130,7 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "en-US": "Apply Date Filter",
   },
   "search.to": { "zh-CN": "至", "en-US": "to" },
+  "video.cardSize": { "zh-CN": "视频卡片大小", "en-US": "Video card size" },
   "sync.dialogTitle": {
     "zh-CN": "选择要同步的收藏夹",
     "en-US": "Select folders to sync",

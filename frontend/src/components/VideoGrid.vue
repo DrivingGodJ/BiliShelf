@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { Check, FileText, Trash2 } from "lucide-vue-next";
-import { ref } from "vue";
+import { computed, ref, type CSSProperties } from "vue";
 import type { Video } from "../types";
 import { Card } from "./ui/card";
 import { Skeleton } from "./ui/skeleton";
@@ -15,6 +15,7 @@ const props = withDefaults(
     loading?: boolean;
     selectedIds: number[];
     batchMode?: boolean;
+    cardWidth: number;
     locale?: Locale;
   }>(),
   {
@@ -31,6 +32,12 @@ const emit = defineEmits<{
 }>();
 
 const hoveredVideoId = ref<number | null>(null);
+const gridStyle = computed(
+  () =>
+    ({
+      "--video-card-width": `${props.cardWidth}px`,
+    }) as CSSProperties
+);
 
 function toggleSelection(id: number) {
   emit("setSelection", { id, checked: !props.selectedIds.includes(id) });
@@ -84,7 +91,7 @@ function t(key: keyof typeof GRID_TEXT) {
 
 <template>
   <section>
-    <div v-if="loading" class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+    <div v-if="loading" class="video-grid gap-5" :style="gridStyle">
       <Card v-for="index in 6" :key="index" class="overflow-hidden p-0">
         <Skeleton class="aspect-video w-full rounded-none" />
         <div class="space-y-2 p-4">
@@ -99,7 +106,7 @@ function t(key: keyof typeof GRID_TEXT) {
       {{ t("empty") }}
     </Card>
 
-    <div v-else class="grid auto-rows-fr grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+    <div v-else class="video-grid auto-rows-fr gap-5" :style="gridStyle">
       <div
         v-for="video in videos"
         :key="video.id"
@@ -170,3 +177,16 @@ function t(key: keyof typeof GRID_TEXT) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--video-card-width)), 1fr));
+}
+
+@media (max-width: 639px) {
+  .video-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>

@@ -8,6 +8,7 @@ import {
 
 export type ManagerQueryState = {
   keyword: string;
+  searchScope: "all" | "folder";
   selectedFolderId: number | null;
   fromDate: string;
   toDate: string;
@@ -22,6 +23,7 @@ export function buildManagerQueryFromState(
   const query: Record<string, string> = {};
   const normalizedKeyword = state.keyword.trim();
   if (normalizedKeyword) query.q = normalizedKeyword;
+  if (state.searchScope === "folder") query.scope = "folder";
   if (state.selectedFolderId !== null) query.folderId = String(state.selectedFolderId);
   if (state.fromDate) query.from = state.fromDate;
   if (state.toDate) query.to = state.toDate;
@@ -39,6 +41,8 @@ export function parseManagerQuery(
 ): ManagerQueryState {
   return {
     keyword: String(readSingleQueryValue(query.q) ?? "").trim(),
+    searchScope:
+      readSingleQueryValue(query.scope) === "folder" ? "folder" : "all",
     selectedFolderId: parseNullableFolderId(query.folderId),
     fromDate: normalizeDateText(query.from),
     toDate: normalizeDateText(query.to),

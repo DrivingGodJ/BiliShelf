@@ -16,7 +16,10 @@ test("manager folder navigation switches from desktop sidebar to an accessible m
     readSource("App.vue"),
   ]);
 
-  assert.match(navigation, /class="hidden min-h-0 lg:block"/);
+  assert.match(
+    navigation,
+    /class="hidden min-h-0 lg:block[^\"]*lg:h-full[^\"]*lg:overflow-hidden"/,
+  );
   assert.match(navigation, /class="lg:hidden"/);
   assert.match(navigation, /<Dialog :open="drawerOpen"/);
   assert.match(navigation, /<DialogDescription>/);

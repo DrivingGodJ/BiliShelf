@@ -14,6 +14,7 @@ export const PAGE_SIZE_OPTIONS = [12, 24, 30, 48, 60];
 export const TRASH_VIDEO_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
 export const TRASH_FOLDER_PAGE_SIZE_OPTIONS = [5, 10, 20, 30];
 export const MANAGE_CUSTOM_TAG_PAGE_SIZE = 24;
+export type SearchScope = "all" | "folder";
 
 function toNumericId(value: unknown) {
   const parsed = Number(value);
@@ -28,6 +29,7 @@ export const useLibraryStore = defineStore("library", () => {
   const trashVideos = ref<Video[]>([]);
 
   const keyword = ref("");
+  const searchScope = ref<SearchScope>("all");
   const selectedFolderId = ref<number | null>(null);
   const selectedVideoIds = ref<number[]>([]);
   const selectedTrashFolderIds = ref<number[]>([]);
@@ -67,7 +69,9 @@ export const useLibraryStore = defineStore("library", () => {
   });
   const hasSelection = computed(() => selectedVideoIds.value.length > 0);
   const canMoveFromCurrentFolder = computed(
-    () => selectedFolderId.value !== null
+    () =>
+      selectedFolderId.value !== null &&
+      !(keyword.value.trim() && searchScope.value === "all")
   );
   const videoTotalPages = computed(() =>
     Math.max(1, Math.ceil(total.value / videoPageSize.value))
@@ -151,10 +155,15 @@ export const useLibraryStore = defineStore("library", () => {
       if (params.extracted.systemTag) filters.systemTag = params.extracted.systemTag;
       if (params.extracted.customTag) filters.customTag = params.extracted.customTag;
 
+      const hasKeywordSearch = Boolean(params.globalKeyword.trim()) ||
+        Object.values(params.extracted).some((value) => Boolean(value?.trim()));
       const query = {
         page: videoPage.value,
         pageSize: videoPageSize.value,
-        folderId: selectedFolderId.value ?? undefined,
+        folderId:
+          hasKeywordSearch && searchScope.value === "all"
+            ? undefined
+            : selectedFolderId.value ?? undefined,
         filters,
       };
 
@@ -332,6 +341,7 @@ export const useLibraryStore = defineStore("library", () => {
     trashFolders,
     trashVideos,
     keyword,
+    searchScope,
     selectedFolderId,
     selectedVideoIds,
     selectedTrashFolderIds,

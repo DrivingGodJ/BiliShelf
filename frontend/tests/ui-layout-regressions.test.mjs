@@ -113,12 +113,14 @@ test("manager header and app remove the AI placeholder entry wiring", async () =
 test("folder sidebar keeps ai actions above a scrollable folder list", async () => {
   const source = await readComponentSource(["components", "FolderSidebar.vue"]);
   const aiSectionIndex = source.indexOf('<section\n      v-if="props.showAiActions"');
-  const folderListIndex = source.indexOf('<div class="mt-4 min-h-0 flex-1 overflow-y-auto">');
+  const folderListIndex = source.indexOf(
+    '<div class="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">',
+  );
 
   assert.notEqual(aiSectionIndex, -1);
   assert.notEqual(folderListIndex, -1);
   assert.ok(aiSectionIndex < folderListIndex);
-  assert.match(source, /<aside class="panel-surface flex h-full min-h-0 flex-col p-5">/);
+  assert.match(source, /<aside class="panel-surface flex h-full min-h-0 flex-col p-4">/);
 });
 
 test("ai category browser no longer shows the temporary footer hint", async () => {

@@ -48,8 +48,8 @@ function handleMobileSelect(folderId: number | null) {
 </script>
 
 <template>
-  <div class="sticky top-2 z-40 min-h-0 lg:static lg:z-auto">
-    <div class="hidden min-h-0 lg:block">
+  <div class="sticky top-2 z-40 min-h-0 lg:static lg:h-full lg:overflow-hidden lg:z-auto">
+    <div class="hidden min-h-0 lg:block lg:h-full lg:overflow-hidden">
       <FolderSidebar
         :folders="props.folders"
         :active-folder="props.activeFolder"

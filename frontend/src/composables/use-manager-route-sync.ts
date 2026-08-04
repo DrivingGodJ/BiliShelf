@@ -2,6 +2,7 @@ import { ref, type Ref } from "vue";
 import type { LocationQuery, Router, RouteLocationNormalizedLoaded } from "vue-router";
 import { buildManagerQueryFromState, parseManagerQuery } from "@/lib/manager-query";
 import { PAGE_SIZE_OPTIONS } from "@/stores/library";
+import type { SearchScope } from "@/stores/library";
 import { isSameQuery } from "@/lib/route-query";
 
 type UseManagerRouteSyncParams = {
@@ -9,6 +10,7 @@ type UseManagerRouteSyncParams = {
   router: Router;
   trashMode: Ref<boolean>;
   keyword: Ref<string>;
+  searchScope: Ref<SearchScope>;
   selectedFolderId: Ref<number | null>;
   fromDate: Ref<string>;
   toDate: Ref<string>;
@@ -22,6 +24,7 @@ export function useManagerRouteSync(params: UseManagerRouteSyncParams) {
     router,
     trashMode,
     keyword,
+    searchScope,
     selectedFolderId,
     fromDate,
     toDate,
@@ -37,6 +40,7 @@ export function useManagerRouteSync(params: UseManagerRouteSyncParams) {
     return buildManagerQueryFromState(
       {
         keyword: keyword.value,
+        searchScope: searchScope.value,
         selectedFolderId: selectedFolderId.value,
         fromDate: fromDate.value,
         toDate: toDate.value,
@@ -50,6 +54,7 @@ export function useManagerRouteSync(params: UseManagerRouteSyncParams) {
   function applyManagerQuery(query: LocationQuery) {
     const parsed = parseManagerQuery(query, PAGE_SIZE_OPTIONS, 30);
     keyword.value = parsed.keyword;
+    searchScope.value = parsed.searchScope;
     selectedFolderId.value = parsed.selectedFolderId;
     fromDate.value = parsed.fromDate;
     toDate.value = parsed.toDate;

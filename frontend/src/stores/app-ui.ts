@@ -4,9 +4,26 @@ import { ref } from "vue";
 export type Locale = "zh-CN" | "en-US";
 type ThemeMode = "light" | "dark";
 
+export const VIDEO_CARD_WIDTH_MIN = 220;
+export const VIDEO_CARD_WIDTH_MAX = 420;
+export const VIDEO_CARD_WIDTH_DEFAULT = 300;
+
 const THEME_STORAGE_KEY = "bili-like-theme";
 const LOCALE_STORAGE_KEY = "bili-like-locale";
 const EXT_LOCALE_STORAGE_KEY = "bili_like_locale";
+const VIDEO_CARD_WIDTH_STORAGE_KEY = "bili-like-video-card-width";
+
+function normalizeVideoCardWidth(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return VIDEO_CARD_WIDTH_DEFAULT;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return VIDEO_CARD_WIDTH_DEFAULT;
+  return Math.min(
+    VIDEO_CARD_WIDTH_MAX,
+    Math.max(VIDEO_CARD_WIDTH_MIN, Math.round(parsed))
+  );
+}
 
 function resolveInitialLocale(): Locale {
   const saved = window.localStorage.getItem(LOCALE_STORAGE_KEY);
@@ -26,6 +43,7 @@ function resolveInitialTheme(): ThemeMode {
 export const useAppUiStore = defineStore("app-ui", () => {
   const locale = ref<Locale>("zh-CN");
   const isDark = ref(false);
+  const videoCardWidth = ref(VIDEO_CARD_WIDTH_DEFAULT);
   const initialized = ref(false);
 
   function setLocale(next: Locale, persist = true) {
@@ -74,21 +92,34 @@ export const useAppUiStore = defineStore("app-ui", () => {
     setTheme(isDark.value ? "light" : "dark");
   }
 
+  function setVideoCardWidth(value: number, persist = true) {
+    const next = normalizeVideoCardWidth(value);
+    videoCardWidth.value = next;
+    if (persist) {
+      window.localStorage.setItem(VIDEO_CARD_WIDTH_STORAGE_KEY, String(next));
+    }
+  }
+
   function initFromStorage() {
     if (initialized.value) return;
     setLocale(resolveInitialLocale(), false);
     applyTheme(resolveInitialTheme(), false);
+    videoCardWidth.value = normalizeVideoCardWidth(
+      window.localStorage.getItem(VIDEO_CARD_WIDTH_STORAGE_KEY)
+    );
     initialized.value = true;
   }
 
   return {
     locale,
     isDark,
+    videoCardWidth,
     initialized,
     setLocale,
     toggleLocale,
     setTheme,
     toggleTheme,
+    setVideoCardWidth,
     initFromStorage,
   };
 });

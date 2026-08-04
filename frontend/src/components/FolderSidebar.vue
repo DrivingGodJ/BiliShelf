@@ -90,6 +90,8 @@ const SIDEBAR_TEXT: Record<
   | "folderDescription"
   | "cancel"
   | "save"
+  | "editFolder"
+  | "deleteFolder"
   | "noDescription"
   | "videosCount"
   | "newFolderTitle"
@@ -131,6 +133,8 @@ const SIDEBAR_TEXT: Record<
   folderDescription: { "zh-CN": "收藏夹简介", "en-US": "Folder Description" },
   cancel: { "zh-CN": "取消", "en-US": "Cancel" },
   save: { "zh-CN": "保存", "en-US": "Save" },
+  editFolder: { "zh-CN": "编辑收藏夹", "en-US": "Edit folder" },
+  deleteFolder: { "zh-CN": "删除收藏夹", "en-US": "Delete folder" },
   noDescription: { "zh-CN": "暂无简介", "en-US": "No description" },
   videosCount: { "zh-CN": "{count} 个视频", "en-US": "{count} videos" },
   newFolderTitle: { "zh-CN": "创建收藏夹", "en-US": "Create Folder" },
@@ -329,8 +333,8 @@ function triggerClear() {
 </script>
 
 <template>
-  <aside class="panel-surface flex h-full min-h-0 flex-col p-5">
-    <div class="mb-5 flex items-center gap-2">
+  <aside class="panel-surface flex h-full min-h-0 flex-col p-4">
+    <div class="mb-3 flex items-center gap-2">
       <span
         class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary"
       >
@@ -347,11 +351,11 @@ function triggerClear() {
         <Input
           v-model="searchKeyword"
           :placeholder="t('searchPlaceholder')"
-          class="h-11 pl-9"
+          class="h-9 pl-9"
         />
       </div>
       <Select :key="`folder-sort-${props.locale}`" v-model="sortBy">
-        <SelectTrigger class="h-11 w-full">
+        <SelectTrigger class="h-9 w-full">
           <SelectValue :placeholder="t('sortPlaceholder')" />
         </SelectTrigger>
         <SelectContent>
@@ -455,44 +459,35 @@ function triggerClear() {
       </div>
     </section>
 
-    <div class="mt-4 min-h-0 flex-1 overflow-y-auto">
-      <div class="space-y-2.5">
+    <div class="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+      <div class="space-y-0.5">
         <button
           type="button"
-          class="interactive-lift flex min-h-11 w-full items-center gap-2 rounded-xl border border-border/70 bg-accent/35 px-3 py-2.5 text-left text-sm font-medium text-foreground"
+          class="flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent/55"
           @click="createDialogOpen = true"
         >
-          <span
-            class="inline-flex h-5 w-5 items-center justify-center rounded bg-primary/15 text-primary"
-          >
-            <FolderPlus class="h-3.5 w-3.5" />
-          </span>
+          <FolderPlus class="h-4 w-4 shrink-0 text-primary" />
           <span>{{ t("createFolder") }}</span>
         </button>
 
         <button
           type="button"
-          class="interactive-lift min-h-11 w-full rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition"
+          class="flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium transition-colors"
           :class="
             props.activeFolderId === null
-              ? 'border-primary/45 bg-primary/10 text-primary'
-              : 'border-border/80 bg-card/80 hover:bg-accent/45'
+              ? 'bg-primary/10 text-primary'
+              : 'hover:bg-accent/55'
           "
           @click="emit('select', null)"
         >
-          {{ t("allVideos") }}
+          <LibraryBig class="h-4 w-4 shrink-0" />
+          <span class="truncate">{{ t("allVideos") }}</span>
         </button>
 
         <div
           v-for="folder in displayedFolders"
           :key="folder.id"
-          class="interactive-lift rounded-xl border p-2.5"
-          :class="[
-            props.activeFolderId === folder.id
-              ? 'border-primary/45 bg-primary/10'
-              : 'border-border/80 bg-card/85',
-            dragOverFolderId === folder.id ? 'ring-2 ring-primary/45' : '',
-          ]"
+          class="rounded-md"
           :draggable="canDragSort"
           @dragstart="handleDragStart(folder.id)"
           @dragover.prevent="handleDragOver(folder.id)"
@@ -500,7 +495,7 @@ function triggerClear() {
           @dragend="handleDragEnd"
         >
           <template v-if="editingId === folder.id">
-            <div class="space-y-2">
+            <div class="space-y-2 rounded-md border border-primary/35 bg-primary/5 p-2">
               <Input v-model="editingName" :placeholder="t('folderName')" />
               <Textarea
                 v-model="editingDescription"
@@ -518,45 +513,53 @@ function triggerClear() {
           </template>
 
           <template v-else>
-            <button
-              type="button"
-              class="min-h-11 w-full text-left"
-              @click="emit('select', folder.id)"
+            <div
+              class="group flex min-h-9 items-center gap-1 rounded-md px-1 transition-colors"
+              :class="[
+                props.activeFolderId === folder.id
+                  ? 'bg-primary/10 text-primary'
+                  : 'hover:bg-accent/55',
+                dragOverFolderId === folder.id ? 'ring-2 ring-primary/45' : '',
+              ]"
             >
-              <div class="flex items-start justify-between gap-2">
-                <div class="flex min-w-0 items-center gap-2">
-                  <FolderOpen class="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <p class="line-clamp-1 text-sm font-semibold">{{ folder.name }}</p>
-                </div>
+              <button
+                type="button"
+                class="flex h-9 min-w-0 flex-1 items-center gap-1.5 px-1 text-left"
+                :title="folder.description || folder.name"
+                @click="emit('select', folder.id)"
+              >
                 <GripVertical
                   v-if="canDragSort"
-                  class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                  class="h-3.5 w-3.5 shrink-0 cursor-grab text-muted-foreground"
                 />
-              </div>
-              <p class="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                {{ folder.description || t("noDescription") }}
-              </p>
-              <p class="mt-1 text-[11px] text-muted-foreground">
-                {{ t("videosCount", { count: folder.itemCount ?? 0 }) }}
-              </p>
-            </button>
-
-            <div class="mt-2 flex justify-end gap-1">
+                <FolderOpen class="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span class="truncate text-sm font-medium">{{ folder.name }}</span>
+                <span
+                  class="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
+                  :title="t('videosCount', { count: folder.itemCount ?? 0 })"
+                >
+                  {{ folder.itemCount ?? 0 }}
+                </span>
+              </button>
               <Button
                 size="icon"
                 variant="ghost"
-                class="h-11 w-11"
+                class="h-7 w-7 shrink-0"
+                :aria-label="t('editFolder')"
+                :title="t('editFolder')"
                 @click="startEdit(folder)"
               >
-                <Pencil class="h-4 w-4" />
+                <Pencil class="h-3.5 w-3.5" />
               </Button>
               <Button
                 size="icon"
                 variant="ghost"
-                class="h-11 w-11 text-red-500"
+                class="h-7 w-7 shrink-0 text-red-500"
+                :aria-label="t('deleteFolder')"
+                :title="t('deleteFolder')"
                 @click="handleDelete(folder.id)"
               >
-                <Trash2 class="h-4 w-4" />
+                <Trash2 class="h-3.5 w-3.5" />
               </Button>
             </div>
           </template>
