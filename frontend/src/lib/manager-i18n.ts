@@ -1070,9 +1070,9 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "en-US": "Tag enrichment switched to background",
   },
   "toast.syncTagBackgroundDesc": {
-    "zh-CN": "视频已优先完成同步，缺失标签将由后台按低频慢慢补齐。",
+    "zh-CN": "视频已优先完成同步，缺失标签将由后台分批补齐。",
     "en-US":
-      "Video sync is prioritized first, and missing tags will be filled gradually by background low-frequency jobs.",
+      "Video sync is prioritized first, and missing tags will be filled in background batches.",
   },
   "toast.invalidVideoRecoveryDone": {
     "zh-CN": "已恢复 {recovered}/{total} 个无效视频",

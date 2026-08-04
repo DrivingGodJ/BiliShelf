@@ -232,7 +232,7 @@ test("an empty remote tag response completes once without looping forever", () =
   assert.equal(payload.result.lastBatchProcessed, 1);
 });
 
-test("tag batches keep a bounded low-frequency next-run window", () => {
+test("tag batches keep a bounded 20-to-30-second next-run window", () => {
   const payload = runBackgroundScenario({
     exports: ["resolveTagEnrichmentBatchNextRunAt"],
     scenarioSource: `
@@ -243,7 +243,7 @@ test("tag batches keep a bounded low-frequency next-run window", () => {
     `,
   });
 
-  assert.deepEqual(payload.result, { low: 46_000, high: 76_000 });
+  assert.deepEqual(payload.result, { low: 21_000, high: 31_000 });
 });
 
 test("risk control pauses the tag task without scheduling automatic retries", () => {

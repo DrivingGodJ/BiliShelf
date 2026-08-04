@@ -326,8 +326,8 @@ const TAG_ENRICH_ALARM = "bilishelf-tag-enrich";
 const STAGE3_RECONCILE_ALARM = "bilishelf-stage3-reconcile";
 const FAVORITES_SYNC_RETRY_ALARM = "bilishelf-favorites-sync-retry";
 const TAG_ENRICH_BATCH_SIZE = 2;
-const TAG_ENRICH_BATCH_DELAY_MIN_MS = 45_000;
-const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 30_000;
+const TAG_ENRICH_BATCH_DELAY_MIN_MS = 20_000;
+const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 10_000;
 const TAG_ENRICH_RESTORE_DELAY_MS = 5_000;
 const STAGE3_RECONCILE_DEFAULT_INTERVAL_MINUTES = 30;
 const STAGE3_RECONCILE_RETRY_DELAY_MINUTES = 5;
@@ -619,11 +619,17 @@ function normalizeTagEnrichmentMeta(raw: unknown): TagEnrichmentMeta {
   };
 }
 
-const defaultBidirectionalSyncMeta = (): BidirectionalSyncMeta => ({
-  biliToLocalEnabled: false,
-  localToBiliEnabled: false,
-  updatedAt: now()
-});
+function normalizeBiliToLocalEnabled(value: unknown) {
+  return typeof value === "boolean" ? value : true;
+}
+
+function defaultBidirectionalSyncMeta(): BidirectionalSyncMeta {
+  return {
+    biliToLocalEnabled: true,
+    localToBiliEnabled: false,
+    updatedAt: now()
+  };
+}
 
 const defaultWebDavMeta = (): WebDavMeta => ({
   enabled: false,
@@ -1352,7 +1358,9 @@ async function readState() {
         syncMeta: {
           tagEnrichment: normalizeTagEnrichmentMeta(raw.syncMeta?.tagEnrichment),
           bidirectionalSync: {
-            biliToLocalEnabled: Boolean(raw.syncMeta?.bidirectionalSync?.biliToLocalEnabled),
+            biliToLocalEnabled: normalizeBiliToLocalEnabled(
+              raw.syncMeta?.bidirectionalSync?.biliToLocalEnabled
+            ),
             localToBiliEnabled: false,
             updatedAt: toInt(
               raw.syncMeta?.bidirectionalSync?.updatedAt,

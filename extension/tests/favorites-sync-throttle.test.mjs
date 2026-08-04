@@ -231,7 +231,8 @@ test("tag enrichment schedules persisted next-run timestamps", async () => {
 
   assert.match(source, /function scheduleTagEnrichment\(meta: TagEnrichmentMeta \| null\)/);
   assert.match(source, /chrome\.alarms\.create\(TAG_ENRICH_ALARM, \{[\s\S]*meta\.nextRunAt/);
-  assert.match(source, /TAG_ENRICH_BATCH_DELAY_MIN_MS = 45_000/);
+  assert.match(source, /TAG_ENRICH_BATCH_DELAY_MIN_MS = 20_000/);
+  assert.match(source, /TAG_ENRICH_BATCH_DELAY_JITTER_MS = 10_000/);
 });
 
 test("background tag enrichment status bypasses the serialized withState queue", async () => {
