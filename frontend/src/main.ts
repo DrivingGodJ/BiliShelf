@@ -3,8 +3,8 @@ import Toast, { POSITION, type PluginOptions } from "vue-toastification";
 import Root from "./Root.vue";
 import router from "./router";
 import { pinia } from "./stores";
-import "./style.css";
 import "vue-toastification/dist/index.css";
+import "./style.css";
 
 const toastOptions: PluginOptions = {
   position: POSITION.TOP_RIGHT,
@@ -13,8 +13,10 @@ const toastOptions: PluginOptions = {
   pauseOnHover: true,
   draggable: true,
   hideProgressBar: false,
-  maxToasts: 5,
+  maxToasts: 4,
   newestOnTop: true,
+  showCloseButtonOnHover: true,
+  closeButton: "button",
 };
 
 const app = createApp(Root);

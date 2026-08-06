@@ -24,7 +24,7 @@ test("frontend package, extension package, and extension manifest versions stay 
   assert.ok(manifestVersion, "expected manifest version in extension/wxt.config.ts");
   assert.equal(frontendPackage.version, extensionPackage.version);
   assert.equal(manifestVersion, extensionPackage.version);
-  assert.equal(extensionPackage.version, "0.1.5");
+  assert.equal(extensionPackage.version, "0.1.19");
 });
 
 test("release packaging script does not hardcode the initial extension version", async () => {
@@ -40,4 +40,17 @@ test("release packaging script does not hardcode the initial extension version",
     /(package\.json|packageVersion|readFile)/,
     "expected release packaging to derive the current version dynamically",
   );
+});
+
+test("manager security patch scans all chunks and preserves minified identifiers", async () => {
+  const source = await readRepoText(
+    "extension",
+    "scripts",
+    "patch-manager-innerhtml.mjs",
+  );
+
+  assert.match(source, /file\.endsWith\("\.js"\)/);
+  assert.match(source, /match\[1\]/);
+  assert.match(source, /patchedTargets\.length === 0/);
+  assert.doesNotMatch(source, /\}\},It="/);
 });

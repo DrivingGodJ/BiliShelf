@@ -1,4 +1,5 @@
 import { useToast } from "vue-toastification";
+import AppToastMessage from "@/components/feedback/AppToastMessage.vue";
 
 type TranslateFn = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -85,15 +86,22 @@ export function useAppToast(t: TranslateFn) {
   const toast = useToast();
 
   function notifySuccess(title: string, description?: string) {
-    const content = description ? `${title}\n${description}` : title;
-    toast.success(content, {
-      timeout: 2400,
-      closeOnClick: true,
-      pauseOnHover: true,
-      draggable: true,
-      hideProgressBar: false,
-      ...(description ? { icon: "✅" } : {}),
-    });
+    toast.success(
+      {
+        component: AppToastMessage,
+        props: { kind: "success", title, description },
+      },
+      {
+        timeout: 2400,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+        hideProgressBar: false,
+        icon: false,
+        toastClassName: "bilishelf-toast bilishelf-toast--success",
+        bodyClassName: "bilishelf-toast__body",
+      },
+    );
   }
 
   function notifyError(
@@ -110,15 +118,22 @@ export function useAppToast(t: TranslateFn) {
     const description = rawMessage
       ? translateKnownBackendError(normalizeErrorMessage(rawMessage) || fallback, t)
       : fallback;
-    const content = description ? `${title}\n${description}` : title;
-    toast.error(content, {
-      timeout: 3600,
-      closeOnClick: true,
-      pauseOnHover: true,
-      draggable: true,
-      hideProgressBar: false,
-      icon: "⚠️",
-    });
+    toast.error(
+      {
+        component: AppToastMessage,
+        props: { kind: "error", title, description },
+      },
+      {
+        timeout: 4200,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+        hideProgressBar: false,
+        icon: false,
+        toastClassName: "bilishelf-toast bilishelf-toast--error",
+        bodyClassName: "bilishelf-toast__body",
+      },
+    );
   }
 
   return {

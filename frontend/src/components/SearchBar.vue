@@ -103,6 +103,7 @@ const customTags = computed(() =>
   props.tags.filter((tag) => tag.type === "custom")
 );
 const customTagPage = ref(1);
+const mobileFiltersOpen = ref(false);
 const customTagViewportRef = ref<HTMLElement | null>(null);
 const customTagViewportWidth = ref(0);
 const tagMeasureCanvas = document.createElement("canvas");
@@ -246,7 +247,7 @@ function hasCustomTagToken(name: string) {
 </script>
 
 <template>
-  <section class="panel-surface p-5">
+  <section class="panel-surface p-4 md:p-5">
     <div class="flex flex-col gap-3.5 xl:flex-row xl:items-center">
       <div class="relative min-w-0 flex-1">
         <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -266,84 +267,96 @@ function hasCustomTagToken(name: string) {
         <Button class="h-11" variant="outline" @click="emit('clear')">
           {{ t("reset") }}
         </Button>
-      </div>
-    </div>
-
-    <div class="mt-5 space-y-2.5">
-      <p class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-        <Filter class="h-3.5 w-3.5" />
-        {{ t("fieldTokens") }}
-      </p>
-      <div class="flex flex-wrap gap-2">
-        <button
-          v-for="field in fieldTokenDefs"
-          :key="field.key"
-          type="button"
-          @click="emit('appendFieldToken', field.key)"
+        <Button
+          size="icon"
+          variant="outline"
+          class="h-11 w-11 md:hidden"
+          :aria-label="t('fieldTokens')"
+          :aria-expanded="mobileFiltersOpen"
+          @click="mobileFiltersOpen = !mobileFiltersOpen"
         >
-          <Badge :variant="hasFieldToken(field.key) ? 'default' : 'secondary'">
-            <UserRound v-if="field.key === 'uploader'" class="h-3 w-3" />
-            <Tag v-else class="h-3 w-3" />
-            {{ field.label }}
-          </Badge>
-        </button>
+          <Filter class="h-4 w-4" />
+        </Button>
       </div>
     </div>
 
-    <div class="mt-5 space-y-2.5">
-      <p class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-        <Tag class="h-3.5 w-3.5" />
-        {{ t("customTags") }}
-      </p>
-      <div
-        class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between"
-      >
-        <div ref="customTagViewportRef" class="min-w-0 flex-1 overflow-hidden">
-          <div class="flex flex-nowrap items-center gap-2">
-            <button
-              v-for="tag in pagedCustomTags"
-              :key="tag.id"
-              type="button"
-              class="shrink-0"
-              @click="toggleCustomTag(tag.name)"
-            >
-              <Badge
-                :variant="hasCustomTagToken(tag.name) ? 'default' : 'secondary'"
-              >
-                {{ tag.name }}
-              </Badge>
-            </button>
-            <span
-              v-if="customTags.length === 0"
-              class="text-xs text-muted-foreground"
-              >{{ t("emptyCustomTag") }}</span
-            >
-          </div>
+    <div :class="mobileFiltersOpen ? 'block' : 'hidden md:block'">
+      <div class="mt-5 space-y-2.5">
+        <p class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+          <Filter class="h-3.5 w-3.5" />
+          {{ t("fieldTokens") }}
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="field in fieldTokenDefs"
+            :key="field.key"
+            type="button"
+            @click="emit('appendFieldToken', field.key)"
+          >
+            <Badge :variant="hasFieldToken(field.key) ? 'default' : 'secondary'">
+              <UserRound v-if="field.key === 'uploader'" class="h-3 w-3" />
+              <Tag v-else class="h-3 w-3" />
+              {{ field.label }}
+            </Badge>
+          </button>
         </div>
+      </div>
 
+      <div class="mt-5 space-y-2.5">
+        <p class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+          <Tag class="h-3.5 w-3.5" />
+          {{ t("customTags") }}
+        </p>
         <div
-          v-if="customTagTotalPages > 1"
-          class="flex shrink-0 items-center justify-end gap-2 xl:min-w-[220px] xl:pt-0"
+          class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between"
         >
-          <Button
-            size="sm"
-            variant="outline"
-            :disabled="customTagPage === 1"
-            @click="prevCustomTagPage"
+          <div ref="customTagViewportRef" class="min-w-0 flex-1 overflow-hidden">
+            <div class="flex flex-nowrap items-center gap-2">
+              <button
+                v-for="tag in pagedCustomTags"
+                :key="tag.id"
+                type="button"
+                class="shrink-0"
+                @click="toggleCustomTag(tag.name)"
+              >
+                <Badge
+                  :variant="hasCustomTagToken(tag.name) ? 'default' : 'secondary'"
+                >
+                  {{ tag.name }}
+                </Badge>
+              </button>
+              <span
+                v-if="customTags.length === 0"
+                class="text-xs text-muted-foreground"
+                >{{ t("emptyCustomTag") }}</span
+              >
+            </div>
+          </div>
+
+          <div
+            v-if="customTagTotalPages > 1"
+            class="flex shrink-0 items-center justify-end gap-2 xl:min-w-[220px] xl:pt-0"
           >
-            {{ t("prev") }}
-          </Button>
-          <span class="text-xs text-muted-foreground"
-            >{{ t("page") }} {{ customTagPage }} / {{ customTagTotalPages }}</span
-          >
-          <Button
-            size="sm"
-            variant="outline"
-            :disabled="customTagPage >= customTagTotalPages"
-            @click="nextCustomTagPage"
-          >
-            {{ t("next") }}
-          </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="customTagPage === 1"
+              @click="prevCustomTagPage"
+            >
+              {{ t("prev") }}
+            </Button>
+            <span class="text-xs text-muted-foreground"
+              >{{ t("page") }} {{ customTagPage }} / {{ customTagTotalPages }}</span
+            >
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="customTagPage >= customTagTotalPages"
+              @click="nextCustomTagPage"
+            >
+              {{ t("next") }}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

@@ -19,9 +19,11 @@ import {
 } from "../shared/ai-provider-settings.js";
 import {
   createFavoritesSyncThrottleState,
+  resolveFavoritesFailurePolicy,
   resolveFavoritesCooldownPolicy,
   resolveFavoritesFolderGapMs,
   resolveFavoritesPageGapMs,
+  resolveSuccessfulRetryAttempt,
   updateFavoritesSyncThrottleState,
 } from "../shared/favorites-sync-throttle.js";
 import {
@@ -53,7 +55,30 @@ import {
   findPlaybackQueueIndex,
   normalizePlaybackSession,
 } from "../shared/folder-playback-session.js";
-import { categorizeFolderVideo } from "../shared/ai-category-runtime.js";
+import { categorizeFolderVideo, requestAiJson } from "../shared/ai-category-runtime.js";
+import { normalizeFavoriteComment } from "../shared/comment-favorite.js";
+import type { NormalizedFavoriteComment } from "../shared/comment-favorite.js";
+import {
+  normalizeFavoriteArticle,
+  normalizeStoredFavoriteArticle,
+} from "../shared/article-favorite.js";
+import type { FavoriteArticleRecord as SharedFavoriteArticleRecord } from "../shared/article-favorite.js";
+import {
+  REVIEW_FOLDER_KEY,
+  applyAiOrganizerPlan,
+  buildAiOrganizerClassificationPrompt,
+  buildAiOrganizerTaxonomyPrompt,
+  normalizeAiOrganizerAssignments,
+  normalizeAiOrganizerConfig,
+  normalizeAiOrganizerTaxonomy,
+  resolveAiOrganizerFolderNames,
+  undoAiOrganizerPlan,
+} from "../shared/ai-organizer.js";
+import type {
+  AiOrganizerAssignment,
+  AiOrganizerConfig,
+  AiOrganizerTaxonomyItem,
+} from "../shared/ai-organizer.js";
 import type { FavoritesSyncThrottleState } from "../shared/favorites-sync-throttle.js";
 import type {
   AiMeta as SharedAiMeta,
@@ -72,6 +97,9 @@ type FolderRecord = {
   deletedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  origin?: "ai";
+  organizerId?: string;
+  taxonomyKey?: string;
 };
 
 type VideoRecord = {
@@ -96,6 +124,18 @@ type FolderItemRecord = {
   folderId: number;
   videoId: number;
   addedAt: number;
+  origin?: "ai";
+  organizerId?: string;
+};
+
+type ArticleFolderRecord = {
+  id: number;
+  name: string;
+  description: string | null;
+  sortOrder: number;
+  deletedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
 };
 
 type TagRecord = {
@@ -114,14 +154,60 @@ type VideoTagRecord = {
 
 type FollowedUpRecord = StoredFollowedUpRecord;
 
+type FavoriteCommentRecord = NormalizedFavoriteComment & {
+  id: number;
+  savedAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+type FavoriteArticleRecord = SharedFavoriteArticleRecord & {
+  id: number;
+  deletedAt: number | null;
+};
+
+type TagEnrichmentPhase =
+  | "idle"
+  | "running"
+  | "waiting"
+  | "paused"
+  | "completed"
+  | "failed";
+
+type TagEnrichmentErrorItem = {
+  videoId: number;
+  bvid: string;
+  message: string;
+  occurredAt: number;
+};
+
 type TagEnrichmentMeta = {
+  phase: TagEnrichmentPhase;
   paused: boolean;
   cursorAfterVideoId: number;
+  total: number;
   totalMissing: number;
+  processed: number;
+  succeeded: number;
+  empty: number;
+  failed: number;
+  tagsBound: number;
   lastBatchProcessed: number;
+  lastBatchSucceeded: number;
+  lastBatchEmpty: number;
+  lastBatchFailed: number;
   lastBatchBound: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  nextRunAt: number | null;
+  retryAttempt: number;
+  riskCount: number;
   lastRunAt: number | null;
+  updatedAt: number;
   lastError: string | null;
+  checkedEmptyVideoIds: number[];
+  skippedVideoIds: number[];
+  errors: TagEnrichmentErrorItem[];
 };
 
 type BidirectionalSyncMeta = {
@@ -162,6 +248,7 @@ type SyncMeta = {
   bidirectionalSync: BidirectionalSyncMeta;
   webdav: WebDavMeta;
   stage3Reconcile: Stage3ReconcileMeta;
+  favoritesJob: FavoritesSyncJobMeta;
 };
 
 type AiProvider = SharedAiProvider;
@@ -170,22 +257,127 @@ type FolderAiAnalysisRecord = SharedFolderAiAnalysisRecord;
 type VideoAiAnalysisRecord = SharedVideoAiAnalysisRecord;
 type AiSettingsResponse = ReturnType<typeof maskApiKeyStateForResponse>;
 
+type AiOrganizerStage =
+  | "planning"
+  | "classifying"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "completed"
+  | "undone";
+
+type AiOrganizerApplySummary = {
+  foldersCreated: number;
+  folderLinksAdded: number;
+  folderLinksRemoved: number;
+  lowConfidence: number;
+};
+
+type AiOrganizerUndoRecord = {
+  runId: string;
+  previousFolders: FolderRecord[];
+  previousItems: FolderItemRecord[];
+  createdFolders: FolderRecord[];
+  createdFolderIds: number[];
+  createdItemIds: number[];
+  appliedAt: number;
+};
+
+type AiOrganizerTaskRecord = {
+  version: 1;
+  id: string;
+  stage: AiOrganizerStage;
+  paused: boolean;
+  config: AiOrganizerConfig;
+  sourceHash: string;
+  sourceVideoIds: number[];
+  sourceFolderName: string | null;
+  total: number;
+  skippedInvalid: number;
+  previousAiRelationCount: number;
+  cursor: number;
+  taxonomy: AiOrganizerTaxonomyItem[];
+  reviewFolderName: string;
+  assignments: AiOrganizerAssignment[];
+  invalidResults: number;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  retryAttempt: number;
+  nextRunAt: number | null;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+  appliedAt: number | null;
+  undoneAt: number | null;
+  lastError: string | null;
+  snapshotKey: string;
+  applySummary: AiOrganizerApplySummary | null;
+  undo: AiOrganizerUndoRecord | null;
+};
+
+type AiOrganizerSnapshotRecord = {
+  version: 1;
+  runId: string;
+  createdAt: number;
+  state: LocalState;
+};
+
 type LocalState = {
   counters: {
     folder: number;
+    articleFolder: number;
     video: number;
     folderItem: number;
     tag: number;
     videoTag: number;
+    comment: number;
+    article: number;
   };
   folders: FolderRecord[];
+  articleFolders: ArticleFolderRecord[];
   videos: VideoRecord[];
   folderItems: FolderItemRecord[];
   tags: TagRecord[];
   videoTags: VideoTagRecord[];
   followedUps: FollowedUpRecord[];
+  comments: FavoriteCommentRecord[];
+  articles: FavoriteArticleRecord[];
   syncMeta: SyncMeta;
   ai: AiState;
+};
+
+type VideoTagSummary = {
+  tags: string[];
+  systemTags: string[];
+  customTags: string[];
+};
+
+type LocalStateIndexes = {
+  activeFoldersById: Map<number, FolderRecord>;
+  activeVideoIds: Set<number>;
+  videosById: Map<number, VideoRecord>;
+  folderItemsByVideoId: Map<number, FolderItemRecord[]>;
+  activeFolderIdsByVideoId: Map<number, Set<number>>;
+  activeFolderItemCountByFolderId: Map<number, number>;
+  tagSummaryByVideoId: Map<number, VideoTagSummary>;
+  sortedActiveVideoIds: number[];
+  sortedDeletedVideoIds: number[];
+  sortedActiveVideoIdsByFolderId: Map<number, number[]>;
+};
+
+type VideoListArgs = {
+  includeDeleted: boolean;
+  folderId?: number;
+  tags?: string[];
+  q?: string;
+  title?: string;
+  description?: string;
+  uploader?: string;
+  customTag?: string;
+  systemTag?: string;
+  from?: number | null;
+  to?: number | null;
 };
 
 type ApiResult = {
@@ -253,8 +445,24 @@ const BLOCKED_SYSTEM_TAGS = new Set(["uncategorized", "未分类"]);
 const DEFAULT_COVER = "https://i0.hdslb.com/bfs/archive/placeholder.jpg";
 const PAGE_FETCH_MESSAGE_TYPE = "BILISHELF_PAGE_FETCH_JSON";
 const TAG_ENRICH_ALARM = "bilishelf-tag-enrich";
+const AI_ORGANIZER_ALARM = "bilishelf-ai-organizer";
 const STAGE3_RECONCILE_ALARM = "bilishelf-stage3-reconcile";
+const FAVORITES_SYNC_RETRY_ALARM = "bilishelf-favorites-sync-retry";
+const BACKUP_REMINDER_ALARM = "bilishelf-backup-reminder";
+const BACKUP_REMINDER_NOTIFICATION_ID = "bilishelf-backup-reminder";
+const BACKUP_REMINDER_STORAGE_KEY = "bilishelf-backup-reminder-v1";
+const BACKUP_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+const BACKUP_REMINDER_CHECK_INTERVAL_MINUTES = 60;
 const TAG_ENRICH_BATCH_SIZE = 2;
+const TAG_ENRICH_BATCH_DELAY_MIN_MS = 20_000;
+const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 10_000;
+const TAG_ENRICH_RESTORE_DELAY_MS = 5_000;
+const AI_ORGANIZER_TASK_KEY = "ai-organizer-task-v1";
+const AI_ORGANIZER_SNAPSHOT_PREFIX = "ai-organizer-snapshot-v1:";
+const AI_ORGANIZER_BATCH_DELAY_MS = 1_500;
+const AI_ORGANIZER_MAX_RETRY_ATTEMPTS = 3;
+const AI_ORGANIZER_REQUEST_TIMEOUT_MS = 90_000;
+const AI_ORGANIZER_WATCHDOG_GRACE_MS = 2_000;
 const STAGE3_RECONCILE_DEFAULT_INTERVAL_MINUTES = 30;
 const STAGE3_RECONCILE_RETRY_DELAY_MINUTES = 5;
 const STAGE3_RECONCILE_RISK_DELAY_MINUTES = 20;
@@ -274,6 +482,7 @@ const INVALID_VIDEO_RECOVERY_TIMEOUT_MS = 15_000;
 const INVALID_VIDEO_RECOVERY_GAP_MS = 1_200;
 const BILI_FOLLOWING_UPS_PAGE_SIZE = 50;
 const BILI_FOLLOWING_UPS_PAGE_GAP_MS = 900;
+const REMOTE_FAVORITE_ORDER_FALLBACK_BASE_MS = 1_000_000_000_000;
 
 type SyncFetchStage = "nav" | "folders" | "folderVideos" | "followings";
 type FetchSource = "extension" | "page";
@@ -296,9 +505,29 @@ type FavoritesSyncSummaryStatus = {
   foldersSynced: number;
   videosProcessed: number;
   videosUpserted: number;
+  skippedMissingBvid: number;
+  unresolvedMissingBvid: number;
+  incompleteFolders: number;
   folderLinksAdded: number;
+  folderLinksRemoved: number;
   tagsBound: number;
   errorCount: number;
+};
+
+type FavoritesSyncUnresolvedItem = {
+  remoteFolderId: number;
+  folder: string;
+  aid: number | null;
+  title: string;
+  reason: string;
+};
+
+type FavoritesSyncIncompleteFolder = {
+  remoteFolderId: number;
+  folder: string;
+  expected: number;
+  observed: number;
+  reason: string;
 };
 
 type FavoritesSyncStatus = {
@@ -313,11 +542,66 @@ type FavoritesSyncStatus = {
   message: string;
   lastError: string | null;
   riskBlocked: boolean;
+  phase: "idle" | "running" | "paused" | "waiting" | "failed" | "completed";
+  nextRetryAt: number | null;
+  retryAutomatic: boolean;
+  retryReason: string | null;
+  retryAttempt: number;
+  riskCount: number;
+  selectedRemoteFolderIds: number[];
+  completedRemoteFolderIds: number[];
+  currentFolderRemoteId: number | null;
+  currentPage: number;
   resumePageByFolder: Record<string, number>;
   invalidVideosDetected: number;
   invalidVideoIds: number[];
   summary: FavoritesSyncSummaryStatus;
   errors: Array<{ folder: string; message: string }>;
+  unresolvedItems: FavoritesSyncUnresolvedItem[];
+  incompleteFolders: FavoritesSyncIncompleteFolder[];
+};
+
+type FavoritesSyncJobPhase = "running" | "paused" | "waiting" | "failed";
+
+type FavoritesSyncRetryState = {
+  attempt: number;
+  nextRetryAt: number | null;
+  automatic: boolean;
+  reason: string | null;
+  riskCount: number;
+};
+
+type FavoritesSyncJob = {
+  id: string;
+  phase: FavoritesSyncJobPhase;
+  selectedRemoteFolderIds: number[];
+  currentFolderRemoteId: number | null;
+  currentFolderTitle: string;
+  currentFolderIndex: number;
+  folderTotal: number;
+  nextPage: number;
+  seenBvidKeysByFolder: Record<string, string[]>;
+  observedRowCountByFolder: Record<string, number>;
+  deletionCandidatesByFolder: Record<string, string[]>;
+  completedRemoteFolderIds: number[];
+  startedAt: number;
+  updatedAt: number;
+  total: number;
+  current: number;
+  summary: FavoritesSyncSummaryStatus;
+  invalidVideoIds: number[];
+  errors: Array<{ folder: string; message: string }>;
+  unresolvedItems: FavoritesSyncUnresolvedItem[];
+  incompleteFolders: FavoritesSyncIncompleteFolder[];
+  riskBlocked: boolean;
+  lastError: string | null;
+  retry: FavoritesSyncRetryState;
+};
+
+type FavoritesSyncJobMeta = {
+  active: FavoritesSyncJob | null;
+  lastStatus: FavoritesSyncStatus;
+  deletionCandidatesByFolder: Record<string, string[]>;
 };
 
 type FavoritesSyncProgress = {
@@ -359,20 +643,127 @@ type CookiesApi = {
 };
 
 const defaultTagEnrichmentMeta = (): TagEnrichmentMeta => ({
+  phase: "idle",
   paused: false,
   cursorAfterVideoId: 0,
+  total: 0,
   totalMissing: 0,
+  processed: 0,
+  succeeded: 0,
+  empty: 0,
+  failed: 0,
+  tagsBound: 0,
   lastBatchProcessed: 0,
+  lastBatchSucceeded: 0,
+  lastBatchEmpty: 0,
+  lastBatchFailed: 0,
   lastBatchBound: 0,
+  startedAt: null,
+  finishedAt: null,
+  nextRunAt: null,
+  retryAttempt: 0,
+  riskCount: 0,
   lastRunAt: null,
-  lastError: null
+  updatedAt: now(),
+  lastError: null,
+  checkedEmptyVideoIds: [],
+  skippedVideoIds: [],
+  errors: []
 });
 
-const defaultBidirectionalSyncMeta = (): BidirectionalSyncMeta => ({
-  biliToLocalEnabled: false,
-  localToBiliEnabled: false,
-  updatedAt: now()
-});
+function normalizeTagEnrichmentPhase(
+  value: unknown,
+  paused: boolean
+): TagEnrichmentPhase {
+  const phase = normalizeText(value) as TagEnrichmentPhase;
+  if (
+    phase === "idle" ||
+    phase === "running" ||
+    phase === "waiting" ||
+    phase === "paused" ||
+    phase === "completed" ||
+    phase === "failed"
+  ) {
+    return paused ? "paused" : phase;
+  }
+  return paused ? "paused" : "idle";
+}
+
+function normalizePositiveIntList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.map((item) => toInt(item)).filter((item) => item > 0))
+  ).sort((left, right) => left - right);
+}
+
+function normalizeTagEnrichmentMeta(raw: unknown): TagEnrichmentMeta {
+  const source = raw && typeof raw === "object"
+    ? raw as Partial<TagEnrichmentMeta>
+    : {};
+  const paused = Boolean(source.paused) || source.phase === "paused";
+  const processed = Math.max(0, toInt(source.processed));
+  const totalMissing = Math.max(0, toInt(source.totalMissing));
+  const errors = Array.isArray(source.errors)
+    ? source.errors
+        .map((item) => {
+          const candidate = item && typeof item === "object"
+            ? item as Partial<TagEnrichmentErrorItem>
+            : {};
+          const videoId = Math.max(0, toInt(candidate.videoId));
+          const message = normalizeText(candidate.message);
+          if (!videoId || !message) return null;
+          return {
+            videoId,
+            bvid: normalizeText(candidate.bvid),
+            message,
+            occurredAt: Math.max(0, toInt(candidate.occurredAt))
+          };
+        })
+        .filter((item): item is TagEnrichmentErrorItem => Boolean(item))
+        .slice(-100)
+    : [];
+
+  return {
+    phase: normalizeTagEnrichmentPhase(source.phase, paused),
+    paused,
+    cursorAfterVideoId: Math.max(0, toInt(source.cursorAfterVideoId)),
+    total: Math.max(processed + totalMissing, Math.max(0, toInt(source.total))),
+    totalMissing,
+    processed,
+    succeeded: Math.max(0, toInt(source.succeeded)),
+    empty: Math.max(0, toInt(source.empty)),
+    failed: Math.max(0, toInt(source.failed)),
+    tagsBound: Math.max(0, toInt(source.tagsBound)),
+    lastBatchProcessed: Math.max(0, toInt(source.lastBatchProcessed)),
+    lastBatchSucceeded: Math.max(0, toInt(source.lastBatchSucceeded)),
+    lastBatchEmpty: Math.max(0, toInt(source.lastBatchEmpty)),
+    lastBatchFailed: Math.max(0, toInt(source.lastBatchFailed)),
+    lastBatchBound: Math.max(0, toInt(source.lastBatchBound)),
+    startedAt: toIntOrNull(source.startedAt),
+    finishedAt: toIntOrNull(source.finishedAt),
+    nextRunAt: toIntOrNull(source.nextRunAt),
+    retryAttempt: Math.max(0, toInt(source.retryAttempt)),
+    riskCount: Math.max(0, toInt(source.riskCount)),
+    lastRunAt: toIntOrNull(source.lastRunAt),
+    updatedAt: Math.max(0, toInt(source.updatedAt, now())),
+    lastError: normalizeText(source.lastError) || null,
+    checkedEmptyVideoIds: normalizePositiveIntList(source.checkedEmptyVideoIds),
+    skippedVideoIds: normalizePositiveIntList(source.skippedVideoIds),
+    errors
+  };
+}
+
+function normalizeBiliToLocalEnabled(value: unknown) {
+  return typeof value === "boolean" ? value : true;
+}
+
+function defaultBidirectionalSyncMeta(): BidirectionalSyncMeta {
+  return {
+    biliToLocalEnabled: true,
+    localToBiliEnabled: false,
+    updatedAt: now()
+  };
+}
 
 const defaultWebDavMeta = (): WebDavMeta => ({
   enabled: false,
@@ -403,7 +794,11 @@ const defaultStage3ReconcileMeta = (): Stage3ReconcileMeta => ({
     foldersSynced: 0,
     videosProcessed: 0,
     videosUpserted: 0,
+    skippedMissingBvid: 0,
+    unresolvedMissingBvid: 0,
+    incompleteFolders: 0,
     folderLinksAdded: 0,
+    folderLinksRemoved: 0,
     tagsBound: 0,
     errorCount: 0
   }
@@ -412,22 +807,29 @@ const defaultStage3ReconcileMeta = (): Stage3ReconcileMeta => ({
 const defaultState = (): LocalState => ({
   counters: {
     folder: 1,
+    articleFolder: 1,
     video: 1,
     folderItem: 1,
     tag: 1,
-    videoTag: 1
+    videoTag: 1,
+    comment: 1,
+    article: 1
   },
   folders: [],
+  articleFolders: [],
   videos: [],
   folderItems: [],
   tags: [],
   videoTags: [],
   followedUps: [],
+  comments: [],
+  articles: [],
   syncMeta: {
     tagEnrichment: defaultTagEnrichmentMeta(),
     bidirectionalSync: defaultBidirectionalSyncMeta(),
     webdav: defaultWebDavMeta(),
-    stage3Reconcile: defaultStage3ReconcileMeta()
+    stage3Reconcile: defaultStage3ReconcileMeta(),
+    favoritesJob: defaultFavoritesSyncJobMeta()
   },
   ai: createDefaultAiState(now())
 });
@@ -437,7 +839,11 @@ const emptyFavoritesSyncSummary = (): FavoritesSyncSummaryStatus => ({
   foldersSynced: 0,
   videosProcessed: 0,
   videosUpserted: 0,
+  skippedMissingBvid: 0,
+  unresolvedMissingBvid: 0,
+  incompleteFolders: 0,
   folderLinksAdded: 0,
+  folderLinksRemoved: 0,
   tagsBound: 0,
   errorCount: 0
 });
@@ -454,12 +860,451 @@ const defaultFavoritesSyncStatus = (): FavoritesSyncStatus => ({
   message: "",
   lastError: null,
   riskBlocked: false,
+  phase: "idle",
+  nextRetryAt: null,
+  retryAutomatic: false,
+  retryReason: null,
+  retryAttempt: 0,
+  riskCount: 0,
+  selectedRemoteFolderIds: [],
+  completedRemoteFolderIds: [],
+  currentFolderRemoteId: null,
+  currentPage: 1,
   resumePageByFolder: {},
   invalidVideosDetected: 0,
   invalidVideoIds: [],
   summary: emptyFavoritesSyncSummary(),
-  errors: []
+  errors: [],
+  unresolvedItems: [],
+  incompleteFolders: []
 });
+
+function normalizeFavoritesSyncSummary(value: unknown): FavoritesSyncSummaryStatus {
+  const raw = value && typeof value === "object"
+    ? value as Partial<FavoritesSyncSummaryStatus>
+    : {};
+  return {
+    foldersDetected: Math.max(0, toInt(raw.foldersDetected, 0)),
+    foldersSynced: Math.max(0, toInt(raw.foldersSynced, 0)),
+    videosProcessed: Math.max(0, toInt(raw.videosProcessed, 0)),
+    videosUpserted: Math.max(0, toInt(raw.videosUpserted, 0)),
+    skippedMissingBvid: Math.max(0, toInt(raw.skippedMissingBvid, 0)),
+    unresolvedMissingBvid: Math.max(0, toInt(raw.unresolvedMissingBvid, 0)),
+    incompleteFolders: Math.max(0, toInt(raw.incompleteFolders, 0)),
+    folderLinksAdded: Math.max(0, toInt(raw.folderLinksAdded, 0)),
+    folderLinksRemoved: Math.max(0, toInt(raw.folderLinksRemoved, 0)),
+    tagsBound: Math.max(0, toInt(raw.tagsBound, 0)),
+    errorCount: Math.max(0, toInt(raw.errorCount, 0))
+  };
+}
+
+function normalizeFavoritesSyncErrors(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as { folder?: unknown; message?: unknown };
+      const message = normalizeText(raw.message);
+      if (!message) return null;
+      return {
+        folder: normalizeText(raw.folder) || "__sync__",
+        message
+      };
+    })
+    .filter((item): item is { folder: string; message: string } => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeFavoritesSyncUnresolvedItems(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Partial<FavoritesSyncUnresolvedItem>;
+      const remoteFolderId = toInt(raw.remoteFolderId);
+      const reason = normalizeText(raw.reason);
+      if (remoteFolderId <= 0 || !reason) return null;
+      return {
+        remoteFolderId,
+        folder: normalizeText(raw.folder) || `Bilibili Favorite ${remoteFolderId}`,
+        aid: toAid(raw.aid) || null,
+        title: normalizeText(raw.title),
+        reason
+      };
+    })
+    .filter((item): item is FavoritesSyncUnresolvedItem => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeFavoritesSyncIncompleteFolders(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Partial<FavoritesSyncIncompleteFolder>;
+      const remoteFolderId = toInt(raw.remoteFolderId);
+      const reason = normalizeText(raw.reason);
+      if (remoteFolderId <= 0 || !reason) return null;
+      return {
+        remoteFolderId,
+        folder: normalizeText(raw.folder) || `Bilibili Favorite ${remoteFolderId}`,
+        expected: Math.max(0, toInt(raw.expected, 0)),
+        observed: Math.max(0, toInt(raw.observed, 0)),
+        reason
+      };
+    })
+    .filter((item): item is FavoritesSyncIncompleteFolder => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeBvidKeysByFolder(value: unknown) {
+  const normalized: Record<string, string[]> = {};
+  if (!value || typeof value !== "object") return normalized;
+  for (const [remoteIdRaw, keysRaw] of Object.entries(value)) {
+    const remoteId = toInt(remoteIdRaw);
+    if (remoteId <= 0 || !Array.isArray(keysRaw)) continue;
+    normalized[String(remoteId)] = Array.from(
+      new Set(keysRaw.map((item) => normalizeKey(item)).filter(Boolean))
+    ).sort();
+  }
+  return normalized;
+}
+
+function normalizeCountByFolder(value: unknown) {
+  const normalized: Record<string, number> = {};
+  if (!value || typeof value !== "object") return normalized;
+  for (const [remoteIdRaw, countRaw] of Object.entries(value)) {
+    const remoteId = toInt(remoteIdRaw);
+    if (remoteId <= 0) continue;
+    normalized[String(remoteId)] = Math.max(0, toInt(countRaw, 0));
+  }
+  return normalized;
+}
+
+function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
+  const raw = value && typeof value === "object"
+    ? value as Partial<FavoritesSyncStatus>
+    : {};
+  const resumePageByFolder: Record<string, number> = {};
+  const rawResume = raw.resumePageByFolder && typeof raw.resumePageByFolder === "object"
+    ? raw.resumePageByFolder
+    : {};
+  for (const [remoteIdRaw, pageRaw] of Object.entries(rawResume)) {
+    const remoteId = toInt(remoteIdRaw);
+    const page = toInt(pageRaw);
+    if (remoteId > 0 && page > 1) resumePageByFolder[String(remoteId)] = page;
+  }
+  const invalidVideoIds = Array.isArray(raw.invalidVideoIds)
+    ? Array.from(new Set(raw.invalidVideoIds.map((id) => toInt(id)).filter((id) => id > 0)))
+    : [];
+  return {
+    running: false,
+    startedAt: toIntOrNull(raw.startedAt),
+    finishedAt: toIntOrNull(raw.finishedAt),
+    total: Math.max(0, toInt(raw.total, 0)),
+    current: Math.max(0, toInt(raw.current, 0)),
+    folderTitle: normalizeText(raw.folderTitle),
+    folderIndex: Math.max(0, toInt(raw.folderIndex, 0)),
+    folderTotal: Math.max(0, toInt(raw.folderTotal, 0)),
+    message: normalizeText(raw.message),
+    lastError: normalizeText(raw.lastError) || null,
+    riskBlocked: Boolean(raw.riskBlocked),
+    phase:
+      raw.phase === "running" ||
+      raw.phase === "paused" ||
+      raw.phase === "waiting" ||
+      raw.phase === "failed" ||
+      raw.phase === "completed"
+        ? raw.phase
+        : "idle",
+    nextRetryAt: toIntOrNull(raw.nextRetryAt),
+    retryAutomatic: Boolean(raw.retryAutomatic),
+    retryReason: normalizeText(raw.retryReason) || null,
+    retryAttempt: Math.max(0, toInt(raw.retryAttempt, 0)),
+    riskCount: Math.max(0, toInt(raw.riskCount, 0)),
+    selectedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      raw.selectedRemoteFolderIds
+    ),
+    completedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      raw.completedRemoteFolderIds
+    ),
+    currentFolderRemoteId: toIntOrNull(raw.currentFolderRemoteId),
+    currentPage: Math.max(1, toInt(raw.currentPage, 1)),
+    resumePageByFolder,
+    invalidVideosDetected: Math.max(
+      invalidVideoIds.length,
+      toInt(raw.invalidVideosDetected, 0)
+    ),
+    invalidVideoIds,
+    summary: normalizeFavoritesSyncSummary(raw.summary),
+    errors: normalizeFavoritesSyncErrors(raw.errors),
+    unresolvedItems: normalizeFavoritesSyncUnresolvedItems(raw.unresolvedItems),
+    incompleteFolders: normalizeFavoritesSyncIncompleteFolders(raw.incompleteFolders)
+  };
+}
+
+function normalizeSelectedRemoteFolderIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.map((id) => toInt(id)).filter((id) => id > 0))
+  ).sort((left, right) => left - right);
+}
+
+function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobMeta {
+  const raw = value && typeof value === "object"
+    ? value as {
+        active?: unknown;
+        lastStatus?: unknown;
+        deletionCandidatesByFolder?: unknown;
+      }
+    : {};
+  const lastStatus = normalizeFavoritesSyncStatus(raw.lastStatus);
+  const deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+    raw.deletionCandidatesByFolder
+  );
+  if (!raw.active || typeof raw.active !== "object") {
+    return { active: null, lastStatus, deletionCandidatesByFolder };
+  }
+
+  const activeRaw = raw.active as Partial<FavoritesSyncJob>;
+  const id = normalizeText(activeRaw.id);
+  if (!id) return { active: null, lastStatus, deletionCandidatesByFolder };
+
+  const currentFolderRemoteId = toIntOrNull(activeRaw.currentFolderRemoteId);
+  const nextPageRaw = Math.max(1, toInt(activeRaw.nextPage, 1));
+  const rawSeen = activeRaw.seenBvidKeysByFolder &&
+    typeof activeRaw.seenBvidKeysByFolder === "object"
+    ? activeRaw.seenBvidKeysByFolder as Record<string, unknown>
+    : {};
+  const seenBvidKeysByFolder = normalizeBvidKeysByFolder(rawSeen);
+
+  let nextPage = currentFolderRemoteId && currentFolderRemoteId > 0
+    ? nextPageRaw
+    : 1;
+  if (
+    currentFolderRemoteId &&
+    nextPage > 1 &&
+    !Array.isArray(rawSeen[String(currentFolderRemoteId)])
+  ) {
+    nextPage = 1;
+    seenBvidKeysByFolder[String(currentFolderRemoteId)] = [];
+  }
+
+  const phase: FavoritesSyncJobPhase =
+    activeRaw.phase === "running" ||
+    activeRaw.phase === "failed" ||
+    activeRaw.phase === "waiting" ||
+    activeRaw.phase === "paused"
+      ? activeRaw.phase
+      : "paused";
+  const invalidVideoIds = Array.isArray(activeRaw.invalidVideoIds)
+    ? Array.from(new Set(activeRaw.invalidVideoIds.map((id) => toInt(id)).filter((id) => id > 0)))
+    : [];
+  const retryRaw = activeRaw.retry && typeof activeRaw.retry === "object"
+    ? activeRaw.retry as Partial<FavoritesSyncRetryState>
+    : {};
+  const active: FavoritesSyncJob = {
+    id,
+    phase: phase === "running" ? "paused" : phase,
+    selectedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      activeRaw.selectedRemoteFolderIds
+    ),
+    currentFolderRemoteId:
+      currentFolderRemoteId && currentFolderRemoteId > 0
+        ? currentFolderRemoteId
+        : null,
+    currentFolderTitle: normalizeText(activeRaw.currentFolderTitle),
+    currentFolderIndex: Math.max(0, toInt(activeRaw.currentFolderIndex, 0)),
+    folderTotal: Math.max(0, toInt(activeRaw.folderTotal, 0)),
+    nextPage,
+    seenBvidKeysByFolder,
+    observedRowCountByFolder: normalizeCountByFolder(activeRaw.observedRowCountByFolder),
+    deletionCandidatesByFolder: normalizeBvidKeysByFolder(
+      activeRaw.deletionCandidatesByFolder
+    ),
+    completedRemoteFolderIds: normalizeSelectedRemoteFolderIds(
+      activeRaw.completedRemoteFolderIds
+    ),
+    startedAt: Math.max(0, toInt(activeRaw.startedAt, 0)),
+    updatedAt: Math.max(0, toInt(activeRaw.updatedAt, 0)),
+    total: Math.max(0, toInt(activeRaw.total, 0)),
+    current: Math.max(0, toInt(activeRaw.current, 0)),
+    summary: normalizeFavoritesSyncSummary(activeRaw.summary),
+    invalidVideoIds,
+    errors: normalizeFavoritesSyncErrors(activeRaw.errors),
+    unresolvedItems: normalizeFavoritesSyncUnresolvedItems(activeRaw.unresolvedItems),
+    incompleteFolders: normalizeFavoritesSyncIncompleteFolders(
+      activeRaw.incompleteFolders
+    ),
+    riskBlocked: Boolean(activeRaw.riskBlocked),
+    lastError: normalizeText(activeRaw.lastError) || null,
+    retry: {
+      attempt: Math.max(0, toInt(retryRaw.attempt, 0)),
+      nextRetryAt: toIntOrNull(retryRaw.nextRetryAt),
+      automatic: Boolean(retryRaw.automatic),
+      reason: normalizeText(retryRaw.reason) || null,
+      riskCount: Math.max(0, toInt(retryRaw.riskCount, 0))
+    }
+  };
+  if (Object.keys(active.deletionCandidatesByFolder).length === 0) {
+    active.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+      deletionCandidatesByFolder
+    );
+  }
+  return { active, lastStatus, deletionCandidatesByFolder };
+}
+
+function defaultFavoritesSyncJobMeta(): FavoritesSyncJobMeta {
+  return normalizeFavoritesSyncJobMeta();
+}
+
+function createFavoritesSyncJob(
+  selectedRemoteFolderIds: number[],
+  startedAt = now()
+): FavoritesSyncJob {
+  const selected = normalizeSelectedRemoteFolderIds(selectedRemoteFolderIds);
+  const stamp = Math.max(0, toInt(startedAt, now()));
+  return {
+    id: `favorites-${stamp}-${selected.join("-") || "all"}`,
+    phase: "running",
+    selectedRemoteFolderIds: selected,
+    currentFolderRemoteId: null,
+    currentFolderTitle: "",
+    currentFolderIndex: 0,
+    folderTotal: 0,
+    nextPage: 1,
+    seenBvidKeysByFolder: {},
+    observedRowCountByFolder: {},
+    deletionCandidatesByFolder: {},
+    completedRemoteFolderIds: [],
+    startedAt: stamp,
+    updatedAt: stamp,
+    total: 0,
+    current: 0,
+    summary: emptyFavoritesSyncSummary(),
+    invalidVideoIds: [],
+    errors: [],
+    unresolvedItems: [],
+    incompleteFolders: [],
+    riskBlocked: false,
+    lastError: null,
+    retry: {
+      attempt: 0,
+      nextRetryAt: null,
+      automatic: false,
+      reason: null,
+      riskCount: 0
+    }
+  };
+}
+
+function equalRemoteFolderSelection(left: number[], right: number[]) {
+  const normalizedLeft = normalizeSelectedRemoteFolderIds(left);
+  const normalizedRight = normalizeSelectedRemoteFolderIds(right);
+  return normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((id, index) => id === normalizedRight[index]);
+}
+
+function prepareFavoritesSyncJob(
+  meta: FavoritesSyncJobMeta,
+  selectedRemoteFolderIds: number[],
+  startedAt = now()
+) {
+  const selected = normalizeSelectedRemoteFolderIds(selectedRemoteFolderIds);
+  if (meta.active && equalRemoteFolderSelection(
+    meta.active.selectedRemoteFolderIds,
+    selected
+  )) {
+    meta.active.phase = "running";
+    meta.active.updatedAt = Math.max(0, toInt(startedAt, now()));
+    meta.active.riskBlocked = false;
+    meta.active.retry.automatic = false;
+    meta.active.retry.nextRetryAt = null;
+    return meta.active;
+  }
+  meta.active = createFavoritesSyncJob(selected, startedAt);
+  meta.active.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+    meta.deletionCandidatesByFolder
+  );
+  return meta.active;
+}
+
+function statusFromFavoritesSyncJob(
+  job: FavoritesSyncJob,
+  running = false,
+  finishedAt: number | null = null
+): FavoritesSyncStatus {
+  const resumePageByFolder: Record<string, number> = {};
+  if (job.currentFolderRemoteId && job.nextPage > 1) {
+    resumePageByFolder[String(job.currentFolderRemoteId)] = job.nextPage;
+  }
+  return {
+    running,
+    startedAt: job.startedAt || null,
+    finishedAt,
+    total: job.total,
+    current: job.current,
+    folderTitle: job.currentFolderTitle,
+    folderIndex: job.currentFolderIndex,
+    folderTotal: job.folderTotal,
+    message: running
+      ? job.currentFolderTitle
+        ? `Syncing: ${job.currentFolderTitle}`
+        : "Starting favorites sync..."
+      : job.riskBlocked
+        ? "Favorites sync paused"
+        : job.phase === "waiting"
+          ? "Favorites sync waiting to retry"
+        : job.phase === "failed"
+          ? "Favorites sync failed"
+          : "Favorites sync paused",
+    lastError: job.lastError,
+    riskBlocked: job.riskBlocked,
+    phase: running ? "running" : job.phase,
+    nextRetryAt: job.retry.nextRetryAt,
+    retryAutomatic: job.retry.automatic,
+    retryReason: job.retry.reason,
+    retryAttempt: job.retry.attempt,
+    riskCount: job.retry.riskCount,
+    selectedRemoteFolderIds: [...job.selectedRemoteFolderIds],
+    completedRemoteFolderIds: [...job.completedRemoteFolderIds],
+    currentFolderRemoteId: job.currentFolderRemoteId,
+    currentPage: Math.max(1, job.nextPage),
+    resumePageByFolder,
+    invalidVideosDetected: job.invalidVideoIds.length,
+    invalidVideoIds: [...job.invalidVideoIds],
+    summary: { ...job.summary },
+    errors: job.errors.slice(-30),
+    unresolvedItems: job.unresolvedItems.slice(-100),
+    incompleteFolders: job.incompleteFolders.slice(-100)
+  };
+}
+
+function completeFavoritesSyncJob(
+  meta: FavoritesSyncJobMeta,
+  job: FavoritesSyncJob,
+  finishedAt = now()
+) {
+  meta.deletionCandidatesByFolder = normalizeBvidKeysByFolder(
+    job.deletionCandidatesByFolder
+  );
+  job.retry = {
+    attempt: 0,
+    nextRetryAt: null,
+    automatic: false,
+    reason: null,
+    riskCount: 0
+  };
+  meta.lastStatus = {
+    ...statusFromFavoritesSyncJob(job, false, finishedAt),
+    message: "Favorites sync completed",
+    phase: "completed",
+    nextRetryAt: null,
+    retryAutomatic: false
+  };
+  meta.active = null;
+  return meta.lastStatus;
+}
 
 const defaultInvalidVideoRecoveryStatus = (): InvalidVideoRecoveryStatus => ({
   running: false,
@@ -484,13 +1329,18 @@ function defaultFollowingUpImportStatus(): FollowingUpImportStatus {
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
+let cachedState: LocalState | null = null;
+let stateRevision = 0;
+let cachedIndexes: { revision: number; value: LocalStateIndexes } | null = null;
+const videoQueryResultCache = new Map<string, { revision: number; ids: number[] }>();
 let stateQueue: Promise<void> = Promise.resolve();
 let tagEnrichmentTask: Promise<void> | null = null;
+let tagEnrichmentStopRequested = false;
 let biliCookieHeaderCache: { value: string; expiresAt: number } | null = null;
 let nextBiliRequestAt = 0;
 let biliRequestThrottleQueue: Promise<void> = Promise.resolve();
 let favoritesSyncTask: Promise<void> | null = null;
-let favoritesSyncStatus: FavoritesSyncStatus = defaultFavoritesSyncStatus();
+let favoritesSyncStartPending = false;
 let invalidVideoRecoveryTask: Promise<void> | null = null;
 let invalidVideoRecoveryStatus: InvalidVideoRecoveryStatus =
   defaultInvalidVideoRecoveryStatus();
@@ -500,6 +1350,12 @@ let followingUpImportStatus: FollowingUpImportStatus =
 let stage3ReconcileTask: Promise<void> | null = null;
 let folderAiCategoryTask: Promise<unknown> | null = null;
 let folderAiCategoryFolderId: number | null = null;
+let aiOrganizerTask: Promise<void> | null = null;
+let aiOrganizerRequestAbortController: AbortController | null = null;
+let aiOrganizerStartPending = false;
+let aiOrganizerApplyPending = false;
+let aiOrganizerQueue: Promise<void> = Promise.resolve();
+let cachedAiOrganizerTask: AiOrganizerTaskRecord | null | undefined;
 
 function now() {
   return Date.now();
@@ -579,7 +1435,113 @@ function openDatabase() {
   return dbPromise;
 }
 
+function cloneStoredValue<T>(value: T): T {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function readStoredValue<T>(key: string): Promise<T | null> {
+  const db = await openDatabase();
+  return new Promise<T | null>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const request = tx.objectStore(STORE_NAME).get(key);
+    request.onsuccess = () => {
+      const record = request.result as { key: string; value: T } | undefined;
+      resolve(record?.value ?? null);
+    };
+    request.onerror = () => reject(request.error || new Error(`Read ${key} failed`));
+  });
+}
+
+async function writeStoredValues(records: Array<{ key: string; value: unknown }>) {
+  const db = await openDatabase();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    for (const record of records) store.put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB write failed"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB write was aborted"));
+  });
+}
+
+async function deleteStoredValue(key: string) {
+  const db = await openDatabase();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error(`Delete ${key} failed`));
+    tx.onabort = () => reject(tx.error || new Error(`Delete ${key} was aborted`));
+  });
+}
+
+async function writeStateAndStoredValue(
+  state: LocalState,
+  key: string,
+  value: unknown,
+) {
+  const db = await openDatabase();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.put({ key: STATE_KEY, value: state });
+    store.put({ key, value });
+    tx.oncomplete = () => {
+      cachedState = state;
+      stateRevision += 1;
+      cachedIndexes = null;
+      videoQueryResultCache.clear();
+      resolve();
+    };
+    tx.onerror = () => reject(tx.error || new Error("Library transaction failed"));
+    tx.onabort = () => reject(tx.error || new Error("Library transaction was aborted"));
+  });
+}
+
+function normalizeStoredFavoriteComment(
+  raw: unknown,
+  fallbackId: number,
+): FavoriteCommentRecord | null {
+  try {
+    const source = (raw ?? {}) as Partial<FavoriteCommentRecord>;
+    const timestamp = now();
+    const normalized = normalizeFavoriteComment(source, timestamp);
+    const savedAt = Math.max(0, toInt(source.savedAt, timestamp));
+    return {
+      ...normalized,
+      id: Math.max(1, toInt(source.id, fallbackId)),
+      savedAt,
+      updatedAt: Math.max(savedAt, toInt(source.updatedAt, savedAt)),
+      deletedAt: toIntOrNull(source.deletedAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStoredArticleFolder(
+  raw: unknown,
+  fallbackId: number,
+): ArticleFolderRecord | null {
+  const source = (raw ?? {}) as Partial<ArticleFolderRecord>;
+  const name = normalizeText(source.name);
+  if (!name) return null;
+  const id = Math.max(1, toInt(source.id, fallbackId));
+  const createdAt = Math.max(0, toInt(source.createdAt, now()));
+  return {
+    id,
+    name,
+    description: normalizeText(source.description) || null,
+    sortOrder: Math.max(1, toInt(source.sortOrder, fallbackId)),
+    deletedAt: toIntOrNull(source.deletedAt),
+    createdAt,
+    updatedAt: Math.max(createdAt, toInt(source.updatedAt, createdAt)),
+  };
+}
+
 async function readState() {
+  if (cachedState) return cachedState;
   const db = await openDatabase();
   return new Promise<LocalState>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
@@ -589,19 +1551,93 @@ async function readState() {
     request.onsuccess = () => {
       const record = request.result as { key: string; value: LocalState } | undefined;
       if (!record?.value) {
-        resolve(defaultState());
+        cachedState = defaultState();
+        stateRevision += 1;
+        resolve(cachedState);
         return;
       }
 
       const raw = record.value as Partial<LocalState>;
       const base = defaultState();
+      const comments = (raw.comments ?? [])
+        .map((comment, index) => normalizeStoredFavoriteComment(comment, index + 1))
+        .filter((comment): comment is FavoriteCommentRecord => Boolean(comment));
+      const nextCommentId = comments.reduce(
+        (maximum, comment) => Math.max(maximum, comment.id + 1),
+        1,
+      );
+      const hasStoredArticleFolders = Object.prototype.hasOwnProperty.call(
+        raw,
+        "articleFolders",
+      );
+      let articleFolders = (raw.articleFolders ?? [])
+        .map((folder, index) => normalizeStoredArticleFolder(folder, index + 1))
+        .filter((folder): folder is ArticleFolderRecord => Boolean(folder));
+      if (!hasStoredArticleFolders) {
+        const legacyFolderIds = new Set(
+          (raw.articles ?? []).flatMap((article) =>
+            Array.isArray(article.folderIds)
+              ? article.folderIds.map((id) => toInt(id)).filter((id) => id > 0)
+              : [],
+          ),
+        );
+        articleFolders = (raw.folders ?? [])
+          .filter((folder) => legacyFolderIds.has(toInt(folder.id)))
+          .map((folder, index) =>
+            normalizeStoredArticleFolder(
+              {
+                id: toInt(folder.id),
+                name: folder.name,
+                description: folder.description,
+                sortOrder: index + 1,
+                deletedAt: null,
+                createdAt: folder.createdAt,
+                updatedAt: folder.updatedAt,
+              },
+              index + 1,
+            ),
+          )
+          .filter((folder): folder is ArticleFolderRecord => Boolean(folder));
+      }
+      const articleFolderIds = new Set(
+        articleFolders.filter((folder) => folder.deletedAt === null).map((folder) => folder.id),
+      );
+      const articles = (raw.articles ?? [])
+        .map((article, index) => {
+          const normalizedArticle = normalizeStoredFavoriteArticle(article, index + 1, now());
+          return normalizedArticle
+            ? {
+                ...normalizedArticle,
+                deletedAt: toIntOrNull((article as Partial<FavoriteArticleRecord>).deletedAt),
+              }
+            : null;
+        })
+        .map((article) =>
+          article
+            ? {
+                ...article,
+                folderIds: article.folderIds.filter((id) => articleFolderIds.has(id)),
+              }
+            : article,
+        )
+        .filter((article): article is FavoriteArticleRecord => Boolean(article));
+      const nextArticleId = articles.reduce(
+        (maximum, article) => Math.max(maximum, article.id + 1),
+        1,
+      );
       const normalized: LocalState = {
         counters: {
           folder: raw.counters?.folder ?? base.counters.folder,
+          articleFolder: Math.max(
+            raw.counters?.articleFolder ?? 1,
+            articleFolders.reduce((maximum, folder) => Math.max(maximum, folder.id + 1), 1),
+          ),
           video: raw.counters?.video ?? base.counters.video,
           folderItem: raw.counters?.folderItem ?? base.counters.folderItem,
           tag: raw.counters?.tag ?? base.counters.tag,
-          videoTag: raw.counters?.videoTag ?? base.counters.videoTag
+          videoTag: raw.counters?.videoTag ?? base.counters.videoTag,
+          comment: Math.max(raw.counters?.comment ?? 1, nextCommentId),
+          article: Math.max(raw.counters?.article ?? 1, nextArticleId)
         },
         folders: (raw.folders ?? []).map((folder) => ({
           ...folder,
@@ -610,6 +1646,7 @@ async function readState() {
               ? null
               : toInt(folder.remoteMediaId)
         })),
+        articleFolders,
         videos: (raw.videos ?? []).map((video) => ({
           ...video,
           partition: normalizeVideoPartition((video as Partial<VideoRecord>).partition),
@@ -642,18 +1679,14 @@ async function readState() {
             toInt((item as Partial<FollowedUpRecord>).updatedAt, 0)
           ),
         })).filter((item) => item.uid > 0 && item.name),
+        comments,
+        articles,
         syncMeta: {
-          tagEnrichment: {
-            paused: Boolean(raw.syncMeta?.tagEnrichment?.paused),
-            cursorAfterVideoId: toInt(raw.syncMeta?.tagEnrichment?.cursorAfterVideoId, 0),
-            totalMissing: toInt(raw.syncMeta?.tagEnrichment?.totalMissing, 0),
-            lastBatchProcessed: toInt(raw.syncMeta?.tagEnrichment?.lastBatchProcessed, 0),
-            lastBatchBound: toInt(raw.syncMeta?.tagEnrichment?.lastBatchBound, 0),
-            lastRunAt: toIntOrNull(raw.syncMeta?.tagEnrichment?.lastRunAt),
-            lastError: normalizeText(raw.syncMeta?.tagEnrichment?.lastError) || null
-          },
+          tagEnrichment: normalizeTagEnrichmentMeta(raw.syncMeta?.tagEnrichment),
           bidirectionalSync: {
-            biliToLocalEnabled: Boolean(raw.syncMeta?.bidirectionalSync?.biliToLocalEnabled),
+            biliToLocalEnabled: normalizeBiliToLocalEnabled(
+              raw.syncMeta?.bidirectionalSync?.biliToLocalEnabled
+            ),
             localToBiliEnabled: false,
             updatedAt: toInt(
               raw.syncMeta?.bidirectionalSync?.updatedAt,
@@ -692,41 +1725,17 @@ async function readState() {
             lastRunAt: toIntOrNull(raw.syncMeta?.stage3Reconcile?.lastRunAt),
             lastError: normalizeText(raw.syncMeta?.stage3Reconcile?.lastError) || null,
             lastRemoteMediaId: toIntOrNull(raw.syncMeta?.stage3Reconcile?.lastRemoteMediaId),
-            lastSummary: {
-              foldersDetected: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.foldersDetected, 0)
-              ),
-              foldersSynced: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.foldersSynced, 0)
-              ),
-              videosProcessed: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.videosProcessed, 0)
-              ),
-              videosUpserted: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.videosUpserted, 0)
-              ),
-              folderLinksAdded: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.folderLinksAdded, 0)
-              ),
-              tagsBound: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.tagsBound, 0)
-              ),
-              errorCount: Math.max(
-                0,
-                toInt(raw.syncMeta?.stage3Reconcile?.lastSummary?.errorCount, 0)
-              )
-            }
-          }
+            lastSummary: normalizeFavoritesSyncSummary(
+              raw.syncMeta?.stage3Reconcile?.lastSummary
+            )
+          },
+          favoritesJob: normalizeFavoritesSyncJobMeta(raw.syncMeta?.favoritesJob)
         },
         ai: normalizeAiState(raw.ai, base.ai.updatedAt)
       };
-      resolve(normalized);
+      cachedState = normalized;
+      stateRevision += 1;
+      resolve(cachedState);
     };
     request.onerror = () => reject(request.error || new Error("Read state failed"));
   });
@@ -737,10 +1746,17 @@ async function writeState(state: LocalState) {
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
-    const request = store.put({ key: STATE_KEY, value: state });
+    store.put({ key: STATE_KEY, value: state });
 
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error || new Error("Write state failed"));
+    tx.oncomplete = () => {
+      cachedState = state;
+      stateRevision += 1;
+      cachedIndexes = null;
+      videoQueryResultCache.clear();
+      resolve();
+    };
+    tx.onerror = () => reject(tx.error || new Error("Write state failed"));
+    tx.onabort = () => reject(tx.error || new Error("Write state was aborted"));
   });
 }
 
@@ -829,6 +1845,185 @@ function ensureVideoTag(state: LocalState, videoId: number, tagId: number) {
   });
 }
 
+function emptyVideoTagSummary(): VideoTagSummary {
+  return {
+    tags: [],
+    systemTags: [],
+    customTags: []
+  };
+}
+
+function buildLocalStateIndexes(state: LocalState): LocalStateIndexes {
+  const activeFoldersById = new Map<number, FolderRecord>();
+  for (const folder of state.folders) {
+    if (folder.deletedAt === null) {
+      activeFoldersById.set(folder.id, folder);
+    }
+  }
+
+  const activeVideoIds = new Set<number>();
+  const videosById = new Map<number, VideoRecord>();
+  for (const video of state.videos) {
+    videosById.set(video.id, video);
+    if (video.deletedAt === null) {
+      activeVideoIds.add(video.id);
+    }
+  }
+
+  const folderItemsByVideoId = new Map<number, FolderItemRecord[]>();
+  const activeFolderIdsByVideoId = new Map<number, Set<number>>();
+  const activeFolderItemCountByFolderId = new Map<number, number>();
+  const activeAddedAtByVideoId = new Map<number, number>();
+  const activeAddedAtByFolderAndVideoId = new Map<number, Map<number, number>>();
+  for (const item of state.folderItems) {
+    const existingItems = folderItemsByVideoId.get(item.videoId);
+    if (existingItems) {
+      existingItems.push(item);
+    } else {
+      folderItemsByVideoId.set(item.videoId, [item]);
+    }
+
+    if (!activeFoldersById.has(item.folderId)) continue;
+
+    let folderIds = activeFolderIdsByVideoId.get(item.videoId);
+    if (!folderIds) {
+      folderIds = new Set<number>();
+      activeFolderIdsByVideoId.set(item.videoId, folderIds);
+    }
+    folderIds.add(item.folderId);
+
+    if (activeVideoIds.has(item.videoId)) {
+      activeFolderItemCountByFolderId.set(
+        item.folderId,
+        (activeFolderItemCountByFolderId.get(item.folderId) ?? 0) + 1
+      );
+      activeAddedAtByVideoId.set(
+        item.videoId,
+        Math.max(activeAddedAtByVideoId.get(item.videoId) ?? 0, item.addedAt)
+      );
+      let folderAddedAt = activeAddedAtByFolderAndVideoId.get(item.folderId);
+      if (!folderAddedAt) {
+        folderAddedAt = new Map<number, number>();
+        activeAddedAtByFolderAndVideoId.set(item.folderId, folderAddedAt);
+      }
+      folderAddedAt.set(
+        item.videoId,
+        Math.max(folderAddedAt.get(item.videoId) ?? 0, item.addedAt)
+      );
+    }
+  }
+
+  const activeTagsById = new Map<number, TagRecord>();
+  for (const tag of state.tags) {
+    if (tag.archivedAt === null) {
+      activeTagsById.set(tag.id, tag);
+    }
+  }
+
+  const tagSetsByVideoId = new Map<
+    number,
+    { tags: Set<string>; systemTags: Set<string>; customTags: Set<string> }
+  >();
+  for (const edge of state.videoTags) {
+    const tag = activeTagsById.get(edge.tagId);
+    if (!tag) continue;
+
+    let summary = tagSetsByVideoId.get(edge.videoId);
+    if (!summary) {
+      summary = {
+        tags: new Set<string>(),
+        systemTags: new Set<string>(),
+        customTags: new Set<string>()
+      };
+      tagSetsByVideoId.set(edge.videoId, summary);
+    }
+
+    summary.tags.add(tag.name);
+    if (tag.type === "system") {
+      summary.systemTags.add(tag.name);
+    } else {
+      summary.customTags.add(tag.name);
+    }
+  }
+
+  const tagSummaryByVideoId = new Map<number, VideoTagSummary>();
+  for (const [videoId, summary] of tagSetsByVideoId) {
+    tagSummaryByVideoId.set(videoId, {
+      tags: Array.from(summary.tags),
+      systemTags: Array.from(summary.systemTags),
+      customTags: Array.from(summary.customTags)
+    });
+  }
+
+  const compareVideoIds = (leftId: number, rightId: number, folderId?: number) => {
+    const left = videosById.get(leftId);
+    const right = videosById.get(rightId);
+    const folderAddedAt =
+      folderId === undefined
+        ? null
+        : activeAddedAtByFolderAndVideoId.get(folderId) ?? null;
+    const leftRank =
+      (folderAddedAt?.get(leftId) ?? activeAddedAtByVideoId.get(leftId) ?? 0) ||
+      left?.updatedAt ||
+      0;
+    const rightRank =
+      (folderAddedAt?.get(rightId) ?? activeAddedAtByVideoId.get(rightId) ?? 0) ||
+      right?.updatedAt ||
+      0;
+    return rightRank - leftRank || rightId - leftId;
+  };
+
+  const sortedActiveVideoIds = Array.from(activeVideoIds)
+    .filter((videoId) => (activeFolderIdsByVideoId.get(videoId)?.size ?? 0) > 0)
+    .sort((leftId, rightId) => compareVideoIds(leftId, rightId));
+  const sortedDeletedVideoIds = state.videos
+    .filter((video) => video.deletedAt !== null)
+    .sort(
+      (left, right) =>
+        (right.deletedAt ?? 0) - (left.deletedAt ?? 0) || right.id - left.id
+    )
+    .map((video) => video.id);
+  const sortedActiveVideoIdsByFolderId = new Map<number, number[]>();
+  for (const [folderId, addedAtByVideoId] of activeAddedAtByFolderAndVideoId) {
+    sortedActiveVideoIdsByFolderId.set(
+      folderId,
+      Array.from(addedAtByVideoId.keys()).sort((leftId, rightId) =>
+        compareVideoIds(leftId, rightId, folderId)
+      )
+    );
+  }
+
+  return {
+    activeFoldersById,
+    activeVideoIds,
+    videosById,
+    folderItemsByVideoId,
+    activeFolderIdsByVideoId,
+    activeFolderItemCountByFolderId,
+    tagSummaryByVideoId,
+    sortedActiveVideoIds,
+    sortedDeletedVideoIds,
+    sortedActiveVideoIdsByFolderId
+  };
+}
+
+function activeArticleFolders(state: LocalState) {
+  return (state.articleFolders ?? [])
+    .filter((folder) => folder.deletedAt === null)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
+}
+
+function getLocalStateIndexes(state: LocalState) {
+  if (state === cachedState && cachedIndexes?.revision === stateRevision) {
+    return cachedIndexes.value;
+  }
+  const value = buildLocalStateIndexes(state);
+  if (state === cachedState) {
+    cachedIndexes = { revision: stateRevision, value };
+  }
+  return value;
+}
+
 function getTagSummaryForVideo(state: LocalState, videoId: number) {
   const links = state.videoTags.filter((edge) => edge.videoId === videoId);
   const tags = links
@@ -845,10 +2040,13 @@ function getTagSummaryForVideo(state: LocalState, videoId: number) {
   };
 }
 
-function computeAddedAt(state: LocalState, videoId: number, folderId?: number) {
-  const related = state.folderItems.filter((item) => item.videoId === videoId);
-  const active = related.filter((item) => {
-    const folder = state.folders.find((row) => row.id === item.folderId);
+function computeAddedAtFromItems(
+  items: FolderItemRecord[],
+  activeFoldersById: Map<number, FolderRecord>,
+  folderId?: number
+) {
+  const active = items.filter((item) => {
+    const folder = activeFoldersById.get(item.folderId);
     if (!folder || folder.deletedAt !== null) return false;
     if (folderId !== undefined && folder.id !== folderId) return false;
     return true;
@@ -858,34 +2056,97 @@ function computeAddedAt(state: LocalState, videoId: number, folderId?: number) {
   return active.reduce((max, item) => Math.max(max, item.addedAt), 0);
 }
 
-function mapVideo(state: LocalState, video: VideoRecord, folderId?: number) {
-  const tagSummary = getTagSummaryForVideo(state, video.id);
+function computeAddedAt(state: LocalState, videoId: number, folderId?: number) {
+  const indexes = getLocalStateIndexes(state);
+  return computeAddedAtFromItems(
+    indexes.folderItemsByVideoId.get(videoId) ?? [],
+    indexes.activeFoldersById,
+    folderId
+  );
+}
+
+function mapVideo(
+  state: LocalState,
+  video: VideoRecord,
+  folderId?: number,
+  indexes?: LocalStateIndexes
+) {
+  const tagSummary =
+    indexes?.tagSummaryByVideoId.get(video.id) ??
+    (indexes ? emptyVideoTagSummary() : getTagSummaryForVideo(state, video.id));
+  const addedAt = indexes
+    ? computeAddedAtFromItems(
+        indexes.folderItemsByVideoId.get(video.id) ?? [],
+        indexes.activeFoldersById,
+        folderId
+      )
+    : computeAddedAt(state, video.id, folderId);
   return {
     ...video,
     bvid: normalizeOutputBvid(video.bvid),
-    addedAt: computeAddedAt(state, video.id, folderId),
+    addedAt,
     tags: tagSummary.tags,
     systemTags: tagSummary.systemTags,
     customTags: tagSummary.customTags
   };
 }
 
-function filterVideoList(
-  state: LocalState,
-  args: {
-    includeDeleted: boolean;
-    folderId?: number;
-    tags?: string[];
-    q?: string;
-    title?: string;
-    description?: string;
-    uploader?: string;
-    customTag?: string;
-    systemTag?: string;
-    from?: number | null;
-    to?: number | null;
+function hasVideoFilters(args: VideoListArgs) {
+  return Boolean(
+    args.tags?.length ||
+      normalizeText(args.q) ||
+      normalizeText(args.title) ||
+      normalizeText(args.description) ||
+      normalizeText(args.uploader) ||
+      normalizeText(args.customTag) ||
+      normalizeText(args.systemTag) ||
+      args.from !== null && args.from !== undefined ||
+      args.to !== null && args.to !== undefined
+  );
+}
+
+function getBaseVideoIds(args: VideoListArgs, indexes: LocalStateIndexes) {
+  if (args.includeDeleted) return indexes.sortedDeletedVideoIds;
+  if (args.folderId !== undefined) {
+    return indexes.sortedActiveVideoIdsByFolderId.get(args.folderId) ?? [];
   }
+  return indexes.sortedActiveVideoIds;
+}
+
+function buildVideoQueryCacheKey(args: VideoListArgs) {
+  return JSON.stringify({
+    includeDeleted: args.includeDeleted,
+    folderId: args.folderId ?? null,
+    tags: (args.tags ?? []).map((item) => normalizeKey(item)).filter(Boolean).sort(),
+    q: normalizeKey(args.q),
+    title: normalizeKey(args.title),
+    description: normalizeKey(args.description),
+    uploader: normalizeKey(args.uploader),
+    customTag: normalizeKey(args.customTag),
+    systemTag: normalizeKey(args.systemTag),
+    from: args.from ?? null,
+    to: args.to ?? null
+  });
+}
+
+function getVideoIdsForQuery(
+  state: LocalState,
+  args: VideoListArgs,
+  indexes = getLocalStateIndexes(state)
 ) {
+  const baseIds = getBaseVideoIds(args, indexes);
+  if (!hasVideoFilters(args)) return baseIds;
+
+  const cacheKey = buildVideoQueryCacheKey(args);
+  if (state === cachedState) {
+    const cached = videoQueryResultCache.get(cacheKey);
+    if (cached?.revision === stateRevision) {
+      videoQueryResultCache.delete(cacheKey);
+      videoQueryResultCache.set(cacheKey, cached);
+      return cached.ids;
+    }
+  }
+
   const requiredTags = (args.tags || []).map((item) => normalizeKey(item)).filter(Boolean);
   const qKeyword = normalizeText(args.q);
   const titleKeyword = normalizeText(args.title);
@@ -894,22 +2155,12 @@ function filterVideoList(
   const customTagKeyword = normalizeText(args.customTag);
   const systemTagKeyword = normalizeText(args.systemTag);
 
-  const rows = state.videos
-    .filter((video) => (args.includeDeleted ? video.deletedAt !== null : video.deletedAt === null))
-    .map((video) => mapVideo(state, video, args.folderId))
-    .filter((video) => {
-      const folderIds = state.folderItems
-        .filter((item) => item.videoId === video.id)
-        .map((item) => item.folderId);
-      const activeFolderIds = folderIds.filter((folderId) => {
-        const folder = state.folders.find((row) => row.id === folderId);
-        return !!folder && folder.deletedAt === null;
-      });
+  const ids = baseIds.filter((videoId) => {
+      const video = indexes.videosById.get(videoId);
+      if (!video) return false;
+      const tagSummary = indexes.tagSummaryByVideoId.get(videoId) ?? emptyVideoTagSummary();
 
-      if (!args.includeDeleted && activeFolderIds.length === 0) return false;
-      if (args.folderId !== undefined && !activeFolderIds.includes(args.folderId)) return false;
-
-      const allTags = video.tags || [];
+      const allTags = tagSummary.tags;
       if (
         requiredTags.length > 0 &&
         !requiredTags.every((keyword) =>
@@ -931,31 +2182,115 @@ function filterVideoList(
 
       if (
         customTagKeyword &&
-        !(video.customTags || []).some((tagName) => includesIgnoreCase(tagName, customTagKeyword))
+        !tagSummary.customTags.some((tagName) => includesIgnoreCase(tagName, customTagKeyword))
       ) {
         return false;
       }
 
       if (
         systemTagKeyword &&
-        !(video.systemTags || []).some((tagName) => includesIgnoreCase(tagName, systemTagKeyword))
+        !tagSummary.systemTags.some((tagName) => includesIgnoreCase(tagName, systemTagKeyword))
       ) {
         return false;
       }
 
-      const addedAt = video.addedAt ?? 0;
+      const addedAt =
+        computeAddedAtFromItems(
+          indexes.folderItemsByVideoId.get(videoId) ?? [],
+          indexes.activeFoldersById,
+          args.folderId
+        ) ?? 0;
       if (args.from !== null && args.from !== undefined && addedAt < args.from) return false;
       if (args.to !== null && args.to !== undefined && addedAt > args.to) return false;
 
       return true;
-    })
-    .sort((a, b) => {
-      const aRank = a.addedAt || a.updatedAt || 0;
-      const bRank = b.addedAt || b.updatedAt || 0;
-      return bRank - aRank;
     });
 
-  return rows;
+  if (state === cachedState) {
+    videoQueryResultCache.set(cacheKey, { revision: stateRevision, ids });
+    while (videoQueryResultCache.size > 20) {
+      const oldestKey = videoQueryResultCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      videoQueryResultCache.delete(oldestKey);
+    }
+  }
+  return ids;
+}
+
+function filterVideoList(state: LocalState, args: VideoListArgs) {
+  const indexes = getLocalStateIndexes(state);
+  return getVideoIdsForQuery(state, args, indexes)
+    .map((videoId) => indexes.videosById.get(videoId))
+    .filter((video): video is VideoRecord => Boolean(video))
+    .map((video) => mapVideo(state, video, args.folderId, indexes));
+}
+
+function queryVideoPage(
+  state: LocalState,
+  args: VideoListArgs,
+  pageRaw: string | null,
+  pageSizeRaw: string | null
+) {
+  const indexes = getLocalStateIndexes(state);
+  const ids = getVideoIdsForQuery(state, args, indexes);
+  const page = Math.max(1, toInt(pageRaw, 1));
+  const pageSize = Math.max(1, toInt(pageSizeRaw, 30));
+  const start = (page - 1) * pageSize;
+  const items = ids
+    .slice(start, start + pageSize)
+    .map((videoId) => indexes.videosById.get(videoId))
+    .filter((video): video is VideoRecord => Boolean(video))
+    .map((video) => mapVideo(state, video, args.folderId, indexes));
+  return {
+    items,
+    pagination: { page, pageSize, total: ids.length }
+  };
+}
+
+function listActiveFoldersWithCounts(state: LocalState, indexes = getLocalStateIndexes(state)) {
+  return activeFolders(state).map((folder) => ({
+    ...folder,
+    itemCount: indexes.activeFolderItemCountByFolderId.get(folder.id) ?? 0
+  }));
+}
+
+function listTagsWithUsageCounts(
+  state: LocalState,
+  args: {
+    page: string | null;
+    pageSize: string | null;
+    type: string | null;
+    search: string;
+  }
+) {
+  const indexes = getLocalStateIndexes(state);
+  const usageCountByTagId = new Map<number, Set<number>>();
+  for (const edge of state.videoTags) {
+    if (!indexes.activeVideoIds.has(edge.videoId)) continue;
+    let videoIds = usageCountByTagId.get(edge.tagId);
+    if (!videoIds) {
+      videoIds = new Set<number>();
+      usageCountByTagId.set(edge.tagId, videoIds);
+    }
+    videoIds.add(edge.videoId);
+  }
+
+  const items = state.tags
+    .filter((tag) => tag.archivedAt === null)
+    .filter((tag) =>
+      args.type === "system" || args.type === "custom" ? tag.type === args.type : true
+    )
+    .filter((tag) => (args.search ? includesIgnoreCase(tag.name, args.search) : true))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((tag) => ({
+      id: tag.id,
+      name: tag.name,
+      type: tag.type,
+      usageCount: usageCountByTagId.get(tag.id)?.size ?? 0,
+      createdAt: tag.createdAt
+    }));
+
+  return paginate(items, args.page, args.pageSize);
 }
 
 function getPlaybackStorageArea(storage?: StorageAreaLike) {
@@ -1191,6 +2526,21 @@ function toMillis(value: unknown, fallback: number) {
   return Math.trunc(parsed * 1000);
 }
 
+function resolveRemoteFavoriteAddedAt(
+  rawFavTime: unknown,
+  page: number,
+  pageSize: number,
+  indexInPage: number
+) {
+  const parsed = Number(rawFavTime);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed > 1e12 ? Math.trunc(parsed) : Math.trunc(parsed * 1000);
+  }
+
+  const remoteIndex = Math.max(0, (Math.max(1, page) - 1) * pageSize + indexInPage);
+  return REMOTE_FAVORITE_ORDER_FALLBACK_BASE_MS - remoteIndex;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1250,6 +2600,34 @@ function isRetryableStatus(status: number) {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function listActiveArticleFoldersWithCounts(state: LocalState) {
+  const activeIds = new Set(activeArticleFolders(state).map((folder) => folder.id));
+  const countByFolderId = new Map<number, number>();
+  for (const article of state.articles ?? []) {
+    if (article.deletedAt != null) continue;
+    for (const folderId of article.folderIds ?? []) {
+      if (!activeIds.has(folderId)) continue;
+      countByFolderId.set(folderId, (countByFolderId.get(folderId) ?? 0) + 1);
+    }
+  }
+  return activeArticleFolders(state).map((folder) => ({
+    ...folder,
+    itemCount: countByFolderId.get(folder.id) ?? 0,
+  }));
+}
+
+function parseRetryAfterMs(value: unknown, referenceTime = now()) {
+  const text = normalizeText(value);
+  if (!text) return null;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const target = Date.parse(text);
+  if (!Number.isFinite(target)) return null;
+  return Math.max(0, target - referenceTime);
+}
+
 function isRiskControlError(message: string) {
   const text = normalizeText(message);
   return text.includes("(412)") || text.includes(" 412");
@@ -1307,6 +2685,17 @@ type ImportVideoRow = {
   customTags: string[];
   systemTags: string[];
 };
+
+type ImportCommentRow = NormalizedFavoriteComment & {
+  savedAt: number;
+  updatedAt: number;
+};
+
+type ImportArticleRow = SharedFavoriteArticleRecord & {
+  folderNames: string[];
+};
+
+type ImportFollowedUpRow = NormalizedFollowedUpRecord;
 
 function uniqueTextList(items: unknown[]) {
   const seen = new Set<string>();
@@ -1383,7 +2772,11 @@ function parseCsvRows(content: string) {
 export function parseImportRows(format: "json" | "csv", content: string) {
   const nowTs = now();
   const rows: ImportVideoRow[] = [];
+  const comments: ImportCommentRow[] = [];
+  const articles: ImportArticleRow[] = [];
+  const followedUps: ImportFollowedUpRow[] = [];
   let skipped = 0;
+  let commentsSkipped = 0;
 
   const pushRow = (row: Partial<ImportVideoRow>) => {
     const bvid = normalizeText(row.bvid);
@@ -1415,12 +2808,24 @@ export function parseImportRows(format: "json" | "csv", content: string) {
     const parsed = JSON.parse(content) as Record<string, unknown>;
     const jsonVideos = Array.isArray(parsed?.videos) ? parsed.videos as Array<Record<string, unknown>> : [];
     const jsonFolders = Array.isArray(parsed?.folders) ? parsed.folders as Array<Record<string, unknown>> : [];
+    const jsonArticleFolders = Array.isArray(parsed?.articleFolders)
+      ? parsed.articleFolders as Array<Record<string, unknown>>
+      : [];
     const jsonFolderItems = Array.isArray(parsed?.folderItems)
       ? parsed.folderItems as Array<Record<string, unknown>>
       : [];
     const jsonTags = Array.isArray(parsed?.tags) ? parsed.tags as Array<Record<string, unknown>> : [];
     const jsonVideoTags = Array.isArray(parsed?.videoTags)
       ? parsed.videoTags as Array<Record<string, unknown>>
+      : [];
+    const jsonComments = Array.isArray(parsed?.comments)
+      ? parsed.comments as Array<Record<string, unknown>>
+      : [];
+    const jsonArticles = Array.isArray(parsed?.articles)
+      ? parsed.articles as Array<Record<string, unknown>>
+      : [];
+    const jsonFollowedUps = Array.isArray(parsed?.followedUps)
+      ? parsed.followedUps as Array<Record<string, unknown>>
       : [];
 
     const folderNameById = new Map<number, string>();
@@ -1429,6 +2834,59 @@ export function parseImportRows(format: "json" | "csv", content: string) {
       const name = normalizeText(folder.name);
       if (Number.isFinite(id) && id > 0 && name) {
         folderNameById.set(Math.trunc(id), name);
+      }
+    }
+    const articleFolderNameById = new Map<number, string>();
+    for (const folder of jsonArticleFolders) {
+      const id = Number(folder.id);
+      const name = normalizeText(folder.name);
+      if (Number.isFinite(id) && id > 0 && name) {
+        articleFolderNameById.set(Math.trunc(id), name);
+      }
+    }
+
+    for (const followedUp of jsonFollowedUps) {
+      const normalized = normalizeFollowedUpRecord(followedUp);
+      if (normalized) followedUps.push(normalized);
+    }
+
+    for (const comment of jsonComments) {
+      try {
+        const normalized = normalizeFavoriteComment(comment, nowTs);
+        const savedAt = parseTimestampInput(
+          comment.savedAt ?? comment.savedAtText,
+        ) ?? nowTs;
+        comments.push({
+          ...normalized,
+          savedAt,
+          updatedAt:
+            parseTimestampInput(comment.updatedAt ?? comment.updatedAtText) ??
+            savedAt,
+        });
+      } catch {
+        commentsSkipped += 1;
+      }
+    }
+
+    for (const article of jsonArticles) {
+      try {
+        const normalized = normalizeFavoriteArticle(article, nowTs);
+        const explicitFolderNames = Array.isArray(article.folders)
+          ? uniqueTextList(article.folders)
+          : [];
+        const folderNames = explicitFolderNames.length > 0
+          ? explicitFolderNames
+          : normalized.folderIds
+              .map(
+                (folderId) =>
+                  articleFolderNameById.get(folderId) ||
+                  folderNameById.get(folderId) ||
+                  "",
+              )
+              .filter(Boolean);
+        articles.push({ ...normalized, folderNames });
+      } catch {
+        // Ignore malformed article rows while preserving the rest of the backup.
       }
     }
 
@@ -1507,11 +2965,11 @@ export function parseImportRows(format: "json" | "csv", content: string) {
         systemTags: systemTagsByVideoId.get(key) ?? []
       });
     }
-    return { rows, skipped };
+    return { rows, skipped, comments, commentsSkipped, articles, followedUps };
   }
 
   const csvRows = parseCsvRows(content);
-  if (csvRows.length === 0) return { rows, skipped };
+  if (csvRows.length === 0) return { rows, skipped, comments, commentsSkipped, articles, followedUps };
   const [header, ...bodyRows] = csvRows;
   const indexByName = new Map<string, number>();
   header.forEach((name, idx) => indexByName.set(normalizeText(name), idx));
@@ -1544,7 +3002,7 @@ export function parseImportRows(format: "json" | "csv", content: string) {
       systemTags: parsePipeList(pick(row, "systemTags"))
     });
   }
-  return { rows, skipped };
+  return { rows, skipped, comments, commentsSkipped, articles, followedUps };
 }
 
 class BiliRequestError extends Error {
@@ -1552,6 +3010,7 @@ class BiliRequestError extends Error {
   stage: SyncFetchStage;
   source: FetchSource;
   url: string;
+  retryAfterMs: number | null;
 
   constructor(params: {
     status: number;
@@ -1559,6 +3018,7 @@ class BiliRequestError extends Error {
     source: FetchSource;
     url: string;
     message: string;
+    retryAfterMs?: number | null;
   }) {
     super(params.message);
     this.name = "BiliRequestError";
@@ -1566,6 +3026,7 @@ class BiliRequestError extends Error {
     this.stage = params.stage;
     this.source = params.source;
     this.url = params.url;
+    this.retryAfterMs = params.retryAfterMs ?? null;
   }
 }
 
@@ -1911,7 +3372,7 @@ async function fetchBiliJsonByExtension<T>(
   stage: SyncFetchStage,
   options: BiliExtensionRequestOptions = {}
 ): Promise<T> {
-  const maxAttempts = 3;
+  const maxAttempts = stage === "folderVideos" ? 1 : 3;
   let lastError: BiliRequestError | null = null;
   let manualCookieHeader = await getBiliCookieHeader();
   if (!manualCookieHeader) {
@@ -1954,6 +3415,7 @@ async function fetchBiliJsonByExtension<T>(
       );
 
       if (!response.ok) {
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
         if (response.status === 401 || response.status === 403) {
           // Login/session may have rotated, refresh cached cookie once.
           manualCookieHeader = await getBiliCookieHeader(true);
@@ -1964,7 +3426,8 @@ async function fetchBiliJsonByExtension<T>(
             stage,
             source: "extension",
             url,
-            message: `Bilibili API request failed (${response.status})`
+            message: `Bilibili API request failed (${response.status})`,
+            retryAfterMs
           });
         }
         if (attempt < maxAttempts && isRetryableStatus(response.status)) {
@@ -1977,14 +3440,15 @@ async function fetchBiliJsonByExtension<T>(
           stage,
           source: "extension",
           url,
-          message: `Bilibili API request failed (${response.status})`
+          message: `Bilibili API request failed (${response.status})`,
+          retryAfterMs
         });
       }
 
       const payload = (await response.json()) as BiliApiResponse<T>;
       if (payload.code !== 0) {
         throw new BiliRequestError({
-          status: response.status,
+          status: payload.code === -412 ? 412 : response.status,
           stage,
           source: "extension",
           url,
@@ -2107,7 +3571,7 @@ async function fetchRemoteFoldersFromBilibili(forceRefresh = false) {
       title: normalizeText(item.title),
       mediaCount: toInt((item as { media_count?: unknown }).media_count ?? 0, 0)
     }))
-    .filter((item) => item.remoteId > 0 && item.title && item.mediaCount > 0) as RemoteFolder[];
+    .filter((item) => item.remoteId > 0 && item.title) as RemoteFolder[];
   remoteFoldersCache = {
     items,
     expiresAt: nowTs + REMOTE_FOLDERS_CACHE_TTL_MS
@@ -2118,6 +3582,70 @@ async function fetchRemoteFoldersFromBilibili(forceRefresh = false) {
 function toAid(value: unknown) {
   const parsed = toInt(value, 0);
   return parsed > 0 ? parsed : 0;
+}
+
+async function resolveFavoriteMediaBvid(
+  media: Record<string, unknown>
+): Promise<{
+  bvid: string;
+  aid: number | null;
+  reason: string | null;
+  riskBlocked: boolean;
+  error?: unknown;
+}> {
+  const directBvid = normalizeText(media.bvid ?? media.bv_id);
+  const aid = toAid(media.id ?? media.aid);
+  if (directBvid) {
+    return {
+      bvid: directBvid,
+      aid: aid || null,
+      reason: null as string | null,
+      riskBlocked: false
+    };
+  }
+  if (!aid) {
+    return {
+      bvid: "",
+      aid: null,
+      reason: "Remote favorite has neither BV id nor aid",
+      riskBlocked: false
+    };
+  }
+  try {
+    const detail = await fetchBiliJson<Record<string, unknown>>(
+      `${BILI_VIEW_API}?aid=${encodeURIComponent(String(aid))}`,
+      "folderVideos"
+    );
+    const resolvedBvid = normalizeText(detail.bvid);
+    if (resolvedBvid) {
+      return {
+        bvid: resolvedBvid,
+        aid,
+        reason: null as string | null,
+        riskBlocked: false
+      };
+    }
+    return {
+      bvid: "",
+      aid,
+      reason: "Bilibili view response did not include a BV id",
+      riskBlocked: false
+    };
+  } catch (error) {
+    return {
+      bvid: "",
+      aid,
+      reason: isBiliRequestError(error)
+        ? formatBiliRequestError(error)
+        : error instanceof Error
+          ? error.message
+          : String(error),
+      riskBlocked: isBiliRequestError(error)
+        ? error.status === 412 || isRiskControlError(formatBiliRequestError(error))
+        : isRiskControlError(error instanceof Error ? error.message : String(error)),
+      error
+    };
+  }
 }
 
 function upsertVideoFromRemoteDetail(state: LocalState, detail: Record<string, unknown>) {
@@ -2256,7 +3784,8 @@ function ensureTagEnrichmentMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.tagEnrichment) {
@@ -2277,7 +3806,8 @@ function ensureBidirectionalSyncMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.bidirectionalSync) {
@@ -2444,6 +3974,1062 @@ async function runFolderAiCategoriesInState(state: LocalState, folderId: number)
   );
 }
 
+function normalizeAiOrganizerTask(raw: unknown): AiOrganizerTaskRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Partial<AiOrganizerTaskRecord>;
+  const id = normalizeText(source.id);
+  if (!id) return null;
+  const validStages = new Set<AiOrganizerStage>([
+    "planning",
+    "classifying",
+    "ready",
+    "failed",
+    "cancelled",
+    "completed",
+    "undone",
+  ]);
+  const stage = validStages.has(source.stage as AiOrganizerStage)
+    ? (source.stage as AiOrganizerStage)
+    : "failed";
+  const timestamp = now();
+  return {
+    version: 1,
+    id,
+    stage,
+    paused: Boolean(source.paused),
+    config: normalizeAiOrganizerConfig(source.config),
+    sourceHash: normalizeText(source.sourceHash),
+    sourceVideoIds: Array.isArray(source.sourceVideoIds)
+      ? source.sourceVideoIds.map((item) => toInt(item)).filter((item) => item > 0)
+      : [],
+    sourceFolderName: normalizeText(source.sourceFolderName) || null,
+    total: Math.max(0, toInt(source.total)),
+    skippedInvalid: Math.max(0, toInt(source.skippedInvalid)),
+    previousAiRelationCount: Math.max(
+      0,
+      toInt(source.previousAiRelationCount),
+    ),
+    cursor: Math.max(0, toInt(source.cursor)),
+    taxonomy: Array.isArray(source.taxonomy) ? source.taxonomy : [],
+    reviewFolderName: normalizeText(source.reviewFolderName) || "待确认",
+    assignments: Array.isArray(source.assignments) ? source.assignments : [],
+    invalidResults: Math.max(0, toInt(source.invalidResults)),
+    provider: normalizeText(source.provider),
+    model: normalizeText(source.model),
+    baseUrl: normalizeText(source.baseUrl),
+    retryAttempt: Math.max(0, toInt(source.retryAttempt)),
+    nextRunAt: toIntOrNull(source.nextRunAt),
+    startedAt: Math.max(0, toInt(source.startedAt, timestamp)),
+    updatedAt: Math.max(0, toInt(source.updatedAt, timestamp)),
+    finishedAt: toIntOrNull(source.finishedAt),
+    appliedAt: toIntOrNull(source.appliedAt),
+    undoneAt: toIntOrNull(source.undoneAt),
+    lastError: normalizeText(source.lastError) || null,
+    snapshotKey:
+      normalizeText(source.snapshotKey) || `${AI_ORGANIZER_SNAPSHOT_PREFIX}${id}`,
+    applySummary: source.applySummary ?? null,
+    undo: source.undo ?? null,
+  };
+}
+
+async function readAiOrganizerTask() {
+  if (cachedAiOrganizerTask !== undefined) {
+    return cachedAiOrganizerTask
+      ? cloneStoredValue(cachedAiOrganizerTask)
+      : null;
+  }
+  cachedAiOrganizerTask = normalizeAiOrganizerTask(
+    await readStoredValue<AiOrganizerTaskRecord>(AI_ORGANIZER_TASK_KEY),
+  );
+  return cachedAiOrganizerTask
+    ? cloneStoredValue(cachedAiOrganizerTask)
+    : null;
+}
+
+function withAiOrganizerQueue<T>(work: () => Promise<T>) {
+  const task = aiOrganizerQueue.then(work);
+  aiOrganizerQueue = task.then(
+    () => undefined,
+    () => undefined,
+  );
+  return task;
+}
+
+async function updateAiOrganizerTask(
+  runId: string,
+  mutate: (task: AiOrganizerTaskRecord) => AiOrganizerTaskRecord,
+) {
+  return withAiOrganizerQueue(async () => {
+    const current = await readAiOrganizerTask();
+    if (!current || current.id !== runId) return null;
+    const next = normalizeAiOrganizerTask(mutate(cloneStoredValue(current)));
+    if (!next) throw new Error("AI organizer task became invalid");
+    await writeStoredValues([{ key: AI_ORGANIZER_TASK_KEY, value: next }]);
+    cachedAiOrganizerTask = next;
+    return cloneStoredValue(next);
+  });
+}
+
+function clearAiOrganizerAlarm() {
+  if (chrome.alarms?.clear) chrome.alarms.clear(AI_ORGANIZER_ALARM);
+}
+
+function scheduleAiOrganizerAlarm(task: AiOrganizerTaskRecord | null) {
+  if (!chrome.alarms?.create || !task) return;
+  if (
+    task.paused ||
+    (task.stage !== "planning" && task.stage !== "classifying")
+  ) {
+    clearAiOrganizerAlarm();
+    return;
+  }
+  const when = Math.max(now() + 1_000, task.nextRunAt ?? now() + 1_000);
+  chrome.alarms.create(AI_ORGANIZER_ALARM, { when });
+}
+
+function scheduleAiOrganizerRequestWatchdog() {
+  if (!chrome.alarms?.create) return;
+  chrome.alarms.create(AI_ORGANIZER_ALARM, {
+    when: now() + AI_ORGANIZER_REQUEST_TIMEOUT_MS + AI_ORGANIZER_WATCHDOG_GRACE_MS,
+  });
+}
+
+function waitMs(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function buildAiOrganizerHashPayload(state: LocalState, sourceVideoIds: number[]) {
+  const sourceIds = new Set(sourceVideoIds);
+  const aiFolderIds = new Set(
+    state.folders
+      .filter((folder) => folder.origin === "ai")
+      .map((folder) => folder.id),
+  );
+  return JSON.stringify({
+    sourceVideoIds,
+    videos: state.videos
+      .filter((video) => sourceIds.has(video.id))
+      .map((video) => [video.id, video.bvid, video.deletedAt]),
+    aiFolders: state.folders
+      .filter((folder) => aiFolderIds.has(folder.id))
+      .map((folder) => [
+        folder.id,
+        folder.name,
+        folder.deletedAt,
+        folder.organizerId,
+        folder.taxonomyKey,
+      ]),
+    aiFolderItems: state.folderItems
+      .filter(
+        (item) =>
+          sourceIds.has(item.videoId) &&
+          (item.origin === "ai" || aiFolderIds.has(item.folderId)),
+      )
+      .map((item) => [
+        item.id,
+        item.folderId,
+        item.videoId,
+        item.origin,
+        item.organizerId,
+      ]),
+  });
+}
+
+async function computeAiOrganizerSourceHash(
+  state: LocalState,
+  sourceVideoIds: number[],
+) {
+  const payload = buildAiOrganizerHashPayload(state, sourceVideoIds);
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(payload),
+    );
+    return Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+  }
+  let hash = 2166136261;
+  for (let index = 0; index < payload.length; index += 1) {
+    hash ^= payload.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function buildAiOrganizerSourceSelection(state: LocalState, config: AiOrganizerConfig) {
+  const activeVideos = state.videos.filter(
+    (video) => video.deletedAt === null,
+  );
+  const scopedIds =
+    config.scope === "folder" && config.folderId
+      ? new Set(
+          state.folderItems
+            .filter((item) => item.folderId === config.folderId)
+            .map((item) => item.videoId),
+        )
+      : null;
+  const scopedVideos = scopedIds
+    ? activeVideos.filter((video) => scopedIds.has(video.id))
+    : activeVideos;
+  const sourceVideoIds = scopedVideos
+    .filter((video) => !video.isInvalid)
+    .map((video) => video.id)
+    .sort((left, right) => left - right);
+  const sourceVideoIdSet = new Set(sourceVideoIds);
+  const sourceFolder =
+    config.scope === "folder"
+      ? state.folders.find(
+          (folder) => folder.id === config.folderId && folder.deletedAt === null,
+        ) ?? null
+      : null;
+  if (config.scope === "folder" && !sourceFolder) {
+    throw new Error("Selected folder no longer exists");
+  }
+  if (sourceVideoIds.length === 0) {
+    throw new Error("No valid videos are available for AI organization");
+  }
+  return {
+    sourceVideoIds,
+    sourceFolderName: sourceFolder?.name ?? null,
+    skippedInvalid: scopedVideos.length - sourceVideoIds.length,
+    previousAiRelationCount: state.folderItems.filter(
+      (item) => item.origin === "ai" && sourceVideoIdSet.has(item.videoId),
+    ).length,
+  };
+}
+
+function buildAiOrganizerVideoContext(
+  state: LocalState,
+  sourceVideoIds: number[],
+  startIndex = 0,
+  limit = sourceVideoIds.length,
+) {
+  const videoById = new Map(state.videos.map((video) => [video.id, video]));
+  const folderById = new Map(
+    state.folders
+      .filter((folder) => folder.deletedAt === null)
+      .map((folder) => [folder.id, folder]),
+  );
+  const tagById = new Map(
+    state.tags
+      .filter((tag) => tag.archivedAt === null)
+      .map((tag) => [tag.id, tag]),
+  );
+  const folderNamesByVideoId = new Map<number, string[]>();
+  for (const item of state.folderItems) {
+    const folder = folderById.get(item.folderId);
+    if (!folder) continue;
+    const bucket = folderNamesByVideoId.get(item.videoId) ?? [];
+    if (!bucket.includes(folder.name)) bucket.push(folder.name);
+    folderNamesByVideoId.set(item.videoId, bucket);
+  }
+  const tagsByVideoId = new Map<number, string[]>();
+  for (const item of state.videoTags) {
+    const tag = tagById.get(item.tagId);
+    if (!tag) continue;
+    const bucket = tagsByVideoId.get(item.videoId) ?? [];
+    if (!bucket.includes(tag.name)) bucket.push(tag.name);
+    tagsByVideoId.set(item.videoId, bucket);
+  }
+
+  return sourceVideoIds.slice(startIndex, startIndex + limit).map((videoId, offset) => {
+    const video = videoById.get(videoId);
+    if (!video) throw new Error(`Snapshot video ${videoId} is missing`);
+    return {
+      itemKey: `item-${String(startIndex + offset + 1).padStart(6, "0")}`,
+      videoId,
+      title: video.title,
+      uploader: video.uploader,
+      description: video.description,
+      partition: video.partition,
+      tags: tagsByVideoId.get(videoId) ?? [],
+      currentFolders: folderNamesByVideoId.get(videoId) ?? [],
+    };
+  });
+}
+
+function buildAiOrganizerTaxonomyInput(
+  state: LocalState,
+  task: AiOrganizerTaskRecord,
+) {
+  const allItems = buildAiOrganizerVideoContext(
+    state,
+    task.sourceVideoIds,
+    0,
+    task.sourceVideoIds.length,
+  );
+  const sampleCount = Math.min(120, allItems.length);
+  const samples = Array.from({ length: sampleCount }, (_, index) => {
+    const sourceIndex = Math.min(
+      allItems.length - 1,
+      Math.floor((index * allItems.length) / sampleCount),
+    );
+    const item = allItems[sourceIndex];
+    return {
+      title: item.title,
+      uploader: item.uploader,
+      description: normalizeText(item.description).slice(0, 280),
+      partition: item.partition,
+      tags: item.tags.slice(0, 12),
+      currentFolders: item.currentFolders.slice(0, 8),
+    };
+  });
+  const partitionCounts: Record<string, number> = {};
+  const tagCounts: Record<string, number> = {};
+  for (const item of allItems) {
+    const partition = normalizeText(item.partition) || "未知";
+    partitionCounts[partition] = (partitionCounts[partition] ?? 0) + 1;
+    for (const tag of item.tags) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+  }
+  const existingFolders = listActiveFoldersWithCounts(state).map((folder) => ({
+    name: folder.name,
+    description: folder.description,
+    itemCount: folder.itemCount,
+  }));
+  return {
+    config: task.config,
+    totalVideos: task.total,
+    existingFolders,
+    partitionCounts,
+    tagCounts: Object.fromEntries(
+      Object.entries(tagCounts)
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 80),
+    ),
+    samples,
+  };
+}
+
+async function readAiOrganizerSnapshot(task: AiOrganizerTaskRecord) {
+  const snapshot = await readStoredValue<AiOrganizerSnapshotRecord>(task.snapshotKey);
+  if (!snapshot || snapshot.runId !== task.id || !snapshot.state) {
+    throw new Error("AI organizer source snapshot is missing");
+  }
+  return snapshot;
+}
+
+async function requestAiOrganizerJson(
+  aiMeta: AiMeta,
+  prompt: string,
+  options: { maxTokens: number; temperature: number },
+) {
+  const controller = new AbortController();
+  let timedOut = false;
+  aiOrganizerRequestAbortController = controller;
+  scheduleAiOrganizerRequestWatchdog();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, AI_ORGANIZER_REQUEST_TIMEOUT_MS);
+  try {
+    return await requestAiJson(aiMeta, prompt, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error("AI provider request timed out after 90 seconds");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (aiOrganizerRequestAbortController === controller) {
+      aiOrganizerRequestAbortController = null;
+    }
+  }
+}
+
+function buildAiOrganizerStatus(task: AiOrganizerTaskRecord | null) {
+  if (!task) {
+    return {
+      phase: "idle",
+      running: false,
+      paused: false,
+      total: 0,
+      processed: 0,
+      progress: 0,
+      taxonomy: [],
+      lowConfidence: 0,
+      invalidResults: 0,
+      canApply: false,
+      canUndo: false,
+      lastError: null,
+    };
+  }
+  const waiting =
+    !task.paused &&
+    (task.stage === "planning" || task.stage === "classifying") &&
+    Boolean(task.lastError && task.nextRunAt && task.nextRunAt > now());
+  const phase = task.paused
+    ? "paused"
+    : waiting
+      ? "waiting"
+      : task.stage;
+  const counts = new Map<string, number>();
+  let lowConfidence = 0;
+  for (const assignment of task.assignments) {
+    const key = assignment.lowConfidence ? REVIEW_FOLDER_KEY : assignment.folderKey;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (assignment.lowConfidence) lowConfidence += 1;
+  }
+  const taxonomy = task.taxonomy.map((folder) => ({
+    ...folder,
+    count: counts.get(folder.key) ?? 0,
+  }));
+  if (lowConfidence > 0) {
+    taxonomy.push({
+      key: REVIEW_FOLDER_KEY,
+      name: task.reviewFolderName,
+      description: "AI 置信度不足或返回不完整的视频",
+      include: "",
+      exclude: "",
+      count: lowConfidence,
+    });
+  }
+  return {
+    id: task.id,
+    phase,
+    stage: task.stage,
+    running:
+      !task.paused &&
+      (task.stage === "planning" || task.stage === "classifying"),
+    paused: task.paused,
+    config: task.config,
+    sourceFolderName: task.sourceFolderName,
+    total: task.total,
+    processed: task.assignments.length,
+    progress:
+      task.total > 0
+        ? Math.min(100, Math.round((task.assignments.length / task.total) * 100))
+        : 0,
+    skippedInvalid: task.skippedInvalid,
+    estimatedFolderLinksAdded: task.total,
+    estimatedFolderLinksRemoved: task.previousAiRelationCount,
+    taxonomy,
+    lowConfidence,
+    invalidResults: task.invalidResults,
+    provider: task.provider,
+    model: task.model,
+    retryAttempt: task.retryAttempt,
+    nextRunAt: task.nextRunAt,
+    startedAt: task.startedAt,
+    updatedAt: task.updatedAt,
+    finishedAt: task.finishedAt,
+    appliedAt: task.appliedAt,
+    undoneAt: task.undoneAt,
+    canApply: task.stage === "ready" && !task.paused,
+    canUndo: task.stage === "completed" && Boolean(task.undo) && !task.undoneAt,
+    lastError: task.lastError,
+    applySummary: task.applySummary,
+  };
+}
+
+async function processAiOrganizerPlanning(task: AiOrganizerTaskRecord) {
+  const snapshot = await readAiOrganizerSnapshot(task);
+  const liveState = await readState();
+  const aiMeta = ensureAiMeta(liveState);
+  if (!aiMeta.enabled) throw new Error("AI organization is disabled in settings");
+  validateAiSettings(aiMeta);
+  if (
+    aiMeta.provider !== task.provider ||
+    aiMeta.model !== task.model ||
+    aiMeta.baseUrl !== task.baseUrl
+  ) {
+    throw new Error("AI provider or model changed. Restore the original setting or start a new task");
+  }
+  const prompt = buildAiOrganizerTaxonomyPrompt(
+    buildAiOrganizerTaxonomyInput(snapshot.state, task),
+  );
+  const payload = await requestAiOrganizerJson(aiMeta, prompt, {
+    maxTokens: 4096,
+    temperature: 0.15,
+  });
+  const normalizedTaxonomy = normalizeAiOrganizerTaxonomy(
+    payload,
+    task.config.folderCount,
+  );
+  const resolvedNames = resolveAiOrganizerFolderNames(
+    normalizedTaxonomy,
+    snapshot.state.folders,
+    task.config.locale === "en-US" ? "Needs review" : "待确认",
+  );
+  return updateAiOrganizerTask(task.id, (current) => {
+    if (current.stage !== "planning" || current.paused) return current;
+    return {
+      ...current,
+      stage: "classifying",
+      taxonomy: resolvedNames.taxonomy,
+      reviewFolderName: resolvedNames.reviewFolderName,
+      retryAttempt: 0,
+      nextRunAt: now() + AI_ORGANIZER_BATCH_DELAY_MS,
+      updatedAt: now(),
+      lastError: null,
+    };
+  });
+}
+
+async function processAiOrganizerBatch(task: AiOrganizerTaskRecord) {
+  if (task.cursor >= task.sourceVideoIds.length) {
+    return updateAiOrganizerTask(task.id, (current) => ({
+      ...current,
+      stage: "ready",
+      nextRunAt: null,
+      finishedAt: now(),
+      updatedAt: now(),
+      lastError: null,
+    }));
+  }
+  const snapshot = await readAiOrganizerSnapshot(task);
+  const liveState = await readState();
+  const aiMeta = ensureAiMeta(liveState);
+  if (!aiMeta.enabled) throw new Error("AI organization is disabled in settings");
+  validateAiSettings(aiMeta);
+  if (
+    aiMeta.provider !== task.provider ||
+    aiMeta.model !== task.model ||
+    aiMeta.baseUrl !== task.baseUrl
+  ) {
+    throw new Error("AI provider or model changed. Restore the original setting or start a new task");
+  }
+  const batch = buildAiOrganizerVideoContext(
+    snapshot.state,
+    task.sourceVideoIds,
+    task.cursor,
+    task.config.batchSize,
+  );
+  const prompt = buildAiOrganizerClassificationPrompt({
+    taxonomy: task.taxonomy,
+    items: batch,
+    instructions: task.config.instructions,
+  });
+  const payload = await requestAiOrganizerJson(aiMeta, prompt, {
+    maxTokens: 4096,
+    temperature: 0.1,
+  });
+  const normalized = normalizeAiOrganizerAssignments(
+    payload,
+    batch.map((item) => ({ itemKey: item.itemKey, videoId: item.videoId })),
+    task.taxonomy,
+    task.config.confidenceThreshold,
+  );
+  return updateAiOrganizerTask(task.id, (current) => {
+    if (
+      current.stage !== "classifying" ||
+      current.cursor !== task.cursor ||
+      current.paused
+    ) {
+      return current;
+    }
+    const assignments = [...current.assignments, ...normalized.assignments];
+    const cursor = Math.min(current.total, current.cursor + batch.length);
+    const completed = cursor >= current.total;
+    return {
+      ...current,
+      stage: completed ? "ready" : "classifying",
+      cursor,
+      assignments,
+      invalidResults: current.invalidResults + normalized.invalid,
+      retryAttempt: 0,
+      nextRunAt: completed ? null : now() + AI_ORGANIZER_BATCH_DELAY_MS,
+      finishedAt: completed ? now() : null,
+      updatedAt: now(),
+      lastError: null,
+    };
+  });
+}
+
+async function handleAiOrganizerStepFailure(
+  task: AiOrganizerTaskRecord,
+  error: unknown,
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  const updated = await updateAiOrganizerTask(task.id, (current) => {
+    if (current.paused) return current;
+    if (current.stage !== "planning" && current.stage !== "classifying") {
+      return current;
+    }
+    const retryAttempt = current.retryAttempt + 1;
+    const exhausted = retryAttempt >= AI_ORGANIZER_MAX_RETRY_ATTEMPTS;
+    return {
+      ...current,
+      stage: exhausted ? "failed" : current.stage,
+      retryAttempt,
+      nextRunAt: exhausted
+        ? null
+        : now() + Math.min(60_000, 5_000 * 2 ** (retryAttempt - 1)),
+      finishedAt: exhausted ? now() : current.finishedAt,
+      updatedAt: now(),
+      lastError: message,
+    };
+  });
+  scheduleAiOrganizerAlarm(updated);
+}
+
+function triggerAiOrganizerWorker() {
+  if (aiOrganizerTask) return aiOrganizerTask;
+  aiOrganizerTask = (async () => {
+    while (true) {
+      const task = await readAiOrganizerTask();
+      if (
+        !task ||
+        task.paused ||
+        (task.stage !== "planning" && task.stage !== "classifying")
+      ) {
+        scheduleAiOrganizerAlarm(task);
+        return;
+      }
+      const wait = Math.max(0, (task.nextRunAt ?? 0) - now());
+      if (wait > 2_000) {
+        scheduleAiOrganizerAlarm(task);
+        return;
+      }
+      if (wait > 0) await waitMs(wait);
+      const latestTask = await readAiOrganizerTask();
+      if (
+        !latestTask ||
+        latestTask.id !== task.id ||
+        latestTask.paused ||
+        (latestTask.stage !== "planning" && latestTask.stage !== "classifying")
+      ) {
+        scheduleAiOrganizerAlarm(latestTask);
+        return;
+      }
+      try {
+        const updated =
+          latestTask.stage === "planning"
+            ? await processAiOrganizerPlanning(latestTask)
+            : await processAiOrganizerBatch(latestTask);
+        if (!updated || updated.paused) return;
+        scheduleAiOrganizerAlarm(updated);
+      } catch (error) {
+        await handleAiOrganizerStepFailure(latestTask, error);
+        return;
+      }
+    }
+  })().finally(() => {
+    aiOrganizerTask = null;
+  });
+  return aiOrganizerTask;
+}
+
+async function startAiOrganizerTask(rawConfig: unknown) {
+  if (aiOrganizerStartPending) throw new Error("AI organization is already starting");
+  if (aiOrganizerApplyPending) throw new Error("AI organization is busy");
+  aiOrganizerStartPending = true;
+  try {
+    const existing = await readAiOrganizerTask();
+    if (
+      existing &&
+      (existing.stage === "planning" || existing.stage === "classifying")
+    ) {
+      throw new Error("AI organization is already running");
+    }
+    if (
+      existing &&
+      (existing.stage === "ready" ||
+        (existing.stage === "completed" && existing.undo && !existing.undoneAt)) &&
+      !(rawConfig as { replaceExisting?: unknown })?.replaceExisting
+    ) {
+      throw new Error(
+        "The current AI plan or undo record must be explicitly replaced",
+      );
+    }
+    const config = normalizeAiOrganizerConfig(rawConfig);
+    const prepared = await withState(async (state) => {
+      const aiMeta = ensureAiMeta(state);
+      if (!aiMeta.enabled) throw new Error("Enable AI organization in AI settings first");
+      validateAiSettings(aiMeta);
+      const selection = buildAiOrganizerSourceSelection(state, config);
+      const sourceHash = await computeAiOrganizerSourceHash(
+        state,
+        selection.sourceVideoIds,
+      );
+      return {
+        snapshotState: cloneStoredValue(state),
+        sourceHash,
+        selection,
+        provider: aiMeta.provider,
+        model: aiMeta.model,
+        baseUrl: aiMeta.baseUrl,
+      };
+    }, false);
+    prepared.snapshotState.ai.apiKey = "";
+    prepared.snapshotState.syncMeta.webdav.password = "";
+    const estimatedBytes = JSON.stringify(prepared.snapshotState).length * 2;
+    if (navigator.storage?.estimate) {
+      const estimate = await navigator.storage.estimate();
+      const available = Math.max(0, (estimate.quota ?? 0) - (estimate.usage ?? 0));
+      if (estimate.quota && available < estimatedBytes * 2) {
+        throw new Error("Not enough browser storage is available for a safe AI rollback snapshot");
+      }
+    }
+    const timestamp = now();
+    const id = `ai-${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
+    const snapshotKey = `${AI_ORGANIZER_SNAPSHOT_PREFIX}${id}`;
+    const task: AiOrganizerTaskRecord = {
+      version: 1,
+      id,
+      stage: "planning",
+      paused: false,
+      config,
+      sourceHash: prepared.sourceHash,
+      sourceVideoIds: prepared.selection.sourceVideoIds,
+      sourceFolderName: prepared.selection.sourceFolderName,
+      total: prepared.selection.sourceVideoIds.length,
+      skippedInvalid: prepared.selection.skippedInvalid,
+      previousAiRelationCount: prepared.selection.previousAiRelationCount,
+      cursor: 0,
+      taxonomy: [],
+      reviewFolderName: "待确认",
+      assignments: [],
+      invalidResults: 0,
+      provider: prepared.provider,
+      model: prepared.model,
+      baseUrl: prepared.baseUrl,
+      retryAttempt: 0,
+      nextRunAt: timestamp,
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      finishedAt: null,
+      appliedAt: null,
+      undoneAt: null,
+      lastError: null,
+      snapshotKey,
+      applySummary: null,
+      undo: null,
+    };
+    const snapshot: AiOrganizerSnapshotRecord = {
+      version: 1,
+      runId: id,
+      createdAt: timestamp,
+      state: prepared.snapshotState,
+    };
+    await writeStoredValues([
+      { key: snapshotKey, value: snapshot },
+      { key: AI_ORGANIZER_TASK_KEY, value: task },
+    ]);
+    cachedAiOrganizerTask = undefined;
+    const [persistedSnapshot, persistedTask] = await Promise.all([
+      readStoredValue<AiOrganizerSnapshotRecord>(snapshotKey),
+      readStoredValue<AiOrganizerTaskRecord>(AI_ORGANIZER_TASK_KEY).then(
+        normalizeAiOrganizerTask,
+      ),
+    ]);
+    if (
+      persistedSnapshot?.runId !== id ||
+      !persistedSnapshot.state ||
+      persistedTask?.id !== id ||
+      persistedTask.snapshotKey !== snapshotKey
+    ) {
+      throw new Error("AI organizer snapshot could not be verified after saving");
+    }
+    cachedAiOrganizerTask = persistedTask;
+    if (existing?.snapshotKey && existing.snapshotKey !== snapshotKey) {
+      await deleteStoredValue(existing.snapshotKey).catch((error) => {
+        console.warn("[ai-organizer] old snapshot cleanup failed:", error);
+      });
+    }
+    scheduleAiOrganizerAlarm(task);
+    void triggerAiOrganizerWorker();
+    return task;
+  } finally {
+    aiOrganizerStartPending = false;
+  }
+}
+
+function aiSettingsTestSignature(meta: AiMeta) {
+  return JSON.stringify([
+    meta.provider,
+    meta.baseUrl,
+    meta.model,
+    meta.apiKey,
+  ]);
+}
+
+async function testAiSettingsOutsideStateQueue(body: Record<string, unknown>) {
+  const prepared = await withState((state) => {
+    const meta = ensureAiMeta(state);
+    applyAiSettingsPatch(meta, body);
+    meta.updatedAt = now();
+    try {
+      validateAiSettings(meta);
+      return {
+        valid: true as const,
+        requestMeta: {
+          provider: meta.provider,
+          baseUrl: meta.baseUrl,
+          model: meta.model,
+          apiKey: meta.apiKey,
+        },
+        signature: aiSettingsTestSignature(meta),
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "AI settings test failed";
+      meta.lastTestAt = now();
+      meta.lastTestOk = false;
+      meta.lastError = message;
+      return {
+        valid: false as const,
+        error: message,
+        settings: getAiSettings(meta),
+      };
+    }
+  }, true);
+  if (!prepared.valid) return fail(400, prepared.error);
+
+  try {
+    const result = await requestAiJson(
+      prepared.requestMeta,
+      'Return JSON only with schema: {"ok":true}.',
+      { maxTokens: 128, temperature: 0 },
+    );
+    if (result?.ok !== true) {
+      throw new Error("AI test response did not match the expected JSON schema");
+    }
+    const settings = await withState((state) => {
+      const meta = ensureAiMeta(state);
+      if (aiSettingsTestSignature(meta) !== prepared.signature) {
+        throw new Error("AI settings changed while the connection test was running");
+      }
+      meta.lastTestAt = now();
+      meta.lastTestOk = true;
+      meta.lastError = null;
+      return getAiSettings(meta);
+    }, true);
+    return ok(settings);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "AI settings test failed";
+    await withState((state) => {
+      const meta = ensureAiMeta(state);
+      if (aiSettingsTestSignature(meta) === prepared.signature) {
+        meta.lastTestAt = now();
+        meta.lastTestOk = false;
+        meta.lastError = message;
+      }
+    }, true);
+    return fail(message.includes("changed while") ? 409 : 400, message);
+  }
+}
+
+async function pauseAiOrganizerTask() {
+  const task = await readAiOrganizerTask();
+  if (!task) return null;
+  const updated = await updateAiOrganizerTask(task.id, (current) => ({
+    ...current,
+    paused:
+      current.stage === "planning" || current.stage === "classifying"
+        ? true
+        : current.paused,
+    nextRunAt: null,
+    updatedAt: now(),
+  }));
+  aiOrganizerRequestAbortController?.abort();
+  clearAiOrganizerAlarm();
+  return updated;
+}
+
+async function resumeAiOrganizerTask() {
+  const task = await readAiOrganizerTask();
+  if (!task) throw new Error("No AI organization task is available");
+  const updated = await updateAiOrganizerTask(task.id, (current) => {
+    const resumableStage = current.taxonomy.length > 0 ? "classifying" : "planning";
+    if (
+      current.stage !== "planning" &&
+      current.stage !== "classifying" &&
+      current.stage !== "failed"
+    ) {
+      return current;
+    }
+    return {
+      ...current,
+      stage: current.stage === "failed" ? resumableStage : current.stage,
+      paused: false,
+      retryAttempt: 0,
+      nextRunAt: now(),
+      finishedAt: null,
+      updatedAt: now(),
+      lastError: null,
+    };
+  });
+  scheduleAiOrganizerAlarm(updated);
+  void triggerAiOrganizerWorker();
+  return updated;
+}
+
+async function cancelAiOrganizerTask() {
+  const task = await readAiOrganizerTask();
+  if (!task) return null;
+  const updated = await updateAiOrganizerTask(task.id, (current) => ({
+    ...current,
+    stage:
+      current.stage === "planning" || current.stage === "classifying"
+        ? "cancelled"
+        : current.stage,
+    paused: false,
+    nextRunAt: null,
+    finishedAt:
+      current.stage === "planning" || current.stage === "classifying"
+        ? now()
+        : current.finishedAt,
+    updatedAt: now(),
+  }));
+  aiOrganizerRequestAbortController?.abort();
+  clearAiOrganizerAlarm();
+  return updated;
+}
+
+async function applyReadyAiOrganizerTask() {
+  if (aiOrganizerApplyPending) throw new Error("AI organization is already being applied");
+  if (aiOrganizerStartPending) throw new Error("AI organization is already starting");
+  aiOrganizerApplyPending = true;
+  try {
+    await aiOrganizerQueue;
+    return await withState(async (state) => {
+      const task = await readAiOrganizerTask();
+      if (!task || task.stage !== "ready" || task.paused) {
+        throw new Error("AI organization plan is not ready to apply");
+      }
+      const currentSelection = buildAiOrganizerSourceSelection(state, task.config);
+      if (
+        currentSelection.sourceVideoIds.length !== task.sourceVideoIds.length ||
+        currentSelection.sourceVideoIds.some(
+          (videoId, index) => videoId !== task.sourceVideoIds[index],
+        )
+      ) {
+        throw new Error(
+          "Library scope changed after AI organization started. Start a new analysis to include the latest videos",
+        );
+      }
+      const currentHash = await computeAiOrganizerSourceHash(
+        state,
+        task.sourceVideoIds,
+      );
+      if (currentHash !== task.sourceHash) {
+        throw new Error(
+          "Library changed after AI organization started. Start a new analysis to avoid overwriting newer data",
+        );
+      }
+      const applied = applyAiOrganizerPlan(
+        state,
+        {
+          runId: task.id,
+          sourceVideoIds: task.sourceVideoIds,
+          taxonomy: task.taxonomy,
+          assignments: task.assignments,
+          confidenceThreshold: task.config.confidenceThreshold,
+          reviewFolderName: task.reviewFolderName,
+        },
+        now(),
+      );
+      const timestamp = now();
+      const nextTask: AiOrganizerTaskRecord = {
+        ...task,
+        stage: "completed",
+        paused: false,
+        nextRunAt: null,
+        updatedAt: timestamp,
+        finishedAt: timestamp,
+        appliedAt: timestamp,
+        undoneAt: null,
+        lastError: null,
+        applySummary: applied.summary as AiOrganizerApplySummary,
+        undo: applied.undo as AiOrganizerUndoRecord,
+      };
+      await writeStateAndStoredValue(
+        applied.state as LocalState,
+        AI_ORGANIZER_TASK_KEY,
+        nextTask,
+      );
+      cachedAiOrganizerTask = nextTask;
+      return nextTask;
+    }, false);
+  } finally {
+    aiOrganizerApplyPending = false;
+  }
+}
+
+async function undoAppliedAiOrganizerTask() {
+  if (aiOrganizerApplyPending) throw new Error("AI organization is busy");
+  if (aiOrganizerStartPending) throw new Error("AI organization is already starting");
+  aiOrganizerApplyPending = true;
+  try {
+    await aiOrganizerQueue;
+    return await withState(async (state) => {
+      const task = await readAiOrganizerTask();
+      if (!task || task.stage !== "completed" || !task.undo || task.undoneAt) {
+        throw new Error("No applied AI organization is available to undo");
+      }
+      const undone = undoAiOrganizerPlan(state, task.undo, now());
+      const timestamp = now();
+      const nextTask: AiOrganizerTaskRecord = {
+        ...task,
+        stage: "undone",
+        updatedAt: timestamp,
+        undoneAt: timestamp,
+        lastError: null,
+      };
+      await writeStateAndStoredValue(
+        undone.state as LocalState,
+        AI_ORGANIZER_TASK_KEY,
+        nextTask,
+      );
+      cachedAiOrganizerTask = nextTask;
+      return nextTask;
+    }, false);
+  } finally {
+    aiOrganizerApplyPending = false;
+  }
+}
+
+async function listAiOrganizerPreview(params: URLSearchParams) {
+  const task = await readAiOrganizerTask();
+  if (!task) return paginate([], params.get("page"), params.get("pageSize"));
+  const snapshot = await readAiOrganizerSnapshot(task);
+  const videoById = new Map(snapshot.state.videos.map((video) => [video.id, video]));
+  const folderById = new Map(snapshot.state.folders.map((folder) => [folder.id, folder]));
+  const currentFoldersByVideoId = new Map<number, string[]>();
+  for (const item of snapshot.state.folderItems) {
+    const folder = folderById.get(item.folderId);
+    if (!folder || folder.deletedAt !== null) continue;
+    const bucket = currentFoldersByVideoId.get(item.videoId) ?? [];
+    if (!bucket.includes(folder.name)) bucket.push(folder.name);
+    currentFoldersByVideoId.set(item.videoId, bucket);
+  }
+  const taxonomyByKey = new Map(task.taxonomy.map((folder) => [folder.key, folder]));
+  const lowOnly = params.get("lowConfidence") === "1";
+  const items = task.assignments
+    .filter((assignment) => !lowOnly || assignment.lowConfidence)
+    .map((assignment) => {
+      const video = videoById.get(assignment.videoId);
+      const suggested = taxonomyByKey.get(assignment.folderKey);
+      return {
+        videoId: assignment.videoId,
+        bvid: video?.bvid ?? "",
+        title: video?.title ?? `#${assignment.videoId}`,
+        uploader: video?.uploader ?? "",
+        currentFolders: currentFoldersByVideoId.get(assignment.videoId) ?? [],
+        suggestedFolderKey: assignment.folderKey,
+        suggestedFolderName: suggested?.name ?? task.reviewFolderName,
+        appliedFolderName: assignment.lowConfidence
+          ? task.reviewFolderName
+          : suggested?.name ?? task.reviewFolderName,
+        confidence: assignment.confidence,
+        lowConfidence: assignment.lowConfidence,
+        reason: assignment.reason,
+      };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.lowConfidence) - Number(left.lowConfidence) ||
+        left.confidence - right.confidence ||
+        left.videoId - right.videoId,
+    );
+  return paginate(items, params.get("page"), params.get("pageSize"));
+}
+
 function normalizeWebDavBaseUrl(rawUrl: unknown) {
   const text = normalizeText(rawUrl);
   if (!text) return "";
@@ -2475,7 +5061,8 @@ function ensureWebDavMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.webdav) {
@@ -2515,7 +5102,8 @@ function ensureStage3ReconcileMeta(state: LocalState) {
       tagEnrichment: defaultTagEnrichmentMeta(),
       bidirectionalSync: defaultBidirectionalSyncMeta(),
       webdav: defaultWebDavMeta(),
-      stage3Reconcile: defaultStage3ReconcileMeta()
+      stage3Reconcile: defaultStage3ReconcileMeta(),
+      favoritesJob: defaultFavoritesSyncJobMeta()
     };
   }
   if (!state.syncMeta.webdav) {
@@ -2530,15 +5118,7 @@ function ensureStage3ReconcileMeta(state: LocalState) {
     meta.enabled = true;
   }
   if (!meta.lastSummary) {
-    meta.lastSummary = {
-      foldersDetected: 0,
-      foldersSynced: 0,
-      videosProcessed: 0,
-      videosUpserted: 0,
-      folderLinksAdded: 0,
-      tagsBound: 0,
-      errorCount: 0
-    };
+    meta.lastSummary = emptyFavoritesSyncSummary();
   }
   return meta;
 }
@@ -2561,11 +5141,21 @@ function getStage3ReconcileStatus(state: LocalState) {
 function collectMissingSystemTagCandidates(
   state: LocalState,
   limit: number,
-  cursorAfterVideoId = 0
+  cursorAfterVideoId = 0,
+  meta = ensureTagEnrichmentMeta(state)
 ) {
   const hasSystemTagVideoIds = getVideoIdSetWithSystemTags(state);
+  const terminalVideoIds = new Set([
+    ...meta.checkedEmptyVideoIds,
+    ...meta.skippedVideoIds
+  ]);
   const missingVideos = state.videos
-    .filter((video) => video.deletedAt === null && !hasSystemTagVideoIds.has(video.id))
+    .filter(
+      (video) =>
+        video.deletedAt === null &&
+        !hasSystemTagVideoIds.has(video.id) &&
+        !terminalVideoIds.has(video.id)
+    )
     .sort((a, b) => a.id - b.id);
   const threshold = Math.max(0, cursorAfterVideoId);
   const preferred = missingVideos.filter((video) => video.id > threshold);
@@ -2579,9 +5169,15 @@ function collectMissingSystemTagCandidates(
 function collectMissingSystemTagCandidateDtos(
   state: LocalState,
   limit: number,
-  cursorAfterVideoId = 0
+  cursorAfterVideoId = 0,
+  meta = ensureTagEnrichmentMeta(state)
 ) {
-  const batch = collectMissingSystemTagCandidates(state, limit, cursorAfterVideoId);
+  const batch = collectMissingSystemTagCandidates(
+    state,
+    limit,
+    cursorAfterVideoId,
+    meta
+  );
   return {
     total: batch.total,
     items: batch.items
@@ -2589,9 +5185,16 @@ function collectMissingSystemTagCandidateDtos(
   };
 }
 
-function countMissingSystemTagVideos(state: LocalState) {
-  const hasSystemTagVideoIds = getVideoIdSetWithSystemTags(state);
-  return state.videos.filter((video) => video.deletedAt === null && !hasSystemTagVideoIds.has(video.id)).length;
+function countMissingSystemTagVideos(
+  state: LocalState,
+  meta = ensureTagEnrichmentMeta(state)
+) {
+  return collectMissingSystemTagCandidates(
+    state,
+    Number.MAX_SAFE_INTEGER,
+    0,
+    meta
+  ).total;
 }
 
 function bindSystemTagsToVideo(state: LocalState, videoId: number, tagNames: string[]) {
@@ -2613,24 +5216,118 @@ function bindSystemTagsToVideo(state: LocalState, videoId: number, tagNames: str
   return boundCount;
 }
 
+function resolveTagEnrichmentBatchNextRunAt(
+  detectedAt = now(),
+  random: () => number = Math.random
+) {
+  const sampled = Math.min(1, Math.max(0, Number(random()) || 0));
+  return detectedAt + TAG_ENRICH_BATCH_DELAY_MIN_MS +
+    Math.round(sampled * TAG_ENRICH_BATCH_DELAY_JITTER_MS);
+}
+
+function scheduleTagEnrichment(meta: TagEnrichmentMeta | null) {
+  if (
+    !meta ||
+    meta.paused ||
+    meta.phase !== "waiting" ||
+    !meta.nextRunAt ||
+    !chrome.alarms?.create
+  ) {
+    if (chrome.alarms?.clear) chrome.alarms.clear(TAG_ENRICH_ALARM);
+    return;
+  }
+  chrome.alarms.create(TAG_ENRICH_ALARM, {
+    when: Math.max(now() + 1000, meta.nextRunAt)
+  });
+}
+
+function toTagEnrichmentErrorItem(
+  candidate: { id: number; bvid: string },
+  message: string,
+  occurredAt = now()
+): TagEnrichmentErrorItem {
+  return {
+    videoId: candidate.id,
+    bvid: normalizeText(candidate.bvid),
+    message: normalizeText(message) || "Tag enrichment request failed",
+    occurredAt
+  };
+}
+
+function applyTagEnrichmentFailurePolicy(
+  meta: TagEnrichmentMeta,
+  error: unknown,
+  message: string
+) {
+  return resolveFavoritesFailurePolicy({
+    status: isBiliRequestError(error) ? error.status : 0,
+    message,
+    attempt: meta.retryAttempt + 1,
+    detectedAt: now(),
+    retryAfterMs: isBiliRequestError(error) ? error.retryAfterMs : null,
+    previousRiskCount: meta.riskCount,
+    random: Math.random
+  });
+}
+
 async function runTagEnrichmentBatch() {
+  if (favoritesSyncTask || favoritesSyncStartPending) {
+    const deferred = await withState((state) => {
+      const meta = ensureTagEnrichmentMeta(state);
+      if (!meta.paused && (meta.phase === "running" || meta.phase === "waiting")) {
+        meta.phase = "waiting";
+        meta.nextRunAt = now() + TAG_ENRICH_BATCH_DELAY_MIN_MS;
+        meta.updatedAt = now();
+      }
+      return { ...meta };
+    }, true);
+    scheduleTagEnrichment(deferred);
+    return;
+  }
+
   const plan = await withState((state) => {
     const meta = ensureTagEnrichmentMeta(state);
+    const activeVideoIds = new Set(
+      state.videos
+        .filter((video) => video.deletedAt === null)
+        .map((video) => video.id)
+    );
+    meta.checkedEmptyVideoIds = meta.checkedEmptyVideoIds.filter((id) =>
+      activeVideoIds.has(id)
+    );
+    meta.skippedVideoIds = meta.skippedVideoIds.filter((id) =>
+      activeVideoIds.has(id)
+    );
     const batch = collectMissingSystemTagCandidateDtos(
       state,
       TAG_ENRICH_BATCH_SIZE,
-      meta.cursorAfterVideoId
+      meta.cursorAfterVideoId,
+      meta
     );
     meta.totalMissing = batch.total;
+    meta.total = Math.max(meta.total, meta.processed + batch.total);
     meta.lastBatchProcessed = 0;
+    meta.lastBatchSucceeded = 0;
+    meta.lastBatchEmpty = 0;
+    meta.lastBatchFailed = 0;
     meta.lastBatchBound = 0;
-    if (meta.paused) {
+    meta.updatedAt = now();
+    if (meta.paused || meta.phase === "paused") {
       return {
         paused: true as const,
         candidates: [] as Array<{ id: number; bvid: string }>,
         cursorAfterVideoId: meta.cursorAfterVideoId,
         totalMissing: batch.total
       };
+    }
+    if (batch.items.length > 0) {
+      meta.phase = "running";
+      meta.nextRunAt = null;
+    } else {
+      meta.phase = "completed";
+      meta.finishedAt = now();
+      meta.nextRunAt = null;
+      meta.lastError = null;
     }
     return {
       paused: false as const,
@@ -2647,27 +5344,49 @@ async function runTagEnrichmentBatch() {
   }
 
   const fetchedTagMap = new Map<number, string[]>();
-  let riskBlocked = false;
+  const emptyVideoIds = new Set<number>();
+  const skippedVideoIds = new Set<number>();
+  const batchErrors: TagEnrichmentErrorItem[] = [];
+  let failure:
+    | ReturnType<typeof resolveFavoritesFailurePolicy>
+    | null = null;
   let lastProcessedVideoId = plan.cursorAfterVideoId;
-  let lastErrorMessage: string | null = null;
+  let attempted = 0;
   for (const candidate of plan.candidates) {
+    if (tagEnrichmentStopRequested) break;
+    attempted += 1;
     lastProcessedVideoId = candidate.id;
     const bvid = normalizeText(candidate.bvid);
-    if (!bvid) continue;
+    if (!bvid) {
+      skippedVideoIds.add(candidate.id);
+      batchErrors.push(
+        toTagEnrichmentErrorItem(candidate, "Video has no BV id")
+      );
+      continue;
+    }
     try {
       const names = await fetchArchiveTagNames(bvid);
       if (names.length > 0) {
         fetchedTagMap.set(candidate.id, names);
+      } else {
+        emptyVideoIds.add(candidate.id);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      lastErrorMessage = message;
-      if ((error instanceof BiliRequestError && error.status === 412) || isRiskControlError(message)) {
-        riskBlocked = true;
+      batchErrors.push(toTagEnrichmentErrorItem(candidate, message));
+      const current = await readState();
+      const meta = ensureTagEnrichmentMeta(current);
+      failure = applyTagEnrichmentFailurePolicy(meta, error, message);
+      if (failure.phase === "failed") {
+        skippedVideoIds.add(candidate.id);
+      } else {
+        lastProcessedVideoId = plan.cursorAfterVideoId;
         break;
       }
     }
-    await sleep(1600 + Math.floor(Math.random() * 900));
+    if (!tagEnrichmentStopRequested) {
+      await sleep(1600 + Math.floor(Math.random() * 900));
+    }
   }
 
   const result = await withState((state) => {
@@ -2681,34 +5400,94 @@ async function runTagEnrichmentBatch() {
       }
     }
 
-    meta.lastRunAt = now();
-    meta.lastBatchProcessed = plan.candidates.length;
+    meta.checkedEmptyVideoIds = normalizePositiveIntList([
+      ...meta.checkedEmptyVideoIds,
+      ...emptyVideoIds
+    ]);
+    meta.skippedVideoIds = normalizePositiveIntList([
+      ...meta.skippedVideoIds,
+      ...skippedVideoIds
+    ]);
+    meta.errors = [...meta.errors, ...batchErrors].slice(-100);
+    const terminalCount = fetchedTagMap.size + emptyVideoIds.size + skippedVideoIds.size;
+    const timestamp = now();
+    meta.lastRunAt = timestamp;
+    meta.updatedAt = timestamp;
+    meta.lastBatchProcessed = attempted;
+    meta.lastBatchSucceeded = fetchedTagMap.size;
+    meta.lastBatchEmpty = emptyVideoIds.size;
+    meta.lastBatchFailed = batchErrors.length;
     meta.lastBatchBound = bound;
-    meta.totalMissing = countMissingSystemTagVideos(state);
-    meta.cursorAfterVideoId = lastProcessedVideoId;
-    meta.lastError = riskBlocked
-      ? lastErrorMessage || "Risk-control blocked (412). Run tag enrichment manually after cooldown."
-      : null;
+    meta.processed += terminalCount;
+    meta.succeeded += fetchedTagMap.size;
+    meta.empty += emptyVideoIds.size;
+    meta.failed += batchErrors.length;
+    meta.tagsBound += bound;
+    if (terminalCount > 0) meta.cursorAfterVideoId = lastProcessedVideoId;
+    meta.totalMissing = countMissingSystemTagVideos(state, meta);
+    meta.total = Math.max(meta.total, meta.processed + meta.totalMissing);
+
+    if (meta.paused || tagEnrichmentStopRequested) {
+      meta.phase = "paused";
+      meta.paused = true;
+      meta.nextRunAt = null;
+    } else if (failure && failure.phase !== "failed") {
+      meta.phase = failure.phase;
+      meta.paused = failure.phase === "paused";
+      meta.nextRunAt = failure.nextRetryAt;
+      meta.retryAttempt = failure.attempt;
+      meta.riskCount = failure.riskCount;
+      meta.lastError = batchErrors.at(-1)?.message ?? "Tag enrichment failed";
+    } else if (meta.totalMissing > 0) {
+      meta.phase = "waiting";
+      meta.paused = false;
+      meta.nextRunAt = resolveTagEnrichmentBatchNextRunAt(timestamp);
+      meta.retryAttempt = resolveSuccessfulRetryAttempt(meta.retryAttempt);
+      meta.riskCount = Math.max(0, meta.riskCount - 1);
+      meta.lastError = batchErrors.length > 0
+        ? batchErrors.at(-1)?.message ?? null
+        : null;
+    } else {
+      meta.phase = "completed";
+      meta.paused = false;
+      meta.finishedAt = timestamp;
+      meta.nextRunAt = null;
+      meta.retryAttempt = 0;
+      meta.riskCount = 0;
+      meta.lastError = null;
+      meta.cursorAfterVideoId = 0;
+    }
     if (meta.totalMissing <= 0) {
       meta.cursorAfterVideoId = 0;
-      meta.lastError = null;
     }
 
-    return {
-      missing: meta.totalMissing
-    };
+    return { ...meta };
   }, true);
 
-  if (!riskBlocked && result.missing <= 0 && chrome.alarms?.clear) {
-    chrome.alarms.clear(TAG_ENRICH_ALARM);
-  }
+  scheduleTagEnrichment(result);
 }
 
 function triggerTagEnrichment() {
   if (tagEnrichmentTask) return tagEnrichmentTask;
+  tagEnrichmentStopRequested = false;
   tagEnrichmentTask = runTagEnrichmentBatch()
-    .catch((error) => {
+    .catch(async (error) => {
       console.warn("[tag-enrich] failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      const meta = await withState((state) => {
+        const current = ensureTagEnrichmentMeta(state);
+        if (current.paused) return { ...current };
+        const failure = applyTagEnrichmentFailurePolicy(current, error, message);
+        current.phase = failure.phase;
+        current.paused = failure.phase === "paused";
+        current.nextRunAt = failure.nextRetryAt;
+        current.retryAttempt = failure.attempt;
+        current.riskCount = failure.riskCount;
+        current.lastError = message;
+        current.updatedAt = now();
+        return { ...current };
+      }, true);
+      scheduleTagEnrichment(meta);
     })
     .finally(() => {
       tagEnrichmentTask = null;
@@ -2716,29 +5495,163 @@ function triggerTagEnrichment() {
   return tagEnrichmentTask;
 }
 
+async function startTagEnrichmentTask(
+  options: { reset?: boolean; immediate?: boolean; force?: boolean } = {}
+) {
+  if (!TAG_SYNC_ENABLED) return false;
+  tagEnrichmentStopRequested = false;
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    if (
+      current.phase === "paused" &&
+      current.nextRunAt &&
+      current.nextRunAt > now() &&
+      current.riskCount > 0
+    ) {
+      return { ...current };
+    }
+    if (current.paused && !options.force && !options.reset) {
+      return { ...current };
+    }
+    if (options.reset) {
+      const fresh = defaultTagEnrichmentMeta();
+      state.syncMeta.tagEnrichment = fresh;
+    }
+    const next = ensureTagEnrichmentMeta(state);
+    const pending = countMissingSystemTagVideos(state, next);
+    if (
+      next.phase === "idle" ||
+      next.phase === "completed" ||
+      next.phase === "failed" ||
+      options.reset
+    ) {
+      next.total = pending;
+      next.processed = 0;
+      next.succeeded = 0;
+      next.empty = 0;
+      next.failed = 0;
+      next.tagsBound = 0;
+      next.errors = [];
+      next.startedAt = now();
+      next.finishedAt = null;
+      next.cursorAfterVideoId = 0;
+    } else if (!next.startedAt) {
+      next.startedAt = now();
+    }
+    next.totalMissing = pending;
+    next.total = Math.max(next.total, next.processed + pending);
+    next.paused = false;
+    next.lastError = null;
+    next.updatedAt = now();
+    if (pending <= 0) {
+      next.phase = "completed";
+      next.finishedAt = now();
+      next.nextRunAt = null;
+    } else {
+      next.phase = "waiting";
+      next.finishedAt = null;
+      next.nextRunAt = options.immediate === false
+        ? resolveTagEnrichmentBatchNextRunAt(now())
+        : now() + 1000;
+    }
+    return { ...next };
+  }, true);
+
+  scheduleTagEnrichment(meta);
+  if (meta.phase === "waiting" && options.immediate !== false) {
+    void triggerTagEnrichment();
+  }
+  return meta.totalMissing > 0;
+}
+
+async function pauseTagEnrichmentTask() {
+  tagEnrichmentStopRequested = true;
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    current.phase = "paused";
+    current.paused = true;
+    current.nextRunAt = null;
+    current.updatedAt = now();
+    return { ...current };
+  }, true);
+  scheduleTagEnrichment(null);
+  return meta;
+}
+
+async function restoreTagEnrichmentTask() {
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    if (current.paused || current.phase === "paused") return { ...current };
+    if (current.phase === "running") {
+      current.phase = "waiting";
+      current.nextRunAt = now() + TAG_ENRICH_RESTORE_DELAY_MS;
+      current.updatedAt = now();
+    } else if (current.phase === "waiting" && !current.nextRunAt) {
+      current.nextRunAt = now() + TAG_ENRICH_RESTORE_DELAY_MS;
+      current.updatedAt = now();
+    }
+    return { ...current };
+  }, true);
+  scheduleTagEnrichment(meta);
+}
+
 function getTagEnrichmentStatus(state: LocalState) {
   if (!TAG_SYNC_ENABLED) {
     return {
+      phase: "paused" as const,
       paused: true,
       running: false,
       cursorAfterVideoId: 0,
+      total: 0,
       totalMissing: 0,
+      processed: 0,
+      succeeded: 0,
+      empty: 0,
+      failed: 0,
+      tagsBound: 0,
       lastBatchProcessed: 0,
+      lastBatchSucceeded: 0,
+      lastBatchEmpty: 0,
+      lastBatchFailed: 0,
       lastBatchBound: 0,
+      startedAt: null,
+      finishedAt: null,
+      nextRunAt: null,
+      retryAttempt: 0,
+      riskCount: 0,
       lastRunAt: null,
-      lastError: "Tag sync is disabled"
+      updatedAt: 0,
+      lastError: "Tag sync is disabled",
+      errors: []
     };
   }
   const meta = ensureTagEnrichmentMeta(state);
   return {
+    phase: meta.phase,
     paused: meta.paused,
-    running: Boolean(tagEnrichmentTask),
+    running: Boolean(tagEnrichmentTask) || meta.phase === "running",
     cursorAfterVideoId: meta.cursorAfterVideoId,
+    total: meta.total,
     totalMissing: meta.totalMissing,
+    processed: meta.processed,
+    succeeded: meta.succeeded,
+    empty: meta.empty,
+    failed: meta.failed,
+    tagsBound: meta.tagsBound,
     lastBatchProcessed: meta.lastBatchProcessed,
+    lastBatchSucceeded: meta.lastBatchSucceeded,
+    lastBatchEmpty: meta.lastBatchEmpty,
+    lastBatchFailed: meta.lastBatchFailed,
     lastBatchBound: meta.lastBatchBound,
+    startedAt: meta.startedAt,
+    finishedAt: meta.finishedAt,
+    nextRunAt: meta.nextRunAt,
+    retryAttempt: meta.retryAttempt,
+    riskCount: meta.riskCount,
     lastRunAt: meta.lastRunAt,
-    lastError: meta.lastError
+    updatedAt: meta.updatedAt,
+    lastError: meta.lastError,
+    errors: meta.errors.slice(-20)
   };
 }
 
@@ -3075,10 +5988,93 @@ type SyncSummary = {
   foldersSynced: number;
   videosProcessed: number;
   videosUpserted: number;
+  skippedMissingBvid: number;
+  unresolvedMissingBvid: number;
+  incompleteFolders: number;
   folderLinksAdded: number;
+  folderLinksRemoved: number;
   tagsBound: number;
   errorCount: number;
 };
+
+function ensureFavoritesSyncJobMeta(state: LocalState) {
+  if (!state.syncMeta) {
+    state.syncMeta = defaultState().syncMeta;
+  }
+  if (!state.syncMeta.favoritesJob) {
+    state.syncMeta.favoritesJob = defaultFavoritesSyncJobMeta();
+  }
+  return state.syncMeta.favoritesJob;
+}
+
+function ensureArticleFolderByNameForImport(state: LocalState, rawName: unknown) {
+  state.articleFolders ??= [];
+  const name = normalizeText(rawName);
+  if (!name) return null;
+  const timestamp = now();
+  const existing = (state.articleFolders ?? []).find(
+    (folder) => normalizeKey(folder.name) === normalizeKey(name),
+  );
+  if (existing) {
+    existing.deletedAt = null;
+    existing.updatedAt = timestamp;
+    return { folder: existing, created: false };
+  }
+
+  const created: ArticleFolderRecord = {
+    id: Math.max(1, toInt(state.counters.articleFolder, 1)),
+    name,
+    description: "Imported",
+    sortOrder: activeArticleFolders(state).length + 1,
+    deletedAt: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  state.counters.articleFolder = created.id + 1;
+  state.articleFolders.push(created);
+  return { folder: created, created: true };
+}
+
+function applyFavoritesSyncFailurePolicy(
+  job: FavoritesSyncJob,
+  error: unknown,
+  message: string
+) {
+  const policy = resolveFavoritesFailurePolicy({
+    status: isBiliRequestError(error) ? error.status : 0,
+    message,
+    attempt: job.retry.attempt + 1,
+    detectedAt: now(),
+    retryAfterMs: isBiliRequestError(error) ? error.retryAfterMs : null,
+    previousRiskCount: job.retry.riskCount,
+    random: Math.random
+  });
+  job.phase = policy.phase;
+  job.retry = {
+    attempt: policy.attempt,
+    nextRetryAt: policy.nextRetryAt,
+    automatic: policy.automatic,
+    reason: policy.reason,
+    riskCount: policy.riskCount
+  };
+  if (policy.phase === "paused") job.riskBlocked = true;
+  return policy;
+}
+
+function scheduleFavoritesSyncRetry(job: FavoritesSyncJob | null) {
+  if (
+    !job ||
+    !job.retry.automatic ||
+    !job.retry.nextRetryAt ||
+    !chrome.alarms?.create
+  ) {
+    if (chrome.alarms?.clear) chrome.alarms.clear(FAVORITES_SYNC_RETRY_ALARM);
+    return;
+  }
+  chrome.alarms.create(FAVORITES_SYNC_RETRY_ALARM, {
+    when: Math.max(now() + 1000, job.retry.nextRetryAt)
+  });
+}
 
 async function syncFromBilibiliToState(
   state: LocalState,
@@ -3086,10 +6082,17 @@ async function syncFromBilibiliToState(
     selectedRemoteFolderIds?: number[];
     resumePageByFolder?: Record<string, number>;
     onProgress?: (progress: FavoritesSyncProgress) => void;
+    job?: FavoritesSyncJob;
+    onCheckpoint?: (state: LocalState, job: FavoritesSyncJob) => Promise<void> | void;
   }
 ) {
+  const favoritesJobMeta = ensureFavoritesSyncJobMeta(state);
+  const job = options.job ?? null;
+  const deletionCandidatesByFolder = job
+    ? job.deletionCandidatesByFolder
+    : favoritesJobMeta.deletionCandidatesByFolder;
   const selectedIdSet = new Set(
-    (options.selectedRemoteFolderIds ?? [])
+    (options.selectedRemoteFolderIds ?? job?.selectedRemoteFolderIds ?? [])
       .map((id) => Number(id))
       .filter((id) => Number.isFinite(id) && id > 0)
   );
@@ -3117,15 +6120,23 @@ async function syncFromBilibiliToState(
     0
   );
 
-  let foldersSynced = 0;
-  let videosProcessed = 0;
-  let videosUpserted = 0;
-  let folderLinksAdded = 0;
-  let tagsBound = 0;
+  let foldersSynced = job?.summary.foldersSynced ?? 0;
+  let videosProcessed = job?.summary.videosProcessed ?? 0;
+  let videosUpserted = job?.summary.videosUpserted ?? 0;
+  let skippedMissingBvid = job?.summary.skippedMissingBvid ?? 0;
+  let unresolvedMissingBvid = job?.summary.unresolvedMissingBvid ?? 0;
+  let incompleteFolderCount = job?.summary.incompleteFolders ?? 0;
+  let folderLinksAdded = job?.summary.folderLinksAdded ?? 0;
+  let folderLinksRemoved = job?.summary.folderLinksRemoved ?? 0;
+  let tagsBound = job?.summary.tagsBound ?? 0;
   let riskBlocked = false;
-  const invalidVideoIdSet = new Set<number>();
-  const errors: Array<{ folder: string; message: string }> = [];
-  let progressCurrent = 0;
+  const invalidVideoIdSet = new Set<number>(job?.invalidVideoIds ?? []);
+  const errors: Array<{ folder: string; message: string }> = job?.errors.slice() ?? [];
+  const unresolvedItems: FavoritesSyncUnresolvedItem[] =
+    job?.unresolvedItems.slice() ?? [];
+  const incompleteFolders: FavoritesSyncIncompleteFolder[] =
+    job?.incompleteFolders.slice() ?? [];
+  let progressCurrent = job?.current ?? 0;
   let videosSinceCooldown = 0;
   const resumePageByFolder: Record<string, number> = {};
   for (const [remoteIdRaw, pageRaw] of Object.entries(options.resumePageByFolder ?? {})) {
@@ -3135,6 +6146,41 @@ async function syncFromBilibiliToState(
       resumePageByFolder[String(remoteId)] = page;
     }
   }
+  if (job?.currentFolderRemoteId && job.nextPage > 1) {
+    resumePageByFolder[String(job.currentFolderRemoteId)] = job.nextPage;
+  }
+  if (job) {
+    job.phase = "running";
+    job.folderTotal = foldersToSync.length;
+    job.total = totalEstimate;
+    job.summary.foldersDetected = foldersToSync.length;
+    job.updatedAt = now();
+  }
+  const checkpointJob = async () => {
+    if (!job) return;
+    job.current = progressCurrent;
+    job.summary = {
+      foldersDetected: foldersToSync.length,
+      foldersSynced,
+      videosProcessed,
+      videosUpserted,
+      skippedMissingBvid,
+      unresolvedMissingBvid,
+      incompleteFolders: incompleteFolderCount,
+      folderLinksAdded,
+      folderLinksRemoved,
+      tagsBound,
+      errorCount: errors.length
+    };
+    job.invalidVideoIds = Array.from(invalidVideoIdSet).sort((a, b) => a - b);
+    job.errors = errors.slice(-100);
+    job.unresolvedItems = unresolvedItems.slice(-100);
+    job.incompleteFolders = incompleteFolders.slice(-100);
+    job.lastError = errors.at(-1)?.message ?? null;
+    job.riskBlocked = riskBlocked;
+    job.updatedAt = now();
+    await options.onCheckpoint?.(state, job);
+  };
   const emitProgress = (progress: Omit<FavoritesSyncProgress, "total" | "current">) => {
     options.onProgress?.({
       total: totalEstimate,
@@ -3143,36 +6189,94 @@ async function syncFromBilibiliToState(
     });
   };
 
-  for (const remoteFolder of foldersToSync) {
+  for (const [folderOffset, remoteFolder] of foldersToSync.entries()) {
+    if (job?.completedRemoteFolderIds.includes(remoteFolder.remoteId)) continue;
+    const folderPosition = folderOffset + 1;
     try {
       let throttleState: FavoritesSyncThrottleState =
         createFavoritesSyncThrottleState({
           folderMediaCount: Number(remoteFolder.mediaCount || 0),
           totalVideosProcessed: videosProcessed
         });
-      if (foldersSynced > 0) {
+      if (folderOffset > 0) {
         await sleep(resolveFavoritesFolderGapMs(throttleState));
       }
       const localFolder = ensureLocalFolderByRemoteId(state, remoteFolder);
-      foldersSynced += 1;
+      const isResumingCurrentFolder =
+        job?.currentFolderRemoteId === remoteFolder.remoteId;
+      if (!isResumingCurrentFolder) foldersSynced += 1;
+      if (job) {
+        job.currentFolderRemoteId = remoteFolder.remoteId;
+        job.currentFolderTitle = remoteFolder.title;
+        job.currentFolderIndex = folderPosition;
+        job.folderTotal = foldersToSync.length;
+        job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] ??= [];
+      }
       emitProgress({
         folderTitle: remoteFolder.title,
-        folderIndex: foldersSynced,
+        folderIndex: folderPosition,
         folderTotal: foldersToSync.length,
         message: `Syncing: ${remoteFolder.title}`
       });
       const pageSize = 20;
-      let page = Math.max(1, toInt(resumePageByFolder[String(remoteFolder.remoteId)] || 1));
+      let page = Math.max(
+        1,
+        toInt(
+          isResumingCurrentFolder
+            ? job?.nextPage
+            : resumePageByFolder[String(remoteFolder.remoteId)] || 1
+        )
+      );
       if (page > 1) {
         emitProgress({
           folderTitle: remoteFolder.title,
-          folderIndex: foldersSynced,
+          folderIndex: folderPosition,
           folderTotal: foldersToSync.length,
           message: `Resuming from page ${page}: ${remoteFolder.title}`
         });
       }
       let folderFailed = false;
-      const remoteBvidKeys = new Set<string>();
+      let folderIncompleteReason = "";
+      const remoteBvidKeys = new Set<string>(
+        job?.seenBvidKeysByFolder[String(remoteFolder.remoteId)] ?? []
+      );
+      let observedRowCount = job?.observedRowCountByFolder[
+        String(remoteFolder.remoteId)
+      ] ?? 0;
+      let expectedRemoteCount = Math.max(0, toInt(remoteFolder.mediaCount, 0));
+      for (let index = incompleteFolders.length - 1; index >= 0; index -= 1) {
+        if (incompleteFolders[index]?.remoteFolderId === remoteFolder.remoteId) {
+          incompleteFolders.splice(index, 1);
+        }
+      }
+      incompleteFolderCount = incompleteFolders.length;
+      if (page === 1) {
+        for (let index = unresolvedItems.length - 1; index >= 0; index -= 1) {
+          if (unresolvedItems[index]?.remoteFolderId === remoteFolder.remoteId) {
+            unresolvedItems.splice(index, 1);
+          }
+        }
+        unresolvedMissingBvid = unresolvedItems.length;
+      }
+      let folderHasUnresolved = unresolvedItems.some(
+        (item) => item.remoteFolderId === remoteFolder.remoteId
+      );
+      if (page > 1 && remoteBvidKeys.size === 0) {
+        for (const item of state.folderItems) {
+          if (item.folderId !== localFolder.id) continue;
+          const video = state.videos.find((candidate) => candidate.id === item.videoId);
+          const key = normalizeKey(video?.bvid);
+          if (key) remoteBvidKeys.add(key);
+        }
+        if (!job) observedRowCount = Math.max(observedRowCount, remoteBvidKeys.size);
+      }
+      if (job) {
+        job.nextPage = page;
+        job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+          Array.from(remoteBvidKeys).sort();
+        job.observedRowCountByFolder[String(remoteFolder.remoteId)] =
+          observedRowCount;
+      }
       while (true) {
         const query = new URLSearchParams({
           media_id: String(remoteFolder.remoteId),
@@ -3209,24 +6313,88 @@ async function syncFromBilibiliToState(
             riskBlocked = true;
           }
           folderFailed = true;
+          resumePageByFolder[String(remoteFolder.remoteId)] = page;
+          if (job) {
+            applyFavoritesSyncFailurePolicy(job, error, message);
+            job.nextPage = page;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+              Array.from(remoteBvidKeys).sort();
+            await checkpointJob();
+          }
           break;
         }
 
-        const medias = folderMediaData.medias ?? [];
+        const medias = Array.isArray(folderMediaData.medias)
+          ? folderMediaData.medias
+          : [];
+        const responseTotal = Number(folderMediaData.info?.media_count);
+        if (Number.isFinite(responseTotal) && responseTotal >= 0) {
+          expectedRemoteCount = Math.trunc(responseTotal);
+        }
         if (medias.length === 0) {
+          if (folderMediaData.has_more === true || observedRowCount < expectedRemoteCount) {
+            folderIncompleteReason = folderMediaData.has_more === true
+              ? "Remote response reported more pages but returned an empty page"
+              : "Remote response ended before the reported total was observed";
+          }
           break;
         }
         const responseMs = Math.max(0, now() - pageFetchStartedAt);
 
-        for (const media of medias) {
-          const bvid = normalizeText(media.bvid ?? media.bv_id);
-          if (!bvid) continue;
+        let pageAbortedByRisk = false;
+        for (const [mediaIndex, media] of medias.entries()) {
+          const resolvedIdentity = await resolveFavoriteMediaBvid(media);
+          const bvid = resolvedIdentity.bvid;
+          if (!bvid) {
+            if (resolvedIdentity.riskBlocked) {
+              riskBlocked = true;
+              folderFailed = true;
+              pageAbortedByRisk = true;
+              errors.push({
+                folder: remoteFolder.title,
+                message: resolvedIdentity.reason || "Bilibili risk-control blocked BV resolution"
+              });
+              if (job) {
+                applyFavoritesSyncFailurePolicy(
+                  job,
+                  resolvedIdentity.error,
+                  resolvedIdentity.reason || "Bilibili risk-control blocked BV resolution"
+                );
+              }
+              break;
+            }
+            skippedMissingBvid += 1;
+            folderHasUnresolved = true;
+            const unresolved: FavoritesSyncUnresolvedItem = {
+              remoteFolderId: remoteFolder.remoteId,
+              folder: remoteFolder.title,
+              aid: resolvedIdentity.aid,
+              title: normalizeText(media.title),
+              reason: resolvedIdentity.reason || "BV id could not be resolved"
+            };
+            const exists = unresolvedItems.some(
+              (item) =>
+                item.remoteFolderId === unresolved.remoteFolderId &&
+                item.aid === unresolved.aid &&
+                item.title === unresolved.title
+            );
+            if (!exists) {
+              unresolvedItems.push(unresolved);
+              unresolvedMissingBvid += 1;
+            }
+            continue;
+          }
           remoteBvidKeys.add(normalizeKey(bvid));
           videosProcessed += 1;
           videosSinceCooldown += 1;
           const timestamp = now();
           const publishAt = toMillis(media.pubtime ?? media.ctime, timestamp);
-          const favAt = toMillis(media.fav_time, timestamp);
+          const favAt = resolveRemoteFavoriteAddedAt(
+            media.fav_time,
+            page,
+            pageSize,
+            mediaIndex
+          );
           const existing = state.videos.find(
             (video) => normalizeKey(video.bvid) === normalizeKey(bvid)
           );
@@ -3289,14 +6457,37 @@ async function syncFromBilibiliToState(
               addedAt: favAt
             });
             folderLinksAdded += 1;
-          } else if (favAt > existingLink.addedAt) {
+          } else if (favAt !== existingLink.addedAt) {
             existingLink.addedAt = favAt;
           }
+        }
+        if (pageAbortedByRisk) {
+          resumePageByFolder[String(remoteFolder.remoteId)] = page;
+          if (job) {
+            job.nextPage = page;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+              Array.from(remoteBvidKeys).sort();
+            job.observedRowCountByFolder[String(remoteFolder.remoteId)] =
+              observedRowCount;
+            await checkpointJob();
+          }
+          break;
+        }
+        observedRowCount += medias.length;
+        if (job && job.retry.attempt > 0) {
+          const nextAttempt = resolveSuccessfulRetryAttempt(job.retry.attempt);
+          job.retry = {
+            attempt: nextAttempt,
+            nextRetryAt: null,
+            automatic: false,
+            reason: nextAttempt > 0 ? "recovering" : null,
+            riskCount: Math.max(0, job.retry.riskCount - 1)
+          };
         }
         progressCurrent += medias.length;
         emitProgress({
           folderTitle: remoteFolder.title,
-          folderIndex: foldersSynced,
+          folderIndex: folderPosition,
           folderTotal: foldersToSync.length,
           message: `Syncing page ${page}: ${remoteFolder.title}`
         });
@@ -3312,6 +6503,22 @@ async function syncFromBilibiliToState(
           pageSize,
           medias.length
         );
+        if (!remoteHasMore && observedRowCount !== expectedRemoteCount) {
+          folderIncompleteReason =
+            "Remote response total does not match the number of observed rows";
+        }
+        if (remoteHasMore) {
+          page += 1;
+          resumePageByFolder[String(remoteFolder.remoteId)] = page;
+          if (job) {
+            job.nextPage = page;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] =
+              Array.from(remoteBvidKeys).sort();
+            job.observedRowCountByFolder[String(remoteFolder.remoteId)] =
+              observedRowCount;
+            await checkpointJob();
+          }
+        }
         const cooldownPolicy = resolveFavoritesCooldownPolicy(throttleState);
         if (
           videosSinceCooldown >= cooldownPolicy.thresholdVideos &&
@@ -3324,22 +6531,74 @@ async function syncFromBilibiliToState(
           delete resumePageByFolder[String(remoteFolder.remoteId)];
           break;
         }
-        page += 1;
-        resumePageByFolder[String(remoteFolder.remoteId)] = page;
         await sleep(resolveFavoritesPageGapMs(throttleState));
       }
 
-      if (!folderFailed) {
-        const folderVideoIdSet = new Set(
-          state.videos
-            .filter((video) => remoteBvidKeys.has(normalizeKey(video.bvid)))
-            .map((video) => video.id)
-        );
-        state.folderItems = state.folderItems.filter((item) => {
-          if (item.folderId !== localFolder.id) return true;
-          return folderVideoIdSet.has(item.videoId);
+      const incompleteReason = folderFailed
+        ? riskBlocked
+          ? "Bilibili risk-control interrupted the folder scan"
+          : "A remote request failed before the folder scan completed"
+        : folderHasUnresolved
+          ? "One or more remote rows could not be resolved to a BV id"
+          : folderIncompleteReason;
+
+      if (incompleteReason) {
+        incompleteFolders.push({
+          remoteFolderId: remoteFolder.remoteId,
+          folder: remoteFolder.title,
+          expected: expectedRemoteCount,
+          observed: observedRowCount,
+          reason: incompleteReason
         });
-        markOrphanVideosDeleted(state);
+        incompleteFolderCount = incompleteFolders.length;
+        if (job) {
+          if (!folderFailed) {
+            job.nextPage = 1;
+            job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] = [];
+            job.observedRowCountByFolder[String(remoteFolder.remoteId)] = 0;
+          }
+          await checkpointJob();
+        }
+      } else {
+        const existingLocalKeys = new Set<string>();
+        for (const item of state.folderItems) {
+          if (item.folderId !== localFolder.id) continue;
+          const video = state.videos.find((candidate) => candidate.id === item.videoId);
+          const key = normalizeKey(video?.bvid);
+          if (key) existingLocalKeys.add(key);
+        }
+        const omittedKeys = Array.from(existingLocalKeys)
+          .filter((key) => !remoteBvidKeys.has(key))
+          .sort();
+        const priorCandidates = new Set(
+          deletionCandidatesByFolder[String(remoteFolder.remoteId)] ?? []
+        );
+        const confirmedRemovalKeys = new Set(
+          omittedKeys.filter((key) => priorCandidates.has(key))
+        );
+        if (confirmedRemovalKeys.size > 0) {
+          state.folderItems = state.folderItems.filter((item) => {
+            if (item.folderId !== localFolder.id) return true;
+            const video = state.videos.find((candidate) => candidate.id === item.videoId);
+            if (!confirmedRemovalKeys.has(normalizeKey(video?.bvid))) return true;
+            folderLinksRemoved += 1;
+            return false;
+          });
+          markOrphanVideosDeleted(state);
+        }
+        deletionCandidatesByFolder[String(remoteFolder.remoteId)] = omittedKeys;
+        if (job) {
+          job.completedRemoteFolderIds = Array.from(
+            new Set([...job.completedRemoteFolderIds, remoteFolder.remoteId])
+          ).sort((left, right) => left - right);
+          delete job.seenBvidKeysByFolder[String(remoteFolder.remoteId)];
+          delete job.observedRowCountByFolder[String(remoteFolder.remoteId)];
+          job.currentFolderRemoteId = null;
+          job.currentFolderTitle = remoteFolder.title;
+          job.currentFolderIndex = folderPosition;
+          job.nextPage = 1;
+          await checkpointJob();
+        }
       }
 
       if (riskBlocked) {
@@ -3347,6 +6606,7 @@ async function syncFromBilibiliToState(
           folder: "__sync__",
           message: "Bilibili risk-control (412) detected. Stop and retry later."
         });
+        if (job) await checkpointJob();
         break;
       }
     } catch (error) {
@@ -3362,13 +6622,20 @@ async function syncFromBilibiliToState(
       const isRiskBlocked = isBiliRequestError(error)
         ? error.status === 412 || isRiskControlError(message)
         : isRiskControlError(message);
+      if (job) applyFavoritesSyncFailurePolicy(job, error, message);
       if (isRiskBlocked) {
         riskBlocked = true;
         errors.push({
           folder: "__sync__",
           message: "Bilibili risk-control (412) detected. Stop and retry later."
         });
+        if (job) {
+          await checkpointJob();
+        }
         break;
+      }
+      if (job) {
+        await checkpointJob();
       }
     }
   }
@@ -3378,7 +6645,11 @@ async function syncFromBilibiliToState(
     foldersSynced,
     videosProcessed,
     videosUpserted,
+    skippedMissingBvid,
+    unresolvedMissingBvid,
+    incompleteFolders: incompleteFolderCount,
     folderLinksAdded,
+    folderLinksRemoved,
     tagsBound,
     errorCount: errors.length
   };
@@ -3388,9 +6659,29 @@ async function syncFromBilibiliToState(
   const errorsOmitted = Math.max(0, errors.length - returnedErrors.length);
   const invalidVideoIds = Array.from(invalidVideoIdSet).sort((a, b) => a - b);
 
+  if (job) {
+    job.summary = { ...summary };
+    job.invalidVideoIds = invalidVideoIds;
+    job.errors = errors.slice(-100);
+    job.unresolvedItems = unresolvedItems.slice(-100);
+    job.incompleteFolders = incompleteFolders.slice(-100);
+    job.riskBlocked = riskBlocked;
+    job.lastError = returnedErrors.at(-1)?.message ?? null;
+    job.current = videosProcessed;
+    job.updatedAt = now();
+    if (riskBlocked) job.phase = "paused";
+  }
+
   return {
     ok: true,
     summary,
+    completed: job
+      ? foldersToSync.every((folder) =>
+          job.completedRemoteFolderIds.includes(folder.remoteId)
+        )
+      : !riskBlocked &&
+        incompleteFolders.length === 0 &&
+        Object.keys(resumePageByFolder).length === 0,
     hasMore: false,
     nextOffset: null,
     hasMorePage: false,
@@ -3399,36 +6690,30 @@ async function syncFromBilibiliToState(
     resumePageByFolder,
     invalidVideosDetected: invalidVideoIds.length,
     invalidVideoIds,
+    unresolvedItems: unresolvedItems.slice(-100),
+    incompleteFolders: incompleteFolders.slice(-100),
     errors: returnedErrors,
     errorsOmitted,
     syncedAt: now()
   };
 }
 
-function getFavoritesSyncStatus() {
+function getFavoritesSyncStatus(state: LocalState) {
+  const meta = state.syncMeta.favoritesJob;
+  const status = meta.active
+    ? statusFromFavoritesSyncJob(
+        meta.active,
+        Boolean(favoritesSyncTask) && meta.active.phase === "running"
+      )
+    : meta.lastStatus;
   return {
-    ...favoritesSyncStatus,
-    resumePageByFolder: { ...favoritesSyncStatus.resumePageByFolder },
-    invalidVideoIds: [...favoritesSyncStatus.invalidVideoIds],
-    summary: { ...favoritesSyncStatus.summary },
-    errors: favoritesSyncStatus.errors.slice(0, 30)
-  };
-}
-
-function updateFavoritesSyncStatus(patch: Partial<FavoritesSyncStatus>) {
-  favoritesSyncStatus = {
-    ...favoritesSyncStatus,
-    ...patch,
-    resumePageByFolder: patch.resumePageByFolder
-      ? { ...patch.resumePageByFolder }
-      : { ...favoritesSyncStatus.resumePageByFolder },
-    summary: patch.summary
-      ? { ...patch.summary }
-      : { ...favoritesSyncStatus.summary },
-    invalidVideoIds: patch.invalidVideoIds
-      ? [...patch.invalidVideoIds]
-      : [...favoritesSyncStatus.invalidVideoIds],
-    errors: patch.errors ? [...patch.errors] : [...favoritesSyncStatus.errors]
+    ...status,
+    resumePageByFolder: { ...status.resumePageByFolder },
+    invalidVideoIds: [...status.invalidVideoIds],
+    summary: { ...status.summary },
+    errors: status.errors.slice(-30),
+    unresolvedItems: status.unresolvedItems.slice(-100),
+    incompleteFolders: status.incompleteFolders.slice(-100)
   };
 }
 
@@ -3777,7 +7062,7 @@ function isWriteRequestBlockedByFavoritesSync(method: string, path: string) {
   // Keep sync control and probe endpoints callable while sync is running.
   if (path.startsWith("/sync/bilibili/history-model/")) return false;
   if (path === "/sync/bilibili/history-model/status") return false;
-  if (path === "/sync/bilibili/tag-enrichment/status") return false;
+  if (path.startsWith("/sync/bilibili/tag-enrichment/")) return false;
   if (path === "/sync/bilibili/bidirectional/settings") return false;
   if (path === "/ai/settings") return false;
   if (path === "/ai/settings/test") return false;
@@ -3789,102 +7074,114 @@ function isWriteRequestBlockedByFavoritesSync(method: string, path: string) {
   return true;
 }
 
-function startFavoritesSyncTask(params: {
+async function startFavoritesSyncTask(params: {
   selectedRemoteFolderIds: number[];
   resumePageByFolder?: Record<string, number>;
+  restart?: boolean;
 }) {
-  if (favoritesSyncTask) {
+  if (favoritesSyncTask || favoritesSyncStartPending) {
     return false;
   }
-
-  const resumePageByFolder: Record<string, number> = {};
-  for (const [remoteIdRaw, pageRaw] of Object.entries(params.resumePageByFolder ?? {})) {
-    const remoteId = toInt(remoteIdRaw);
-    const page = toInt(pageRaw);
-    if (remoteId > 0 && page > 1) {
-      resumePageByFolder[String(remoteId)] = page;
-    }
+  const existingState = await readState();
+  const existingJob = existingState.syncMeta.favoritesJob.active;
+  if (
+    existingJob?.phase === "paused" &&
+    !existingJob.retry.automatic &&
+    existingJob.retry.nextRetryAt &&
+    existingJob.retry.nextRetryAt > now()
+  ) {
+    return false;
   }
+  favoritesSyncStartPending = true;
+  try {
+    const jobId = await withState((state) => {
+      if (params.restart) state.syncMeta.favoritesJob.active = null;
+      const job = prepareFavoritesSyncJob(
+        state.syncMeta.favoritesJob,
+        params.selectedRemoteFolderIds,
+        now()
+      );
+      return job.id;
+    }, true);
 
-  const startedAt = now();
-  updateFavoritesSyncStatus({
-    running: true,
-    startedAt,
-    finishedAt: null,
-    total: 0,
-    current: 0,
-    folderTitle: "",
-    folderIndex: 0,
-    folderTotal: 0,
-    message: "Starting favorites sync...",
-    lastError: null,
-    riskBlocked: false,
-    resumePageByFolder,
-    invalidVideosDetected: 0,
-    invalidVideoIds: [],
-    summary: emptyFavoritesSyncSummary(),
-    errors: []
-  });
-
-  favoritesSyncTask = withState(
-    async (state) =>
-      syncFromBilibiliToState(state, {
-        selectedRemoteFolderIds: params.selectedRemoteFolderIds,
-        resumePageByFolder,
-        onProgress: (progress) => {
-          updateFavoritesSyncStatus({
-            total: progress.total,
-            current: progress.current,
-            folderTitle: progress.folderTitle,
-            folderIndex: progress.folderIndex,
-            folderTotal: progress.folderTotal,
-            message: progress.message
-          });
+    favoritesSyncTask = withState(async (state) => {
+      const job = state.syncMeta.favoritesJob.active;
+      if (!job || job.id !== jobId) {
+        throw new Error("Favorites sync checkpoint is no longer active");
+      }
+      return syncFromBilibiliToState(state, {
+        selectedRemoteFolderIds: job.selectedRemoteFolderIds,
+        job,
+        onCheckpoint: async () => {
+          await writeState(state);
         }
-      }),
-    true
-  )
-    .then((result) => {
-      updateFavoritesSyncStatus({
-        running: false,
-        finishedAt: now(),
-        total: Math.max(favoritesSyncStatus.total, result.summary.videosProcessed),
-        current: result.summary.videosProcessed,
-        message: "Favorites sync completed",
-        lastError:
-          result.errors.length > 0
-            ? result.errors[result.errors.length - 1]?.message || null
-            : null,
-        riskBlocked: Boolean(result.riskBlocked),
-        resumePageByFolder: result.resumePageByFolder ?? {},
-        invalidVideosDetected: Math.max(0, toInt(result.invalidVideosDetected, 0)),
-        invalidVideoIds: Array.isArray(result.invalidVideoIds)
-          ? result.invalidVideoIds.map((id) => toInt(id)).filter((id) => id > 0)
-          : [],
-        summary: result.summary,
-        errors: result.errors
       });
-    })
-    .catch((error) => {
-      const message = isBiliRequestError(error)
-        ? formatBiliRequestError(error)
-        : error instanceof Error
-          ? error.message
-          : String(error);
-      updateFavoritesSyncStatus({
-        running: false,
-        finishedAt: now(),
-        message: "Favorites sync failed",
-        lastError: message,
-        invalidVideosDetected: 0,
-        invalidVideoIds: []
+    }, false)
+      .then(async (result) => {
+        let retryJob: FavoritesSyncJob | null = null;
+        await withState((state) => {
+          const meta = state.syncMeta.favoritesJob;
+          const active = meta.active;
+          if (!active || active.id !== jobId) return;
+          active.summary = { ...result.summary };
+          active.invalidVideoIds = [...result.invalidVideoIds];
+          active.errors = [...result.errors];
+          active.unresolvedItems = [...result.unresolvedItems];
+          active.incompleteFolders = [...result.incompleteFolders];
+          active.riskBlocked = Boolean(result.riskBlocked);
+          active.lastError = result.errors.at(-1)?.message ?? null;
+          active.updatedAt = now();
+          if (result.completed && !result.riskBlocked) {
+            completeFavoritesSyncJob(meta, active, now());
+          } else {
+            active.phase = result.riskBlocked
+              ? "paused"
+              : active.retry.automatic
+                ? "waiting"
+                : "failed";
+            retryJob = active;
+          }
+        }, true);
+        scheduleFavoritesSyncRetry(retryJob);
+        if (
+          TAG_SYNC_ENABLED &&
+          result.completed &&
+          !result.riskBlocked &&
+          result.summary.videosProcessed > 0
+        ) {
+          await startTagEnrichmentTask({ immediate: false });
+        }
+      })
+      .catch(async (error) => {
+        const message = isBiliRequestError(error)
+          ? formatBiliRequestError(error)
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        let retryJob: FavoritesSyncJob | null = null;
+        await withState((state) => {
+          const active = state.syncMeta.favoritesJob.active;
+          if (!active || active.id !== jobId) return;
+          applyFavoritesSyncFailurePolicy(active, error, message);
+          active.lastError = message;
+          active.errors = [
+            ...active.errors,
+            { folder: "__sync__", message }
+          ].slice(-100);
+          active.summary.errorCount = active.errors.length;
+          active.updatedAt = now();
+          retryJob = active;
+        }, true);
+        scheduleFavoritesSyncRetry(retryJob);
+      })
+      .finally(() => {
+        favoritesSyncTask = null;
       });
-    })
-    .finally(() => {
-      favoritesSyncTask = null;
-    });
 
-  return true;
+    return true;
+  } finally {
+    favoritesSyncStartPending = false;
+  }
 }
 
 function buildExportPayload(state: LocalState) {
@@ -3908,6 +7205,49 @@ function buildExportPayload(state: LocalState) {
   const exportTagIds = new Set(exportTags.map((tag) => tag.id));
   const exportVideoTags = state.videoTags.filter(
     (edge) => exportVideoIds.has(edge.videoId) && exportTagIds.has(edge.tagId)
+  );
+  const exportComments = (state.comments ?? [])
+    .filter((comment) => comment.deletedAt == null)
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id);
+  const activeExportArticles = (state.articles ?? []).filter(
+    (article) => article.deletedAt == null,
+  );
+  const legacyArticleFolderIds = new Set(
+    activeExportArticles.flatMap((article) => article.folderIds ?? []),
+  );
+  const exportArticleFolders =
+    (state.articleFolders ?? []).length > 0
+      ? activeArticleFolders(state)
+      : state.folders
+          .filter((folder) => folder.deletedAt === null && legacyArticleFolderIds.has(folder.id))
+          .map((folder, index) => ({
+            id: folder.id,
+            name: folder.name,
+            description: folder.description,
+            sortOrder: index + 1,
+            deletedAt: null,
+            createdAt: folder.createdAt,
+            updatedAt: folder.updatedAt,
+          }));
+  const exportArticleFolderById = new Map(
+    exportArticleFolders.map((folder) => [folder.id, folder]),
+  );
+  const exportArticles = activeExportArticles
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id)
+    .map((article) => {
+      const folderIds = (article.folderIds ?? []).filter((folderId) =>
+        exportArticleFolderById.has(folderId),
+      );
+      return {
+        ...article,
+        folderIds,
+        folders: folderIds
+          .map((folderId) => exportArticleFolderById.get(folderId)?.name ?? "")
+          .filter(Boolean),
+      };
+    });
+  const exportFollowedUps = [...(state.followedUps ?? [])].sort(
+    (left, right) => left.sortOrder - right.sortOrder || left.uid - right.uid,
   );
   const {
     folderNamesByVideo,
@@ -3934,6 +7274,10 @@ function buildExportPayload(state: LocalState) {
     exportFolderItems,
     exportTags,
     exportVideoTags,
+    exportComments,
+    exportArticleFolders,
+    exportArticles,
+    exportFollowedUps,
     folderNamesByVideo,
     folderCountByVideo,
     latestAddedAtByVideo,
@@ -3951,6 +7295,10 @@ export function buildJsonExportResult(state: LocalState) {
     exportFolderItems,
     exportTags,
     exportVideoTags,
+    exportComments,
+    exportArticleFolders,
+    exportArticles,
+    exportFollowedUps,
     latestAddedAtByVideo,
     folderCountByVideo,
     folderNamesByVideo,
@@ -3959,8 +7307,12 @@ export function buildJsonExportResult(state: LocalState) {
   } = buildExportPayload(state);
   const summary = {
     folders: exportFolders.length,
+    articleFolders: exportArticleFolders.length,
     videos: activeExportVideos.length,
-    tags: exportTags.length
+    tags: exportTags.length,
+    comments: exportComments.length,
+    articles: exportArticles.length,
+    followedUps: exportFollowedUps.length,
   };
 
   const exportVideos = activeExportVideos.map((video) => {
@@ -3994,10 +7346,14 @@ export function buildJsonExportResult(state: LocalState) {
         source: "bilishelf-extension-local"
       },
       folders: exportFolders,
+      articleFolders: exportArticleFolders,
       videos: exportVideos,
       folderItems: exportFolderItemsWithText,
       tags: exportTags,
-      videoTags: exportVideoTags
+      videoTags: exportVideoTags,
+      followedUps: exportFollowedUps,
+      comments: exportComments,
+      articles: exportArticles
     },
     null,
     2
@@ -4138,15 +7494,26 @@ export function saveVideoSelectionToState(
 function applyImportRowsToState(
   state: LocalState,
   rows: ImportVideoRow[],
-  skippedRows: number
+  skippedRows: number,
+  commentRows: ImportCommentRow[] = [],
+  skippedComments = 0,
+  articleRows: ImportArticleRow[] = [],
+  followedUpRows: ImportFollowedUpRow[] = [],
 ) {
+  state.articles ??= [];
+  state.followedUps ??= [];
   const summary = {
     videosUpserted: 0,
     folderLinksAdded: 0,
     tagsBound: 0,
     foldersCreated: 0,
     tagsCreated: 0,
-    rowsSkipped: skippedRows
+    rowsSkipped: skippedRows,
+    commentsUpserted: 0,
+    commentsSkipped: skippedComments,
+    articlesUpserted: 0,
+    articlesSkipped: 0,
+    followedUpsUpserted: 0,
   };
 
   for (const row of rows) {
@@ -4241,6 +7608,71 @@ function applyImportRowsToState(
     }
   }
 
+  for (const row of commentRows) {
+    const existing = state.comments.find(
+      (comment) => comment.sourceKey === row.sourceKey,
+    );
+    if (existing) {
+      const id = existing.id;
+      const savedAt = Math.min(existing.savedAt, row.savedAt);
+      Object.assign(existing, row, {
+        id,
+        savedAt,
+        updatedAt: Math.max(existing.updatedAt, row.updatedAt),
+        deletedAt: null,
+      });
+    } else {
+      state.comments.push({
+        ...row,
+        id: state.counters.comment++,
+        deletedAt: null,
+      });
+    }
+    summary.commentsUpserted += 1;
+  }
+
+  for (const row of articleRows) {
+    try {
+      const normalized = normalizeFavoriteArticle(row, now());
+      const folderIds: number[] = [];
+      for (const folderName of uniqueTextList(row.folderNames ?? [])) {
+        const ensured = ensureArticleFolderByNameForImport(state, folderName);
+        if (!ensured) continue;
+        if (ensured.created) summary.foldersCreated += 1;
+        folderIds.push(ensured.folder.id);
+      }
+      normalized.folderIds = folderIds;
+      const existing = state.articles.find(
+        (article) => article.sourceKey === normalized.sourceKey,
+      );
+      if (existing) {
+        const id = existing.id;
+        const savedAt = Math.min(existing.savedAt, normalized.savedAt);
+        Object.assign(existing, normalized, {
+          id,
+          savedAt,
+          updatedAt: Math.max(existing.updatedAt, normalized.updatedAt),
+          deletedAt: null,
+        });
+      } else {
+        state.articles.push({
+          ...normalized,
+          id: state.counters.article++,
+          deletedAt: null,
+        });
+      }
+      summary.articlesUpserted += 1;
+    } catch {
+    summary.articlesSkipped += 1;
+    }
+  }
+
+  if (followedUpRows.length > 0) {
+    const merged = mergeFollowedUpRecords(state.followedUps, followedUpRows, now());
+    state.followedUps = merged.records;
+    summary.followedUpsUpserted = followedUpRows.length;
+  }
+
   return summary;
 }
 
@@ -4250,6 +7682,369 @@ function csvEscape(value: unknown) {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
+}
+
+function queryFavoriteComments(
+  state: LocalState,
+  params: URLSearchParams,
+) {
+  const keyword = normalizeText(params.get("q")).toLocaleLowerCase();
+  const items = state.comments
+    .filter((comment) => comment.deletedAt == null)
+    .filter((comment) => {
+      if (!keyword) return true;
+      return [
+        comment.content,
+        comment.authorName,
+        comment.replyToName,
+        comment.videoTitle,
+        comment.bvid,
+      ].some((value) => normalizeText(value).toLocaleLowerCase().includes(keyword));
+    })
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id);
+  return paginate(items, params.get("page"), params.get("pageSize"));
+}
+
+function queryFavoriteArticles(state: LocalState, params: URLSearchParams) {
+  state.articles ??= [];
+  const keyword = normalizeText(params.get("q")).toLocaleLowerCase();
+  const folderId = params.get("folderId") ? toInt(params.get("folderId")) : 0;
+  const items = state.articles
+    .filter((article) => article.deletedAt == null)
+    .filter((article) => {
+      if (folderId > 0 && !(article.folderIds ?? []).includes(folderId)) return false;
+      if (!keyword) return true;
+      return [
+        article.title,
+        article.summary,
+        article.content,
+        article.authorName,
+        article.opusId,
+      ].some((value) => normalizeText(value).toLocaleLowerCase().includes(keyword));
+    })
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id);
+  return paginate(items, params.get("page"), params.get("pageSize"));
+}
+
+function toggleFavoriteArticle(state: LocalState, raw: unknown) {
+  state.articles ??= [];
+  const normalized = normalizeFavoriteArticle(raw, now());
+  const existing = state.articles.find(
+    (article) => article.sourceKey === normalized.sourceKey,
+  );
+  if (existing && existing.deletedAt == null) {
+    moveFavoriteArticleToTrash(state, existing.id);
+    return { saved: false, article: existing };
+  }
+  if (existing) {
+    const timestamp = now();
+    Object.assign(existing, normalized, {
+      id: existing.id,
+      savedAt: existing.savedAt,
+      updatedAt: timestamp,
+      deletedAt: null,
+    });
+    return { saved: true, article: existing };
+  }
+  const timestamp = now();
+  const article: FavoriteArticleRecord = {
+    ...normalized,
+    id: state.counters.article++,
+    savedAt: timestamp,
+    updatedAt: timestamp,
+    deletedAt: null,
+  };
+  state.articles.push(article);
+  return { saved: true, article };
+}
+
+export function saveArticleSelectionToState(
+  state: LocalState,
+  raw: Record<string, unknown>,
+): ApiResult {
+  state.articles ??= [];
+  state.articleFolders ??= [];
+  const timestamp = now();
+  const normalized = normalizeFavoriteArticle(raw, timestamp);
+  const requestedIds = Array.isArray(raw.folderIds)
+    ? [...new Set(raw.folderIds.map((item) => toInt(item)).filter((id) => id > 0))]
+    : [];
+  const activeIds = new Set(activeArticleFolders(state).map((folder) => folder.id));
+  const folderIds = requestedIds.filter((id) => activeIds.has(id));
+  const existingIndex = state.articles.findIndex(
+    (article) => article.sourceKey === normalized.sourceKey,
+  );
+  const existing = existingIndex >= 0 ? state.articles[existingIndex] : null;
+  if ((!existing || existing.deletedAt != null) && folderIds.length === 0) {
+    return fail(400, "At least one article folder is required");
+  }
+
+  const previousIds = new Set(existing?.folderIds ?? []);
+  const addedFolderIds = folderIds.filter((id) => !previousIds.has(id));
+  const existingFolderIds = folderIds.filter((id) => previousIds.has(id));
+  const nextIds = new Set(folderIds);
+  const removedFolderIds = [...previousIds].filter((id) => !nextIds.has(id));
+
+  if (existing && existing.deletedAt == null && folderIds.length === 0) {
+    moveFavoriteArticleToTrash(state, existing.id, timestamp);
+    return ok({
+      saved: false,
+      deleted: true,
+      article: existing,
+      addedFolderIds,
+      existingFolderIds,
+      removedFolderIds,
+      finalFolderIds: [],
+      finalFolders: [],
+    });
+  }
+
+  const article: FavoriteArticleRecord = existing
+    ? Object.assign(existing, normalized, {
+        id: existing.id,
+        folderIds,
+        savedAt: existing.savedAt,
+        updatedAt: timestamp,
+        deletedAt: null,
+      })
+    : {
+        ...normalized,
+        id: state.counters.article++,
+        folderIds,
+        savedAt: timestamp,
+        updatedAt: timestamp,
+        deletedAt: null,
+      };
+  if (!existing) state.articles.push(article);
+
+  const folderById = new Map(
+    activeArticleFolders(state).map((folder) => [folder.id, folder]),
+  );
+  const finalFolders = folderIds
+    .map((id) => folderById.get(id))
+    .filter((folder): folder is ArticleFolderRecord => Boolean(folder))
+    .map((folder) => ({ id: folder.id, name: folder.name }));
+  return ok(
+    {
+      saved: true,
+      deleted: false,
+      created: !existing,
+      article,
+      addedFolderIds,
+      existingFolderIds,
+      removedFolderIds,
+      finalFolderIds: folderIds,
+      finalFolders,
+    },
+    existing ? 200 : 201,
+  );
+}
+
+export function moveFavoriteCommentToTrash(
+  state: LocalState,
+  commentId: number,
+  timestamp = now(),
+) {
+  const comment = state.comments.find(
+    (item) => item.id === commentId && item.deletedAt == null,
+  );
+  if (!comment) return false;
+  comment.deletedAt = timestamp;
+  comment.updatedAt = timestamp;
+  return true;
+}
+
+export function restoreFavoriteCommentFromTrash(
+  state: LocalState,
+  commentId: number,
+  timestamp = now(),
+) {
+  const comment = state.comments.find(
+    (item) => item.id === commentId && item.deletedAt != null,
+  );
+  if (!comment) return false;
+  comment.deletedAt = null;
+  comment.updatedAt = timestamp;
+  return true;
+}
+
+export function purgeFavoriteCommentFromTrash(state: LocalState, commentId: number) {
+  const index = state.comments.findIndex(
+    (item) => item.id === commentId && item.deletedAt != null,
+  );
+  if (index < 0) return false;
+  state.comments.splice(index, 1);
+  return true;
+}
+
+export function moveFavoriteArticleToTrash(
+  state: LocalState,
+  articleId: number,
+  timestamp = now(),
+) {
+  const article = state.articles.find(
+    (item) => item.id === articleId && item.deletedAt == null,
+  );
+  if (!article) return false;
+  article.deletedAt = timestamp;
+  article.updatedAt = timestamp;
+  return true;
+}
+
+export function restoreFavoriteArticleFromTrash(
+  state: LocalState,
+  articleId: number,
+  timestamp = now(),
+) {
+  const article = state.articles.find(
+    (item) => item.id === articleId && item.deletedAt != null,
+  );
+  if (!article) return false;
+  article.deletedAt = null;
+  article.updatedAt = timestamp;
+  return true;
+}
+
+export function purgeFavoriteArticleFromTrash(state: LocalState, articleId: number) {
+  const index = state.articles.findIndex(
+    (item) => item.id === articleId && item.deletedAt != null,
+  );
+  if (index < 0) return false;
+  state.articles.splice(index, 1);
+  return true;
+}
+
+function toggleFavoriteComment(state: LocalState, raw: unknown) {
+  const normalized = normalizeFavoriteComment(raw, now());
+  const existing = state.comments.find(
+    (comment) => comment.sourceKey === normalized.sourceKey,
+  );
+  if (existing && existing.deletedAt == null) {
+    moveFavoriteCommentToTrash(state, existing.id);
+    return { saved: false, comment: existing };
+  }
+  if (existing) {
+    const timestamp = now();
+    Object.assign(existing, normalized, {
+      id: existing.id,
+      savedAt: existing.savedAt,
+      updatedAt: timestamp,
+      deletedAt: null,
+    });
+    return { saved: true, comment: existing };
+  }
+  const timestamp = now();
+  const comment: FavoriteCommentRecord = {
+    ...normalized,
+    id: state.counters.comment++,
+    savedAt: timestamp,
+    updatedAt: timestamp,
+    deletedAt: null,
+  };
+  state.comments.push(comment);
+  return { saved: true, comment };
+}
+
+type BackupReminderRecord = {
+  lastBackupAt: number;
+  lastReminderDay: string;
+};
+
+function formatLocalCalendarDay(timestamp = now()) {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeBackupReminderRecord(value: unknown): BackupReminderRecord {
+  const raw = value && typeof value === "object"
+    ? value as Partial<BackupReminderRecord>
+    : {};
+  return {
+    lastBackupAt: Math.max(0, toInt(raw.lastBackupAt, 0)),
+    lastReminderDay: normalizeText(raw.lastReminderDay),
+  };
+}
+
+async function readBackupReminderRecord() {
+  const storage = chrome.storage?.local as StorageAreaLike | undefined;
+  if (!storage) return normalizeBackupReminderRecord(null);
+  const stored = await storage.get(BACKUP_REMINDER_STORAGE_KEY);
+  return normalizeBackupReminderRecord(stored[BACKUP_REMINDER_STORAGE_KEY]);
+}
+
+async function patchBackupReminderRecord(
+  patch: Partial<BackupReminderRecord>,
+) {
+  const storage = chrome.storage?.local as StorageAreaLike | undefined;
+  if (!storage) return normalizeBackupReminderRecord(patch);
+  const current = await readBackupReminderRecord();
+  const next = normalizeBackupReminderRecord({ ...current, ...patch });
+  await storage.set({ [BACKUP_REMINDER_STORAGE_KEY]: next });
+  return next;
+}
+
+export function shouldShowExtensionBackupReminder(options: {
+  hasData: boolean;
+  now: number;
+  lastBackupAt: number;
+  lastReminderDay: string;
+}) {
+  if (!options.hasData) return false;
+  if (options.lastReminderDay === formatLocalCalendarDay(options.now)) return false;
+  return (
+    options.lastBackupAt <= 0 ||
+    options.now - options.lastBackupAt >= BACKUP_REMINDER_INTERVAL_MS
+  );
+}
+
+async function scheduleBackupReminderAlarm() {
+  if (!chrome.alarms?.create) return;
+  if (chrome.alarms.get) {
+    const existing = await chrome.alarms.get(BACKUP_REMINDER_ALARM);
+    if (existing) return;
+  }
+  chrome.alarms.create(BACKUP_REMINDER_ALARM, {
+    delayInMinutes: 1,
+    periodInMinutes: BACKUP_REMINDER_CHECK_INTERVAL_MINUTES,
+  });
+}
+
+async function checkAndNotifyBackupReminder() {
+  const state = await readState();
+  const record = await readBackupReminderRecord();
+  const timestamp = now();
+  if (
+    !shouldShowExtensionBackupReminder({
+      hasData:
+        state.videos.some((video) => video.deletedAt === null) ||
+        state.comments.some((comment) => comment.deletedAt == null) ||
+        state.articles.some((article) => article.deletedAt == null),
+      now: timestamp,
+      lastBackupAt: record.lastBackupAt,
+      lastReminderDay: record.lastReminderDay,
+    })
+  ) {
+    return false;
+  }
+
+  await patchBackupReminderRecord({
+    lastReminderDay: formatLocalCalendarDay(timestamp),
+  });
+  chrome.notifications?.create?.(BACKUP_REMINDER_NOTIFICATION_ID, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/128.png"),
+    title: chrome.i18n?.getUILanguage?.().toLowerCase().startsWith("zh")
+      ? "BiliShelf 建议定期备份"
+      : "BiliShelf backup reminder",
+    message: chrome.i18n?.getUILanguage?.().toLowerCase().startsWith("zh")
+      ? "本地已有收藏数据，建议现在导出一次 JSON 完整备份。"
+      : "You have local saved data. Export a complete JSON backup now.",
+    priority: 1,
+  });
+  return true;
 }
 
 function handleReadOnlyApi(
@@ -4281,15 +8076,11 @@ function handleReadOnlyApi(
   }
 
   if (path === "/folders") {
-    const items = activeFolders(state).map((folder) => {
-      const itemCount = state.folderItems.filter((item) => {
-        if (item.folderId !== folder.id) return false;
-        const video = state.videos.find((row) => row.id === item.videoId);
-        return !!video && video.deletedAt === null;
-      }).length;
-      return { ...folder, itemCount };
-    });
-    return ok({ items });
+    return ok({ items: listActiveFoldersWithCounts(state) });
+  }
+
+  if (path === "/article-folders") {
+    return ok({ items: listActiveArticleFoldersWithCounts(state) });
   }
 
   if (path === "/trash/folders") {
@@ -4303,79 +8094,120 @@ function handleReadOnlyApi(
     return ok({ items });
   }
 
+  if (path === "/trash/comments") {
+    const items = state.comments
+      .filter((comment) => comment.deletedAt != null)
+      .sort((left, right) =>
+        (right.deletedAt ?? 0) - (left.deletedAt ?? 0) || right.id - left.id
+      );
+    return ok(paginate(items, params.get("page"), params.get("pageSize")));
+  }
+
+  if (path === "/trash/articles") {
+    const items = state.articles
+      .filter((article) => article.deletedAt != null)
+      .sort((left, right) =>
+        (right.deletedAt ?? 0) - (left.deletedAt ?? 0) || right.id - left.id
+      );
+    return ok(paginate(items, params.get("page"), params.get("pageSize")));
+  }
+
   if (path === "/videos") {
     const folderIdRaw = params.get("folderId");
     const folderId = folderIdRaw ? toInt(folderIdRaw) : undefined;
-    const items = filterVideoList(state, {
-      includeDeleted: false,
-      folderId,
-      tags: parseListParam(params, "tags"),
-      title: params.get("title") || undefined,
-      description: params.get("description") || undefined,
-      uploader: params.get("uploader") || undefined,
-      customTag: params.get("customTag") || undefined,
-      systemTag: params.get("systemTag") || undefined,
-      from: toIntOrNull(params.get("from")),
-      to: toIntOrNull(params.get("to"))
-    });
-    const data = paginate(items, params.get("page"), params.get("pageSize"));
+    const data = queryVideoPage(
+      state,
+      {
+        includeDeleted: false,
+        folderId,
+        tags: parseListParam(params, "tags"),
+        title: params.get("title") || undefined,
+        description: params.get("description") || undefined,
+        uploader: params.get("uploader") || undefined,
+        customTag: params.get("customTag") || undefined,
+        systemTag: params.get("systemTag") || undefined,
+        from: toIntOrNull(params.get("from")),
+        to: toIntOrNull(params.get("to"))
+      },
+      params.get("page"),
+      params.get("pageSize")
+    );
     return ok(data);
+  }
+
+  if (path === "/comments/keys") {
+    return ok({
+      items: state.comments
+        .filter((comment) => comment.deletedAt == null)
+        .map((comment) => comment.sourceKey),
+    });
+  }
+
+  if (path === "/comments") {
+    return ok(queryFavoriteComments(state, params));
+  }
+
+  if (path === "/articles/keys") {
+    return ok({
+      items: state.articles
+        .filter((article) => article.deletedAt == null)
+        .map((article) => article.sourceKey),
+    });
+  }
+
+  if (path === "/articles/by-key") {
+    const sourceKey = normalizeText(params.get("sourceKey"));
+    const article = state.articles.find(
+      (item) => item.sourceKey === sourceKey && item.deletedAt == null,
+    );
+    return ok(article ?? null);
+  }
+
+  if (path === "/articles") {
+    return ok(queryFavoriteArticles(state, params));
   }
 
   if (path === "/videos/search") {
     const folderIdRaw = params.get("folderId");
     const folderId = folderIdRaw ? toInt(folderIdRaw) : undefined;
-    const items = filterVideoList(state, {
-      includeDeleted: false,
-      folderId,
-      tags: parseListParam(params, "tags"),
-      q: params.get("q") || undefined,
-      title: params.get("title") || undefined,
-      description: params.get("description") || undefined,
-      uploader: params.get("uploader") || undefined,
-      customTag: params.get("customTag") || undefined,
-      systemTag: params.get("systemTag") || undefined,
-      from: toIntOrNull(params.get("from")),
-      to: toIntOrNull(params.get("to"))
-    });
-    const data = paginate(items, params.get("page"), params.get("pageSize"));
+    const data = queryVideoPage(
+      state,
+      {
+        includeDeleted: false,
+        folderId,
+        tags: parseListParam(params, "tags"),
+        q: params.get("q") || undefined,
+        title: params.get("title") || undefined,
+        description: params.get("description") || undefined,
+        uploader: params.get("uploader") || undefined,
+        customTag: params.get("customTag") || undefined,
+        systemTag: params.get("systemTag") || undefined,
+        from: toIntOrNull(params.get("from")),
+        to: toIntOrNull(params.get("to"))
+      },
+      params.get("page"),
+      params.get("pageSize")
+    );
     return ok(data);
   }
 
   if (path === "/tags") {
-    const page = params.get("page");
-    const pageSize = params.get("pageSize");
-    const type = params.get("type");
-    const search = normalizeText(params.get("search"));
-    const items = state.tags
-      .filter((tag) => tag.archivedAt === null)
-      .filter((tag) => (type === "system" || type === "custom" ? tag.type === type : true))
-      .filter((tag) => (search ? includesIgnoreCase(tag.name, search) : true))
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((tag) => {
-        const linkedVideoIds = state.videoTags
-          .filter((edge) => edge.tagId === tag.id)
-          .map((edge) => edge.videoId);
-        const usageCount = state.videos.filter(
-          (video) => video.deletedAt === null && linkedVideoIds.includes(video.id)
-        ).length;
-        return {
-          id: tag.id,
-          name: tag.name,
-          type: tag.type,
-          usageCount,
-          createdAt: tag.createdAt
-        };
-      });
-    const data = paginate(items, page, pageSize);
+    const data = listTagsWithUsageCounts(state, {
+      page: params.get("page"),
+      pageSize: params.get("pageSize"),
+      type: params.get("type"),
+      search: normalizeText(params.get("search"))
+    });
     return ok(data);
   }
 
   if (path === "/trash/videos") {
-    const items = filterVideoList(state, { includeDeleted: true })
-      .filter((video) => video.deletedAt !== null)
-      .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
-    const data = paginate(items, params.get("page"), params.get("pageSize"));
+    const data = queryVideoPage(
+      state,
+      { includeDeleted: true },
+      params.get("page"),
+      params.get("pageSize")
+    );
     return ok(data);
   }
 
@@ -4403,12 +8235,125 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
   try {
     // Fast-path status endpoints must bypass withState queue, otherwise
     // long-running sync tasks block polling and trigger frontend timeouts.
+    if (method === "GET" && path === "/ai/organizer/status") {
+      return ok(buildAiOrganizerStatus(await readAiOrganizerTask()));
+    }
+
+    if (method === "POST" && path === "/ai/settings/test") {
+      return await testAiSettingsOutsideStateQueue(body);
+    }
+
+    if (method === "GET" && path === "/ai/organizer/preview") {
+      return ok(await listAiOrganizerPreview(params));
+    }
+
+    if (method === "PATCH" && path === "/ai/organizer/assignments") {
+      if (aiOrganizerStartPending || aiOrganizerApplyPending) {
+        return fail(423, "AI organization is busy");
+      }
+      const task = await readAiOrganizerTask();
+      if (!task || task.stage !== "ready") {
+        return fail(409, "AI organization plan is not ready to edit");
+      }
+      const videoId = toInt(body.videoId);
+      const folderKey = normalizeText(body.folderKey);
+      const allowedKeys = new Set(task.taxonomy.map((folder) => folder.key));
+      if (!task.sourceVideoIds.includes(videoId)) {
+        return fail(404, "Video is not part of the current AI organization plan");
+      }
+      if (folderKey !== REVIEW_FOLDER_KEY && !allowedKeys.has(folderKey)) {
+        return fail(400, "Target AI folder is invalid");
+      }
+      const updated = await updateAiOrganizerTask(task.id, (current) => ({
+        ...(current.stage === "ready"
+          ? {
+              ...current,
+              assignments: current.assignments.map((assignment) =>
+                assignment.videoId === videoId
+                  ? {
+                      ...assignment,
+                      folderKey,
+                      confidence: 1,
+                      lowConfidence: folderKey === REVIEW_FOLDER_KEY,
+                      reason: "User adjusted this classification",
+                    }
+                  : assignment,
+              ),
+              updatedAt: now(),
+            }
+          : current),
+      }));
+      return ok(buildAiOrganizerStatus(updated));
+    }
+
+    if (method === "GET" && path === "/ai/organizer/backup") {
+      const task = await readAiOrganizerTask();
+      if (!task) return fail(404, "No AI organizer snapshot is available");
+      const snapshot = await readAiOrganizerSnapshot(task);
+      return ok(buildJsonExportResult(snapshot.state));
+    }
+
+    if (method === "POST" && path === "/ai/organizer/start") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(423, "Favorites sync is running. Start AI organization after it finishes");
+      }
+      try {
+        const task = await startAiOrganizerTask(body);
+        return ok(buildAiOrganizerStatus(task), 202);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return fail(message.includes("already") ? 409 : 400, message);
+      }
+    }
+
+    if (method === "POST" && path === "/ai/organizer/pause") {
+      return ok(buildAiOrganizerStatus(await pauseAiOrganizerTask()));
+    }
+
+    if (method === "POST" && path === "/ai/organizer/resume") {
+      try {
+        return ok(buildAiOrganizerStatus(await resumeAiOrganizerTask()));
+      } catch (error) {
+        return fail(400, error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    if (method === "POST" && path === "/ai/organizer/cancel") {
+      return ok(buildAiOrganizerStatus(await cancelAiOrganizerTask()));
+    }
+
+    if (method === "POST" && path === "/ai/organizer/apply") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(423, "Favorites sync is running. Apply AI organization after it finishes");
+      }
+      try {
+        const task = await applyReadyAiOrganizerTask();
+        return ok(buildAiOrganizerStatus(task));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return fail(message.includes("changed") ? 409 : 400, message);
+      }
+    }
+
+    if (method === "POST" && path === "/ai/organizer/undo") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(423, "Favorites sync is running. Undo AI organization after it finishes");
+      }
+      try {
+        const task = await undoAppliedAiOrganizerTask();
+        return ok(buildAiOrganizerStatus(task));
+      } catch (error) {
+        return fail(400, error instanceof Error ? error.message : String(error));
+      }
+    }
+
     if (method === "GET" && path === "/sync/bilibili/invalid-video-recovery/status") {
       return ok(getInvalidVideoRecoveryStatus());
     }
 
     if (method === "GET" && path === "/sync/bilibili/history-model/status") {
-      return ok(getFavoritesSyncStatus());
+      const snapshot = await readState();
+      return ok(getFavoritesSyncStatus(snapshot));
     }
 
     if (method === "GET" && path === "/sync/bilibili/tag-enrichment/status") {
@@ -4447,15 +8392,61 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           resumePageByFolder[String(remoteId)] = page;
         }
       }
-      const started = startFavoritesSyncTask({
+      const started = await startFavoritesSyncTask({
         selectedRemoteFolderIds,
-        resumePageByFolder
+        resumePageByFolder,
+        restart: Boolean(body.restart)
       });
+      const snapshot = await readState();
       return ok({
         ok: true,
         started,
-        status: getFavoritesSyncStatus()
+        status: getFavoritesSyncStatus(snapshot)
       });
+    }
+
+    if (method === "POST" && path === "/backup/reminder/backup-completed") {
+      const timestamp = Math.max(1, toInt(body.timestamp, now()));
+      const current = await readBackupReminderRecord();
+      const record = await patchBackupReminderRecord({
+        lastBackupAt: body.migration
+          ? Math.max(current.lastBackupAt, timestamp)
+          : timestamp,
+        lastReminderDay: body.migration ? current.lastReminderDay : "",
+      });
+      return ok({ ok: true, ...record });
+    }
+
+    if (method === "POST" && path === "/backup/reminder/shown") {
+      const record = await patchBackupReminderRecord({
+        lastReminderDay: formatLocalCalendarDay(now()),
+      });
+      return ok({ ok: true, ...record });
+    }
+
+    if (method === "POST" && path.startsWith("/sync/bilibili/tag-enrichment/")) {
+      if (!TAG_SYNC_ENABLED) {
+        const snapshot = await readState();
+        return ok(getTagEnrichmentStatus(snapshot));
+      }
+      if (
+        path === "/sync/bilibili/tag-enrichment/stop" ||
+        path === "/sync/bilibili/tag-enrichment/pause"
+      ) {
+        await pauseTagEnrichmentTask();
+      } else if (path === "/sync/bilibili/tag-enrichment/restart") {
+        await startTagEnrichmentTask({ reset: true, immediate: true, force: true });
+      } else if (
+        path === "/sync/bilibili/tag-enrichment/start" ||
+        path === "/sync/bilibili/tag-enrichment/resume" ||
+        path === "/sync/bilibili/tag-enrichment/run"
+      ) {
+        await startTagEnrichmentTask({ immediate: true, force: true });
+      } else {
+        return fail(404, `Route not found: ${method} ${path}`);
+      }
+      const snapshot = await readState();
+      return ok(getTagEnrichmentStatus(snapshot));
     }
 
     if (method === "POST" && path === "/sync/bilibili/following-ups/start") {
@@ -4594,59 +8585,6 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           return ok({ ok: true });
         }
 
-      if (method === "POST" && path === "/sync/bilibili/tag-enrichment/pause") {
-        if (!TAG_SYNC_ENABLED) {
-          return ok({
-            ok: true,
-            ...getTagEnrichmentStatus(state)
-          });
-        }
-        const meta = ensureTagEnrichmentMeta(state);
-        meta.paused = true;
-        meta.lastError = null;
-        if (chrome.alarms?.clear) {
-          chrome.alarms.clear(TAG_ENRICH_ALARM);
-        }
-        return ok({
-          ok: true,
-          ...getTagEnrichmentStatus(state)
-        });
-      }
-
-      if (method === "POST" && path === "/sync/bilibili/tag-enrichment/resume") {
-        if (!TAG_SYNC_ENABLED) {
-          return ok({
-            ok: true,
-            ...getTagEnrichmentStatus(state)
-          });
-        }
-        const meta = ensureTagEnrichmentMeta(state);
-        meta.paused = false;
-        meta.lastError = null;
-        void triggerTagEnrichment();
-        return ok({
-          ok: true,
-          ...getTagEnrichmentStatus(state)
-        });
-      }
-
-      if (method === "POST" && path === "/sync/bilibili/tag-enrichment/run") {
-        if (!TAG_SYNC_ENABLED) {
-          return ok({
-            ok: true,
-            ...getTagEnrichmentStatus(state)
-          });
-        }
-        const meta = ensureTagEnrichmentMeta(state);
-        if (!meta.paused) {
-          void triggerTagEnrichment();
-        }
-        return ok({
-          ok: true,
-          ...getTagEnrichmentStatus(state)
-        });
-      }
-
       if (method === "GET" && path === "/sync/bilibili/bidirectional/settings") {
         const meta = ensureBidirectionalSyncMeta(state);
         return ok({
@@ -4690,26 +8628,6 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         }
         meta.updatedAt = now();
         return ok(getAiSettings(meta));
-      }
-
-      if (method === "POST" && path === "/ai/settings/test") {
-        const meta = ensureAiMeta(state);
-        applyAiSettingsPatch(meta, body);
-        meta.updatedAt = now();
-        try {
-          validateAiSettings(meta);
-          meta.lastTestAt = now();
-          meta.lastTestOk = true;
-          meta.lastError = null;
-          return ok(getAiSettings(meta));
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "AI settings test failed";
-          meta.lastTestAt = now();
-          meta.lastTestOk = false;
-          meta.lastError = message;
-          return fail(400, message);
-        }
       }
 
       if (method === "POST" && path === "/ai/settings/models") {
@@ -4864,6 +8782,10 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           meta.lastBackupAt = now();
           meta.lastBackupFile = latestFileName;
           meta.lastError = null;
+          await patchBackupReminderRecord({
+            lastBackupAt: meta.lastBackupAt,
+            lastReminderDay: "",
+          });
           return ok({
             ok: true,
             latestFileName,
@@ -4929,7 +8851,15 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
             throw new Error("Remote backup file is empty");
           }
           const parsed = parseImportRows("json", content);
-          const summary = applyImportRowsToState(state, parsed.rows, parsed.skipped);
+          const summary = applyImportRowsToState(
+            state,
+            parsed.rows,
+            parsed.skipped,
+            parsed.comments,
+            parsed.commentsSkipped,
+            parsed.articles,
+            parsed.followedUps,
+          );
           meta.lastRestoreAt = now();
           meta.lastError = null;
           return ok({
@@ -5046,7 +8976,15 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
 
         try {
           const parsed = parseImportRows(format as "json" | "csv", content);
-          const summary = applyImportRowsToState(state, parsed.rows, parsed.skipped);
+          const summary = applyImportRowsToState(
+            state,
+            parsed.rows,
+            parsed.skipped,
+            parsed.comments,
+            parsed.commentsSkipped,
+            parsed.articles,
+            parsed.followedUps,
+          );
 
           return ok({
             ok: true,
@@ -5064,7 +9002,11 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           stamp,
           exportFolders,
           exportVideos,
+          exportArticleFolders,
           exportTags,
+          exportComments,
+          exportArticles,
+          exportFollowedUps,
           folderNamesByVideo,
           folderCountByVideo,
           latestAddedAtByVideo,
@@ -5074,8 +9016,12 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           buildExportPayload(state);
         const summary = {
           folders: exportFolders.length,
+          articleFolders: format === "json" ? exportArticleFolders.length : 0,
           videos: exportVideos.length,
-          tags: exportTags.length
+          tags: exportTags.length,
+          comments: format === "json" ? exportComments.length : 0,
+          articles: format === "json" ? exportArticles.length : 0,
+          followedUps: format === "json" ? exportFollowedUps.length : 0,
         };
 
         if (format === "json") {
@@ -5135,6 +9081,111 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         return ok({ items });
       }
 
+      if (method === "POST" && path === "/comments/toggle") {
+        try {
+          return ok(toggleFavoriteComment(state, body));
+        } catch (error) {
+          return fail(
+            400,
+            error instanceof Error ? error.message : "Comment favorite failed",
+          );
+        }
+      }
+
+      if (method === "POST" && path === "/articles/toggle") {
+        try {
+          return ok(toggleFavoriteArticle(state, body));
+        } catch (error) {
+          return fail(
+            400,
+            error instanceof Error ? error.message : "Article favorite failed",
+          );
+        }
+      }
+
+      if (method === "POST" && path === "/articles") {
+        try {
+          return saveArticleSelectionToState(state, body);
+        } catch (error) {
+          return fail(
+            400,
+            error instanceof Error ? error.message : "Article favorite failed",
+          );
+        }
+      }
+
+      const articleFoldersMatch = path.match(/^\/articles\/(\d+)\/folders$/);
+      if (articleFoldersMatch && method === "PATCH") {
+        const articleId = toInt(articleFoldersMatch[1]);
+        const article = state.articles.find(
+          (row) => row.id === articleId && row.deletedAt == null,
+        );
+        if (!article) return fail(404, "Article favorite not found");
+        const requestedIds = Array.isArray(body.folderIds)
+          ? [...new Set(body.folderIds.map((item) => toInt(item)).filter((id) => id > 0))]
+          : [];
+        const activeFolderIds = new Set(
+          activeArticleFolders(state).map((folder) => folder.id),
+        );
+        article.folderIds = requestedIds.filter((folderId) => activeFolderIds.has(folderId));
+        article.updatedAt = now();
+        return ok(article);
+      }
+
+      const commentMatch = path.match(/^\/comments\/(\d+)$/);
+      if (commentMatch && method === "DELETE") {
+        const commentId = toInt(commentMatch[1]);
+        if (!moveFavoriteCommentToTrash(state, commentId)) {
+          return fail(404, "Comment favorite not found");
+        }
+        return ok({ ok: true });
+      }
+
+      const restoreCommentMatch = path.match(/^\/trash\/comments\/(\d+)\/restore$/);
+      if (restoreCommentMatch && method === "POST") {
+        const commentId = toInt(restoreCommentMatch[1]);
+        if (!restoreFavoriteCommentFromTrash(state, commentId)) {
+          return fail(404, "Comment favorite not found in trash");
+        }
+        return ok({ ok: true });
+      }
+
+      const purgeCommentMatch = path.match(/^\/trash\/comments\/(\d+)$/);
+      if (purgeCommentMatch && method === "DELETE") {
+        const commentId = toInt(purgeCommentMatch[1]);
+        if (!purgeFavoriteCommentFromTrash(state, commentId)) {
+          return fail(404, "Comment favorite not found in trash");
+        }
+        return ok(undefined, 204);
+      }
+
+      const articleMatch = path.match(/^\/articles\/(\d+)$/);
+      if (articleMatch && method === "DELETE") {
+        const articleId = toInt(articleMatch[1]);
+        if (!moveFavoriteArticleToTrash(state, articleId)) {
+          return fail(404, "Article favorite not found");
+        }
+        return ok({ ok: true });
+      }
+
+      const restoreArticleMatch = path.match(/^\/trash\/articles\/(\d+)\/restore$/);
+      if (restoreArticleMatch && method === "POST") {
+        const articleId = toInt(restoreArticleMatch[1]);
+        if (!restoreFavoriteArticleFromTrash(state, articleId)) {
+          return fail(404, "Article favorite not found in trash");
+        }
+        return ok({ ok: true });
+      }
+
+      const purgeArticleMatch = path.match(/^\/trash\/articles\/(\d+)$/);
+      if (purgeArticleMatch && method === "DELETE") {
+        const articleId = toInt(purgeArticleMatch[1]);
+        if (!purgeFavoriteArticleFromTrash(state, articleId)) {
+          return fail(404, "Article favorite not found in trash");
+        }
+        return ok(undefined, 204);
+      }
+
       if (method === "POST" && path === "/folders") {
         const name = normalizeText(body.name);
         if (!name) return fail(400, "Folder name is required");
@@ -5156,6 +9207,90 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         };
         state.folders.push(created);
         return ok(created, 201);
+      }
+
+      if (method === "POST" && path === "/article-folders") {
+        state.articleFolders ??= [];
+        const name = normalizeText(body.name);
+        if (!name) return fail(400, "Article folder name is required");
+        const hasConflict = activeArticleFolders(state).some(
+          (folder) => normalizeKey(folder.name) === normalizeKey(name),
+        );
+        if (hasConflict) return fail(409, "Article folder name already exists");
+        const timestamp = now();
+        const nextId = Math.max(1, toInt(state.counters.articleFolder, 1));
+        const created: ArticleFolderRecord = {
+          id: nextId,
+          name,
+          description: normalizeText(body.description) || null,
+          sortOrder: activeArticleFolders(state).length + 1,
+          deletedAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        state.counters.articleFolder = nextId + 1;
+        state.articleFolders.push(created);
+        return ok(created, 201);
+      }
+
+      const articleFolderMatch = path.match(/^\/article-folders\/(\d+)$/);
+      if (articleFolderMatch && method === "PATCH") {
+        state.articleFolders ??= [];
+        const folderId = toInt(articleFolderMatch[1]);
+        const folder = state.articleFolders.find((item) => item.id === folderId);
+        if (!folder || folder.deletedAt !== null) {
+          return fail(404, "Article folder not found");
+        }
+        const nextName = normalizeText(body.name);
+        if (nextName) {
+          const hasConflict = activeArticleFolders(state).some(
+            (item) =>
+              item.id !== folderId && normalizeKey(item.name) === normalizeKey(nextName),
+          );
+          if (hasConflict) return fail(409, "Article folder name already exists");
+          folder.name = nextName;
+        }
+        if (Object.prototype.hasOwnProperty.call(body, "description")) {
+          folder.description = normalizeText(body.description) || null;
+        }
+        folder.updatedAt = now();
+        return ok(folder);
+      }
+
+      if (articleFolderMatch && method === "DELETE") {
+        state.articleFolders ??= [];
+        const folderId = toInt(articleFolderMatch[1]);
+        const folder = state.articleFolders.find((item) => item.id === folderId);
+        if (!folder || folder.deletedAt !== null) {
+          return fail(404, "Article folder not found");
+        }
+        state.articleFolders = state.articleFolders.filter((item) => item.id !== folderId);
+        state.articles = state.articles.map((article) => ({
+          ...article,
+          folderIds: article.folderIds.filter((id) => id !== folderId),
+        }));
+        return ok({ ok: true });
+      }
+
+      if (method === "PATCH" && path === "/article-folders/order") {
+        state.articleFolders ??= [];
+        const requestedIds = Array.isArray(body.folderIds)
+          ? body.folderIds.map((item) => toInt(item))
+          : [];
+        if (requestedIds.length === 0) return fail(400, "folderIds is required");
+        const active = activeArticleFolders(state);
+        const activeIds = new Set(active.map((folder) => folder.id));
+        const ordered = requestedIds.filter(
+          (id, index) => activeIds.has(id) && requestedIds.indexOf(id) === index,
+        );
+        for (const folder of active) {
+          if (!ordered.includes(folder.id)) ordered.push(folder.id);
+        }
+        ordered.forEach((id, index) => {
+          const folder = state.articleFolders.find((item) => item.id === id);
+          if (folder) folder.sortOrder = index + 1;
+        });
+        return ok({ ok: true, orderedIds: ordered });
       }
 
       const folderMatch = path.match(/^\/folders\/(\d+)$/);
@@ -5817,20 +9952,88 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
 }
 
 export default defineBackground(() => {
-  if (chrome.alarms?.clear) {
-    chrome.alarms.clear(TAG_ENRICH_ALARM);
-  }
+  void scheduleBackupReminderAlarm().catch((error) => {
+    console.warn("[backup-reminder] alarm setup failed:", error);
+  });
+  void checkAndNotifyBackupReminder().catch((error) => {
+    console.warn("[backup-reminder] initial check failed:", error);
+  });
+  void readState()
+    .then((state) => scheduleFavoritesSyncRetry(state.syncMeta.favoritesJob.active))
+    .catch(() => undefined);
+  void restoreTagEnrichmentTask().catch((error) => {
+    console.warn("[tag-enrich] restore failed:", error);
+  });
+  void readAiOrganizerTask()
+    .then((task) => {
+      if (
+        task &&
+        !task.paused &&
+        (task.stage === "planning" || task.stage === "classifying")
+      ) {
+        scheduleAiOrganizerAlarm(task);
+        void triggerAiOrganizerWorker();
+      }
+    })
+    .catch((error) => {
+      console.warn("[ai-organizer] restore failed:", error);
+    });
 
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === BACKUP_REMINDER_ALARM) {
+        void checkAndNotifyBackupReminder().catch((error) => {
+          console.warn("[backup-reminder] alarm failed:", error);
+        });
+        return;
+      }
+      if (alarm.name === AI_ORGANIZER_ALARM) {
+        clearAiOrganizerAlarm();
+        void triggerAiOrganizerWorker().catch((error) => {
+          console.warn("[ai-organizer] alarm failed:", error);
+        });
+        return;
+      }
       if (alarm.name === TAG_ENRICH_ALARM) {
-        if (chrome.alarms?.clear) {
-          chrome.alarms.clear(TAG_ENRICH_ALARM);
-        }
+        if (chrome.alarms?.clear) chrome.alarms.clear(TAG_ENRICH_ALARM);
+        void (async () => {
+          const state = await readState();
+          const meta = ensureTagEnrichmentMeta(state);
+          if (meta.paused || meta.phase !== "waiting") return;
+          if (meta.nextRunAt && meta.nextRunAt > now()) {
+            scheduleTagEnrichment(meta);
+            return;
+          }
+          await triggerTagEnrichment();
+        })().catch((error) => {
+          console.warn("[tag-enrich] alarm failed:", error);
+        });
+        return;
+      }
+      if (alarm.name === FAVORITES_SYNC_RETRY_ALARM) {
+        if (chrome.alarms?.clear) chrome.alarms.clear(FAVORITES_SYNC_RETRY_ALARM);
+        void (async () => {
+          const state = await readState();
+          const job = state.syncMeta.favoritesJob.active;
+          if (!job?.retry.automatic || !job.retry.nextRetryAt) return;
+          if (job.retry.nextRetryAt > now()) {
+            scheduleFavoritesSyncRetry(job);
+            return;
+          }
+          await startFavoritesSyncTask({
+            selectedRemoteFolderIds: job.selectedRemoteFolderIds
+          });
+        })().catch(() => undefined);
         return;
       }
     });
   }
+
+  chrome.notifications?.onClicked?.addListener((notificationId) => {
+    if (notificationId !== BACKUP_REMINDER_NOTIFICATION_ID) return;
+    chrome.notifications?.clear?.(notificationId);
+    chrome.runtime.openOptionsPage?.();
+  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.type !== MESSAGE_TYPE) return false;

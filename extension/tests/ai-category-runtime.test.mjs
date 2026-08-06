@@ -9,7 +9,10 @@ import {
   matchFolderAiCategoriesPath,
   runFolderAiCategories,
 } from "../shared/ai-analysis.js";
-import { categorizeFolderVideo } from "../shared/ai-category-runtime.js";
+import {
+  categorizeFolderVideo,
+  requestAiJson,
+} from "../shared/ai-category-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -250,6 +253,36 @@ test("keeps non-quota 429 provider errors without rewriting to quota exceeded", 
       return true;
     },
   );
+});
+
+test("AI JSON requests honor zero temperature and small test responses", async () => {
+  let requestBody = null;
+  const payload = await requestAiJson(
+    {
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "test-model",
+    },
+    "test",
+    {
+      maxTokens: 128,
+      temperature: 0,
+      fetchImpl: async (_url, init) => {
+        requestBody = JSON.parse(init.body);
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }),
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(payload, { ok: true });
+  assert.equal(requestBody.max_tokens, 128);
+  assert.equal(requestBody.temperature, 0);
 });
 
 test("background temporarily disables ai categorization routes", async () => {

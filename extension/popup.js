@@ -20,19 +20,22 @@ import {
   const themeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
   const I18N = {
-    "popup.title": { [LOCALE_ZH]: "BiliShelf 助手", [LOCALE_EN]: "BiliShelf Helper" },
+    "popup.title": {
+      [LOCALE_ZH]: "BiliShelf 视频收藏架",
+      [LOCALE_EN]: "BiliShelf Video Library",
+    },
     "popup.subtitle": {
-      [LOCALE_ZH]: "配置收藏悬浮窗主题，并快速打开管理页。",
-      [LOCALE_EN]: "Configure collector theme and open manager",
+      [LOCALE_ZH]: "把喜欢的 B 站视频收进自己的本地收藏架。",
+      [LOCALE_EN]: "Your local shelf for saved Bilibili videos",
     },
     "popup.credit": {
       [LOCALE_ZH]: "By TLRK · © 2026 TLRK · MIT License",
       [LOCALE_EN]: "By TLRK · © 2026 TLRK · MIT License",
     },
-    "theme.title": { [LOCALE_ZH]: "悬浮窗主题", [LOCALE_EN]: "Floating Panel Theme" },
+    "theme.title": { [LOCALE_ZH]: "收藏浮窗外观", [LOCALE_EN]: "Collector appearance" },
     "theme.subtitle": {
-      [LOCALE_ZH]: "可选浅色、深色或自动跟随系统。",
-      [LOCALE_EN]: "Choose light / dark / auto (follow system)",
+      [LOCALE_ZH]: "浅色、深色或跟随系统",
+      [LOCALE_EN]: "Light, dark, or system",
     },
     "theme.auto": { [LOCALE_ZH]: "自动", [LOCALE_EN]: "Auto" },
     "theme.light": { [LOCALE_ZH]: "浅色", [LOCALE_EN]: "Light" },
@@ -43,8 +46,8 @@ import {
       [LOCALE_EN]: "Quick Favorite Shortcut",
     },
     "shortcut.subtitle": {
-      [LOCALE_ZH]: "录制一个自定义快捷键，或临时禁用它。",
-      [LOCALE_EN]: "Record a custom shortcut or temporarily disable it.",
+      [LOCALE_ZH]: "自定义或停用快捷键",
+      [LOCALE_EN]: "Customize or disable the shortcut",
     },
     "shortcut.button.startRecording": {
       [LOCALE_ZH]: "开始录制",
@@ -60,14 +63,12 @@ import {
     },
     "shortcut.button.clear": { [LOCALE_ZH]: "清空", [LOCALE_EN]: "Clear" },
     "shortcut.hint.idle": {
-      [LOCALE_ZH]: "点击开始录制后，使用 Alt 或 Ctrl 搭配一个字母或数字，按 Esc 取消。",
-      [LOCALE_EN]:
-        "Press Start Recording, then use Alt or Ctrl with one letter or number. Press Esc to cancel.",
+      [LOCALE_ZH]: "Alt / Ctrl + 字母或数字，Esc 取消",
+      [LOCALE_EN]: "Alt / Ctrl + letter or number; Esc to cancel",
     },
     "shortcut.hint.recording": {
-      [LOCALE_ZH]: "正在录制：请按下 Alt 或 Ctrl 搭配一个字母或数字，按 Esc 取消。",
-      [LOCALE_EN]:
-        "Recording: press Alt or Ctrl with one letter or number. Press Esc to cancel.",
+      [LOCALE_ZH]: "请按下 Alt / Ctrl + 字母或数字，Esc 取消",
+      [LOCALE_EN]: "Press Alt / Ctrl + letter or number; Esc to cancel",
     },
     "shortcut.hint.disabled": {
       [LOCALE_ZH]: "当前已禁用快捷键；可恢复默认或重新录制。",
@@ -187,11 +188,11 @@ import {
 
     const node = document.createElement("div");
     node.className = `Vue-Toastification__toast Vue-Toastification__toast--${normalizedType}`;
+    node.setAttribute("role", normalizedType === "error" ? "alert" : "status");
 
     const icon = document.createElement("span");
     icon.className = "Vue-Toastification__icon";
-    icon.textContent =
-      normalizedType === "error" ? "!" : normalizedType === "info" ? "i" : "ok";
+    icon.textContent = normalizedType === "error" ? "!" : normalizedType === "info" ? "i" : "✓";
 
     const body = document.createElement("div");
     body.className = "Vue-Toastification__toast-body";

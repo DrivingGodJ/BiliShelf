@@ -1,6 +1,6 @@
 {
   "name": "bilishelf-extension",
-  "version": "0.1.5",
+  "version": "0.1.19",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "dev:chrome": "wxt --browser chrome",
     "dev:edge": "wxt --browser edge",
     "dev:firefox": "wxt --browser firefox",
+    "render:icons": "node ./scripts/render-brand-icons.mjs",
     "prepare:manager": "pnpm --dir ../frontend run build:extension",
     "build": "pnpm run prepare:manager && wxt build --browser chrome",
     "build:chrome": "pnpm run prepare:manager && wxt build --browser chrome",

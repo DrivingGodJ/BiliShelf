@@ -16,6 +16,14 @@ type UseManagerPaginationActionsParams = {
   trashVideoTotalPages: Ref<number>;
   selectedTrashVideoIds: Ref<number[]>;
   trashVideoPageSize: Ref<number>;
+  trashCommentPage: Ref<number>;
+  trashCommentTotalPages: Ref<number>;
+  selectedTrashCommentIds: Ref<number[]>;
+  trashCommentPageSize: Ref<number>;
+  trashArticlePage: Ref<number>;
+  trashArticleTotalPages: Ref<number>;
+  selectedTrashArticleIds: Ref<number[]>;
+  trashArticlePageSize: Ref<number>;
   refreshTrash: () => Promise<void>;
 };
 
@@ -38,6 +46,14 @@ export function useManagerPaginationActions(
     trashVideoTotalPages,
     selectedTrashVideoIds,
     trashVideoPageSize,
+    trashCommentPage,
+    trashCommentTotalPages,
+    selectedTrashCommentIds,
+    trashCommentPageSize,
+    trashArticlePage,
+    trashArticleTotalPages,
+    selectedTrashArticleIds,
+    trashArticlePageSize,
     refreshTrash,
   } = params;
 
@@ -136,6 +152,40 @@ export function useManagerPaginationActions(
     await refreshTrash();
   }
 
+  async function goToTrashCommentPage(nextPage: number) {
+    const target = Math.min(Math.max(1, nextPage), trashCommentTotalPages.value);
+    if (target === trashCommentPage.value) return;
+    trashCommentPage.value = target;
+    selectedTrashCommentIds.value = [];
+    await refreshTrash();
+  }
+
+  async function handleTrashCommentPageSizeChange(value: string) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed === trashCommentPageSize.value) return;
+    trashCommentPageSize.value = parsed;
+    trashCommentPage.value = 1;
+    selectedTrashCommentIds.value = [];
+    await refreshTrash();
+  }
+
+  async function goToTrashArticlePage(nextPage: number) {
+    const target = Math.min(Math.max(1, nextPage), trashArticleTotalPages.value);
+    if (target === trashArticlePage.value) return;
+    trashArticlePage.value = target;
+    selectedTrashArticleIds.value = [];
+    await refreshTrash();
+  }
+
+  async function handleTrashArticlePageSizeChange(value: string) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed === trashArticlePageSize.value) return;
+    trashArticlePageSize.value = parsed;
+    trashArticlePage.value = 1;
+    selectedTrashArticleIds.value = [];
+    await refreshTrash();
+  }
+
   return {
     goToVideoPage,
     prevVideoPage,
@@ -149,5 +199,9 @@ export function useManagerPaginationActions(
     prevTrashVideoPage,
     nextTrashVideoPage,
     handleTrashVideoPageSizeChange,
+    goToTrashCommentPage,
+    handleTrashCommentPageSizeChange,
+    goToTrashArticlePage,
+    handleTrashArticlePageSizeChange,
   };
 }

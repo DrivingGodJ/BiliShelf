@@ -24,6 +24,7 @@ test('collector UI only runs on video/watchlater pages', () => {
 
 test('action sync page detection covers favorites pages', () => {
   assert.equal(isActionSyncPageUrl('https://www.bilibili.com/video/BV1xx411c7mD'), true);
+  assert.equal(isActionSyncPageUrl('https://bilibili.com/video/BV1xx411c7mD'), true);
   assert.equal(isActionSyncPageUrl('https://space.bilibili.com/123/favlist?fid=456'), true);
   assert.equal(isActionSyncPageUrl('https://www.bilibili.com/list/ml123456'), true);
 });

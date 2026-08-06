@@ -33,6 +33,18 @@ const router = createRouter({
       meta: { title: "BiliShelf Following UPs" },
     },
     {
+      path: "/comments",
+      name: "comments",
+      component: () => import("../App.vue"),
+      meta: { title: "BiliShelf Comment Favorites" },
+    },
+    {
+      path: "/articles",
+      name: "articles",
+      component: () => import("../App.vue"),
+      meta: { title: "BiliShelf Article Favorites" },
+    },
+    {
       path: "/:pathMatch(.*)*",
       redirect: { name: "manager" },
     },
@@ -40,7 +52,13 @@ const router = createRouter({
 });
 
 router.beforeEach((to) => {
-  if (to.name === "manager" || to.name === "trash" || to.name === "following-ups") {
+  if (
+    to.name === "manager" ||
+    to.name === "trash" ||
+    to.name === "following-ups" ||
+    to.name === "comments" ||
+    to.name === "articles"
+  ) {
     return true;
   }
   return { name: "manager" };
@@ -55,6 +73,10 @@ router.beforeResolve(async (to) => {
       await libraryStore.prefetchForRoute("trash");
     } else if (to.name === "following-ups") {
       await libraryStore.prefetchForRoute("following-ups");
+    } else if (to.name === "comments") {
+      await libraryStore.prefetchForRoute("comments");
+    } else if (to.name === "articles") {
+      await libraryStore.prefetchForRoute("articles");
     }
   } catch (error) {
     console.error("[router] prefetch failed, continue rendering:", error);

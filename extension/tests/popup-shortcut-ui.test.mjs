@@ -91,7 +91,7 @@ test("popup uses one shared action button system for shortcut and footer rows", 
   assert.doesNotMatch(cssSource, /background:\s*rgba\(230,\s*38,\s*76,\s*\.14\)/);
 });
 
-test("popup removes the AI placeholder action while keeping strengthened popup chrome", async () => {
+test("popup removes the AI placeholder action and uses a compact settings layout", async () => {
   const htmlSource = await readPopupHtmlSource();
   const scriptSource = await readPopupScriptSource();
   const cssSource = await readPopupCssSource();
@@ -104,10 +104,13 @@ test("popup removes the AI placeholder action while keeping strengthened popup c
     htmlSource,
     /<section class="card actions popup-action-grid popup-action-grid--double">\s*<button id="open-manager"[\s\S]*<button id="open-video"/,
   );
-  assert.match(cssSource, /body,\s*body\[data-theme="light"\]\s*\{[\s\S]*border-radius:\s*20px;/);
   assert.match(cssSource, /body,\s*body\[data-theme="light"\]\s*\{[\s\S]*overflow:\s*hidden;/);
-  assert.match(cssSource, /\.popup-btn\s*\{[\s\S]*box-shadow:\s*inset/);
-  assert.match(cssSource, /\.Vue-Toastification__toast\s*\{[\s\S]*min-width:\s*260px;/);
+  assert.match(cssSource, /body,\s*body\[data-theme="light"\]\s*\{[\s\S]*width:\s*390px;/);
+  assert.match(cssSource, /\.appearance-card\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/);
+  assert.match(cssSource, /\.popup-btn\s*\{[\s\S]*min-height:\s*38px;/);
+  assert.match(cssSource, /\.Vue-Toastification__toast\s*\{[\s\S]*min-width:\s*280px;/);
+  assert.match(cssSource, /border-left:\s*3px solid var\(--toast-accent\)/);
+  assert.doesNotMatch(cssSource, /linear-gradient\(/);
   assert.doesNotMatch(cssSource, /\.popup-btn--placeholder\s*\{/);
   assert.doesNotMatch(cssSource, /backdrop-filter:/);
 });

@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "BiliShelf 视频收藏架"
+  },
+  "extensionShortName": {
+    "message": "BiliShelf"
+  },
+  "extensionDescription": {
+    "message": "把 B 站视频收藏到本地收藏架，支持搜索、标签、批量管理和备份。"
+  },
+  "extensionActionTitle": {
+    "message": "打开 BiliShelf 视频收藏架"
+  }
+}

@@ -10,7 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Locale } from "@/stores/app-ui";
+import {
+  type Locale,
+} from "@/stores/app-ui";
 import type { Folder, Tag, Video } from "@/types";
 import {
   CalendarDays,
@@ -37,6 +39,7 @@ const props = defineProps<{
   t: (key: string, vars?: Record<string, string | number>) => string;
   locale: Locale;
   keyword: string;
+  activeFolder: Folder | null;
   tags: Tag[];
   fromDate: string;
   toDate: string;
@@ -57,6 +60,7 @@ const props = defineProps<{
   total: number;
   videoPageSize: number;
   pageSizeOptions: number[];
+  videoCardWidth: number;
 }>();
 
 const emit = defineEmits<{
@@ -86,6 +90,7 @@ const emit = defineEmits<{
 
 const fromDatePickerRef = ref<HTMLInputElement | null>(null);
 const toDatePickerRef = ref<HTMLInputElement | null>(null);
+const mobileDateFiltersOpen = ref(false);
 const videoPageJump = ref("");
 
 watch(
@@ -153,6 +158,7 @@ function submitVideoPageJump() {
   videoPageJump.value = String(target);
   emit("jumpVideoPage", target);
 }
+
 </script>
 
 <template>
@@ -166,16 +172,56 @@ function submitVideoPageJump() {
     @clear="emit('clearSearch')"
   />
 
-  <section class="panel-surface p-4">
-    <div class="flex flex-wrap items-center justify-between gap-3.5">
+  <section
+    v-if="activeFolder"
+    class="panel-surface flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between"
+  >
+    <div class="min-w-0">
+      <p class="text-sm font-semibold break-words">{{ activeFolder.name }}</p>
+      <p
+        v-if="activeFolder.description"
+        class="mt-1 whitespace-pre-wrap break-words text-sm leading-5 text-muted-foreground"
+      >
+        {{ activeFolder.description }}
+      </p>
+    </div>
+    <span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+      {{ t("common.videosCount", { count: total }) }}
+    </span>
+  </section>
+
+  <section class="panel-surface p-3 md:p-4">
+    <div class="flex items-center gap-2 md:hidden">
+      <Button
+        size="sm"
+        variant="outline"
+        class="h-11 min-w-0 flex-1 justify-start"
+        :aria-expanded="mobileDateFiltersOpen"
+        @click="mobileDateFiltersOpen = !mobileDateFiltersOpen"
+      >
+        <CalendarDays class="h-4 w-4" />
+        {{ t("search.applyDateFilter") }}
+      </Button>
+      <Button
+        size="sm"
+        variant="default"
+        class="h-11 min-w-[124px] font-semibold"
+        @click="emit('toggleBatchPanel')"
+      >
+        <ChevronsLeftRight class="h-3.5 w-3.5" />
+        {{ batchPanelOpen ? t("batch.close") : t("batch.open") }}
+      </Button>
+    </div>
+
+    <div class="hidden flex-wrap items-center justify-between gap-3.5 md:flex">
       <div class="flex flex-wrap items-center gap-2 overflow-x-auto pb-1">
-        <div class="relative min-w-[190px]">
+        <div class="relative w-[168px] min-w-[168px]">
           <Input
             :model-value="formatDateForDisplay(fromDate)"
             type="text"
             inputmode="numeric"
             placeholder="yyyy/mm/dd"
-            class="date-input h-10 min-w-[190px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
+            class="date-input h-10 w-[168px] min-w-[168px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
             @update:model-value="handleFromDateInput(String($event))"
           />
           <input
@@ -195,13 +241,13 @@ function submitVideoPageJump() {
           </button>
         </div>
         <span class="px-1 text-sm text-muted-foreground">{{ t("search.to") }}</span>
-        <div class="relative min-w-[190px]">
+        <div class="relative w-[168px] min-w-[168px]">
           <Input
             :model-value="formatDateForDisplay(toDate)"
             type="text"
             inputmode="numeric"
             placeholder="yyyy/mm/dd"
-            class="date-input h-10 min-w-[190px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
+            class="date-input h-10 w-[168px] min-w-[168px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
             @update:model-value="handleToDateInput(String($event))"
           />
           <input
@@ -238,6 +284,33 @@ function submitVideoPageJump() {
         {{ batchPanelOpen ? t("batch.close") : t("batch.open") }}
       </Button>
     </div>
+
+    <div v-if="mobileDateFiltersOpen" class="mt-3 space-y-3 border-t pt-3 md:hidden">
+      <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <Input
+          :model-value="fromDate"
+          type="date"
+          class="h-11 min-w-0"
+          @update:model-value="emit('update:fromDate', String($event))"
+        />
+        <span class="text-sm text-muted-foreground">{{ t("search.to") }}</span>
+        <Input
+          :model-value="toDate"
+          type="date"
+          class="h-11 min-w-0"
+          @update:model-value="emit('update:toDate', String($event))"
+        />
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <Button class="h-11" @click="emit('applyDateFilter')">
+          <Filter class="h-3.5 w-3.5" />
+          {{ t("search.applyDateFilter") }}
+        </Button>
+        <Button class="h-11" variant="outline" @click="emit('clearDateFilter')">
+          {{ t("common.clear") }}
+        </Button>
+      </div>
+    </div>
   </section>
 
   <VideoGrid
@@ -246,6 +319,7 @@ function submitVideoPageJump() {
     :selected-ids="selectedVideoIds"
     :batch-mode="batchPanelOpen"
     :locale="locale"
+    :card-width="videoCardWidth"
     @set-selection="emit('setSelection', $event)"
     @select-all="emit('selectAllVisible')"
     @clear-selection="emit('clearVideoSelection')"
@@ -253,18 +327,20 @@ function submitVideoPageJump() {
     @detail="emit('detail', $event)"
   />
 
-  <section class="panel-surface p-4">
-    <div class="flex flex-wrap items-center justify-between gap-3.5">
+  <section
+    class="manager-pagination panel-surface sticky bottom-0 z-30 -mx-1 rounded-2xl border bg-background/95 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_36px_-24px_rgba(15,23,42,0.6)] backdrop-blur md:static md:mx-0 md:p-4 md:shadow-none"
+  >
+    <div class="flex flex-col items-stretch justify-between gap-2.5 sm:flex-row sm:items-center sm:gap-3.5">
       <p class="text-sm text-muted-foreground">
         {{ t("common.page", { page: videoPage, totalPage: videoTotalPages, total }) }}
       </p>
-      <div class="flex flex-wrap items-center gap-2">
-        <span class="text-xs text-muted-foreground">{{ t("common.perPage") }}</span>
+      <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible sm:pb-0">
+        <span class="shrink-0 text-xs text-muted-foreground">{{ t("common.perPage") }}</span>
         <Select
           :model-value="String(videoPageSize)"
           @update:model-value="emit('videoPageSizeChange', String($event))"
         >
-          <SelectTrigger class="h-9 w-[96px]">
+          <SelectTrigger class="h-11 w-[88px] shrink-0 sm:h-9 sm:w-[96px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -280,6 +356,7 @@ function submitVideoPageJump() {
         <Button
           size="sm"
           variant="outline"
+          class="min-h-11 shrink-0 sm:min-h-9"
           :disabled="videoPage <= 1 || loading"
           @click="emit('prevVideoPage')"
         >
@@ -289,6 +366,7 @@ function submitVideoPageJump() {
         <Button
           size="sm"
           variant="outline"
+          class="min-h-11 shrink-0 sm:min-h-9"
           :disabled="videoPage >= videoTotalPages || loading"
           @click="emit('nextVideoPage')"
         >
@@ -300,13 +378,14 @@ function submitVideoPageJump() {
           type="text"
           inputmode="numeric"
           :placeholder="t('common.pageJumpPlaceholder')"
-          class="h-9 w-[90px]"
+          class="h-11 w-[76px] shrink-0 sm:h-9 sm:w-[90px]"
           @update:model-value="handleVideoPageJumpInput(String($event))"
           @keydown.enter.prevent="submitVideoPageJump"
         />
         <Button
           size="sm"
           variant="outline"
+          class="min-h-11 shrink-0 sm:min-h-9"
           :disabled="loading || videoTotalPages <= 1"
           @click="submitVideoPageJump"
         >

@@ -218,6 +218,63 @@ test("buildFolderPlaybackSessionFromState caps oversized playback queues", () =>
   assert.equal(payload.results[0].value.session.queue.length, 1000);
 });
 
+test("buildFolderPlaybackSessionFromState sorts by selected-folder addedAt", () => {
+  const payload = runBackgroundExports({
+    steps: [
+      {
+        exportName: "buildFolderPlaybackSessionFromState",
+        args: [
+          {
+            folders: [
+              { id: 7, name: "Queue", deletedAt: null },
+              { id: 9, name: "Other", deletedAt: null },
+            ],
+            videos: [
+              {
+                id: 11,
+                bvid: "BVCURRENT1",
+                title: "Current older",
+                coverUrl: "https://i0.hdslb.com/current.jpg",
+                uploader: "Alice",
+                description: "",
+                bvidUrl: "https://www.bilibili.com/video/BVCURRENT1",
+                isInvalid: false,
+                deletedAt: null,
+                updatedAt: 10,
+              },
+              {
+                id: 12,
+                bvid: "BVCURRENT2",
+                title: "Current newer",
+                coverUrl: "https://i0.hdslb.com/current2.jpg",
+                uploader: "Alice",
+                description: "",
+                bvidUrl: "https://www.bilibili.com/video/BVCURRENT2",
+                isInvalid: false,
+                deletedAt: null,
+                updatedAt: 9,
+              },
+            ],
+            folderItems: [
+              { folderId: 7, videoId: 11, addedAt: 100 },
+              { folderId: 9, videoId: 11, addedAt: 10_000 },
+              { folderId: 7, videoId: 12, addedAt: 200 },
+            ],
+            videoTags: [],
+            tags: [],
+          },
+          { folderId: 7 },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    payload.results[0].value.session.queue.map((item) => item.bvid),
+    ["BVCURRENT2", "BVCURRENT1"],
+  );
+});
+
 test("stored playback session can be read back through storage helpers", () => {
   const payload = runBackgroundExports({
     steps: [
