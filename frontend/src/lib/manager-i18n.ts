@@ -282,6 +282,8 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   },
   "sync.resumeNow": { "zh-CN": "继续同步", "en-US": "Resume sync" },
   "sync.restart": { "zh-CN": "重新开始", "en-US": "Restart" },
+  "sync.stop": { "zh-CN": "停止同步", "en-US": "Stop sync" },
+  "sync.stopping": { "zh-CN": "正在停止", "en-US": "Stopping" },
   "sync.scanned": { "zh-CN": "已扫描", "en-US": "Scanned" },
   "sync.upserted": { "zh-CN": "已写入", "en-US": "Upserted" },
   "sync.linked": { "zh-CN": "新增关系", "en-US": "New links" },
@@ -1340,6 +1342,7 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "en-US": "{count} more errors omitted",
   },
   "toast.syncFail": { "zh-CN": "同步导入失败", "en-US": "Sync import failed" },
+  "toast.syncStopFail": { "zh-CN": "停止同步失败", "en-US": "Failed to stop sync" },
   "toast.syncNoProgress": {
     "zh-CN": "本轮未拉取到可用数据，请确认已打开并登录 B 站页面后重试。",
     "en-US":

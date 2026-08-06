@@ -914,6 +914,13 @@ export async function fetchHistoryModelSyncStatus() {
   return request<HistoryModelSyncStatus>("/sync/bilibili/history-model/status");
 }
 
+export async function stopHistoryModelSync() {
+  return request<{ ok: true; status: HistoryModelSyncStatus }>(
+    "/sync/bilibili/history-model/stop",
+    { method: "POST" },
+  );
+}
+
 export async function fetchTagEnrichmentStatus() {
   return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/status");
 }

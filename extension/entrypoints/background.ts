@@ -1234,6 +1234,11 @@ function statusFromFavoritesSyncJob(
   running = false,
   finishedAt: number | null = null
 ): FavoritesSyncStatus {
+  const phase = running
+    ? "running"
+    : job.phase === "running"
+      ? "paused"
+      : job.phase;
   const resumePageByFolder: Record<string, number> = {};
   if (job.currentFolderRemoteId && job.nextPage > 1) {
     resumePageByFolder[String(job.currentFolderRemoteId)] = job.nextPage;
@@ -1247,20 +1252,20 @@ function statusFromFavoritesSyncJob(
     folderTitle: job.currentFolderTitle,
     folderIndex: job.currentFolderIndex,
     folderTotal: job.folderTotal,
-    message: running
+    message: phase === "running"
       ? job.currentFolderTitle
         ? `Syncing: ${job.currentFolderTitle}`
         : "Starting favorites sync..."
       : job.riskBlocked
         ? "Favorites sync paused"
-        : job.phase === "waiting"
+        : phase === "waiting"
           ? "Favorites sync waiting to retry"
-        : job.phase === "failed"
+        : phase === "failed"
           ? "Favorites sync failed"
           : "Favorites sync paused",
     lastError: job.lastError,
     riskBlocked: job.riskBlocked,
-    phase: running ? "running" : job.phase,
+    phase,
     nextRetryAt: job.retry.nextRetryAt,
     retryAutomatic: job.retry.automatic,
     retryReason: job.retry.reason,
@@ -1341,6 +1346,7 @@ let nextBiliRequestAt = 0;
 let biliRequestThrottleQueue: Promise<void> = Promise.resolve();
 let favoritesSyncTask: Promise<void> | null = null;
 let favoritesSyncStartPending = false;
+let favoritesSyncStopRequested = false;
 let invalidVideoRecoveryTask: Promise<void> | null = null;
 let invalidVideoRecoveryStatus: InvalidVideoRecoveryStatus =
   defaultInvalidVideoRecoveryStatus();
@@ -6084,6 +6090,7 @@ async function syncFromBilibiliToState(
     onProgress?: (progress: FavoritesSyncProgress) => void;
     job?: FavoritesSyncJob;
     onCheckpoint?: (state: LocalState, job: FavoritesSyncJob) => Promise<void> | void;
+    shouldStop?: () => boolean;
   }
 ) {
   const favoritesJobMeta = ensureFavoritesSyncJobMeta(state);
@@ -6138,6 +6145,7 @@ async function syncFromBilibiliToState(
     job?.incompleteFolders.slice() ?? [];
   let progressCurrent = job?.current ?? 0;
   let videosSinceCooldown = 0;
+  let stopped = false;
   const resumePageByFolder: Record<string, number> = {};
   for (const [remoteIdRaw, pageRaw] of Object.entries(options.resumePageByFolder ?? {})) {
     const remoteId = toInt(remoteIdRaw);
@@ -6181,6 +6189,23 @@ async function syncFromBilibiliToState(
     job.updatedAt = now();
     await options.onCheckpoint?.(state, job);
   };
+  const stopIfRequested = async () => {
+    if (stopped || !options.shouldStop?.()) return stopped;
+    stopped = true;
+    if (job) {
+      job.phase = "paused";
+      job.retry = {
+        attempt: job.retry.attempt,
+        nextRetryAt: null,
+        automatic: false,
+        reason: "user-stopped",
+        riskCount: job.retry.riskCount
+      };
+      job.lastError = null;
+      await checkpointJob();
+    }
+    return true;
+  };
   const emitProgress = (progress: Omit<FavoritesSyncProgress, "total" | "current">) => {
     options.onProgress?.({
       total: totalEstimate,
@@ -6189,7 +6214,9 @@ async function syncFromBilibiliToState(
     });
   };
 
+  folderLoop:
   for (const [folderOffset, remoteFolder] of foldersToSync.entries()) {
+    if (await stopIfRequested()) break;
     if (job?.completedRemoteFolderIds.includes(remoteFolder.remoteId)) continue;
     const folderPosition = folderOffset + 1;
     try {
@@ -6278,6 +6305,7 @@ async function syncFromBilibiliToState(
           observedRowCount;
       }
       while (true) {
+        if (await stopIfRequested()) break folderLoop;
         const query = new URLSearchParams({
           media_id: String(remoteFolder.remoteId),
           pn: String(page),
@@ -6343,6 +6371,10 @@ async function syncFromBilibiliToState(
 
         let pageAbortedByRisk = false;
         for (const [mediaIndex, media] of medias.entries()) {
+          if (options.shouldStop?.()) {
+            await stopIfRequested();
+            break;
+          }
           const resolvedIdentity = await resolveFavoriteMediaBvid(media);
           const bvid = resolvedIdentity.bvid;
           if (!bvid) {
@@ -6461,6 +6493,7 @@ async function syncFromBilibiliToState(
             existingLink.addedAt = favAt;
           }
         }
+        if (stopped) break folderLoop;
         if (pageAbortedByRisk) {
           resumePageByFolder[String(remoteFolder.remoteId)] = page;
           if (job) {
@@ -6669,14 +6702,15 @@ async function syncFromBilibiliToState(
     job.lastError = returnedErrors.at(-1)?.message ?? null;
     job.current = videosProcessed;
     job.updatedAt = now();
-    if (riskBlocked) job.phase = "paused";
+    if (riskBlocked || stopped) job.phase = "paused";
   }
 
   return {
     ok: true,
     summary,
+    stopped,
     completed: job
-      ? foldersToSync.every((folder) =>
+      ? !stopped && foldersToSync.every((folder) =>
           job.completedRemoteFolderIds.includes(folder.remoteId)
         )
       : !riskBlocked &&
@@ -7062,6 +7096,7 @@ function isWriteRequestBlockedByFavoritesSync(method: string, path: string) {
   // Keep sync control and probe endpoints callable while sync is running.
   if (path.startsWith("/sync/bilibili/history-model/")) return false;
   if (path === "/sync/bilibili/history-model/status") return false;
+  if (path === "/sync/bilibili/folders") return false;
   if (path.startsWith("/sync/bilibili/tag-enrichment/")) return false;
   if (path === "/sync/bilibili/bidirectional/settings") return false;
   if (path === "/ai/settings") return false;
@@ -7092,6 +7127,7 @@ async function startFavoritesSyncTask(params: {
   ) {
     return false;
   }
+  favoritesSyncStopRequested = false;
   favoritesSyncStartPending = true;
   try {
     const jobId = await withState((state) => {
@@ -7112,6 +7148,7 @@ async function startFavoritesSyncTask(params: {
       return syncFromBilibiliToState(state, {
         selectedRemoteFolderIds: job.selectedRemoteFolderIds,
         job,
+        shouldStop: () => favoritesSyncStopRequested,
         onCheckpoint: async () => {
           await writeState(state);
         }
@@ -7131,8 +7168,18 @@ async function startFavoritesSyncTask(params: {
           active.riskBlocked = Boolean(result.riskBlocked);
           active.lastError = result.errors.at(-1)?.message ?? null;
           active.updatedAt = now();
-          if (result.completed && !result.riskBlocked) {
+          if (result.completed && !result.riskBlocked && !result.stopped) {
             completeFavoritesSyncJob(meta, active, now());
+          } else if (result.stopped) {
+            active.phase = "paused";
+            active.retry = {
+              attempt: active.retry.attempt,
+              nextRetryAt: null,
+              automatic: false,
+              reason: "user-stopped",
+              riskCount: active.retry.riskCount
+            };
+            active.lastError = null;
           } else {
             active.phase = result.riskBlocked
               ? "paused"
@@ -7176,12 +7223,38 @@ async function startFavoritesSyncTask(params: {
       })
       .finally(() => {
         favoritesSyncTask = null;
+        favoritesSyncStopRequested = false;
       });
 
     return true;
   } finally {
     favoritesSyncStartPending = false;
   }
+}
+
+async function stopFavoritesSyncTask() {
+  favoritesSyncStopRequested = true;
+  if (chrome.alarms?.clear) chrome.alarms.clear(FAVORITES_SYNC_RETRY_ALARM);
+
+  if (!favoritesSyncTask && !favoritesSyncStartPending) {
+    await withState((state) => {
+      const active = state.syncMeta.favoritesJob.active;
+      if (!active) return;
+      active.phase = "paused";
+      active.retry = {
+        attempt: active.retry.attempt,
+        nextRetryAt: null,
+        automatic: false,
+        reason: "user-stopped",
+        riskCount: active.retry.riskCount
+      };
+      active.lastError = null;
+      active.updatedAt = now();
+    }, true);
+  }
+
+  const snapshot = await readState();
+  return getFavoritesSyncStatus(snapshot);
 }
 
 function buildExportPayload(state: LocalState) {
@@ -8354,6 +8427,13 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
     if (method === "GET" && path === "/sync/bilibili/history-model/status") {
       const snapshot = await readState();
       return ok(getFavoritesSyncStatus(snapshot));
+    }
+
+    if (method === "POST" && path === "/sync/bilibili/history-model/stop") {
+      return ok({
+        ok: true,
+        status: await stopFavoritesSyncTask()
+      });
     }
 
     if (method === "GET" && path === "/sync/bilibili/tag-enrichment/status") {

@@ -27,6 +27,20 @@ const tagStatusPath = path.join(
 const apiPath = path.join(repoRoot, "frontend", "src", "lib", "api.ts");
 const typesPath = path.join(repoRoot, "frontend", "src", "types.ts");
 const i18nPath = path.join(repoRoot, "frontend", "src", "lib", "manager-i18n.ts");
+const headerPath = path.join(
+  repoRoot,
+  "frontend",
+  "src",
+  "components",
+  "layout",
+  "ManagerHeader.vue",
+);
+const backgroundPath = path.join(
+  repoRoot,
+  "extension",
+  "entrypoints",
+  "background.ts",
+);
 
 test("sync status contract exposes durable progress, retry, and diagnostics", async () => {
   const [api, types] = await Promise.all([
@@ -76,6 +90,27 @@ test("app polls automatic retries but leaves risk-paused jobs for explicit resum
   assert.match(source, /:now-ms="tickNow"/);
   assert.match(source, /@resume="resumeHistoryModelSyncFromUi"/);
   assert.match(source, /@restart="restartHistoryModelSyncFromUi"/);
+});
+
+test("sync monitor can be reopened during a running task without fetching folders first", async () => {
+  const [app, dialog, api, header, background] = await Promise.all([
+    readFile(appPath, "utf8"),
+    readFile(dialogPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(headerPath, "utf8"),
+    readFile(backgroundPath, "utf8"),
+  ]);
+
+  assert.match(app, /const favoritesSyncActive = computed/);
+  assert.match(app, /const status = await refreshHistoryModelSyncStatus\(\);[\s\S]*?if \(!isHistoryModelSyncActive\(status\)\) \{[\s\S]*?loadSyncFolderOptions/s);
+  assert.match(app, /stopHistoryModelSyncFromUi/);
+  assert.match(api, /stopHistoryModelSync/);
+  assert.match(dialog, /stopping: boolean;/);
+  assert.match(dialog, /taskActive/);
+  assert.match(dialog, /emit\('stop'\)/);
+  assert.match(header, /:disabled="transferBusy"[\s\S]*?emit\('sync-import'\)/s);
+  assert.match(background, /path === "\/sync\/bilibili\/folders"\) return false/);
+  assert.match(background, /history-model\/stop/);
 });
 
 test("sync diagnostics have matching Chinese and English copy", async () => {

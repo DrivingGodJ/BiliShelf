@@ -8,6 +8,7 @@ import {
   ListRestart,
   RefreshCcw,
   ShieldCheck,
+  Square,
 } from "lucide-vue-next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ const props = defineProps<{
   resumePage: number;
   status: HistoryModelSyncStatus | null;
   nowMs: number;
+  stopping: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -44,6 +46,7 @@ const emit = defineEmits<{
   submit: [];
   resume: [];
   restart: [];
+  stop: [];
 }>();
 
 const selectedVideoCount = computed(() =>
@@ -60,6 +63,11 @@ const allFoldersSelected = computed(
 
 const hasStatus = computed(
   () => props.status !== null && props.status.phase !== "idle"
+);
+const taskActive = computed(
+  () =>
+    Boolean(props.status?.running) ||
+    (props.status?.phase === "waiting" && props.status.retryAutomatic),
 );
 
 const progressPercent = computed(() => {
@@ -279,10 +287,22 @@ const retryTimeLabel = computed(() => {
                 {{ t("sync.resumeNow") }}
               </Button>
             </div>
+
+            <div v-if="taskActive" class="flex justify-end">
+              <Button
+                size="sm"
+                variant="destructive"
+                :disabled="stopping"
+                @click="emit('stop')"
+              >
+                <Square class="h-3.5 w-3.5" />
+                {{ stopping ? t("sync.stopping") : t("sync.stop") }}
+              </Button>
+            </div>
           </div>
         </section>
 
-        <div class="flex flex-wrap items-center justify-between gap-2">
+        <div v-if="!taskActive" class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap items-center gap-2">
             <Badge variant="secondary">
               {{
@@ -310,7 +330,7 @@ const retryTimeLabel = computed(() => {
           </Button>
         </div>
 
-        <div class="space-y-2 rounded-lg border bg-muted/20 p-3">
+        <div v-if="!taskActive" class="space-y-2 rounded-lg border bg-muted/20 p-3">
           <div class="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
@@ -338,6 +358,7 @@ const retryTimeLabel = computed(() => {
         </div>
 
         <div
+          v-if="!taskActive"
           class="panel-surface-soft max-h-[300px] space-y-2 overflow-auto rounded-lg border p-3"
         >
           <div
@@ -387,12 +408,12 @@ const retryTimeLabel = computed(() => {
         <div class="flex flex-wrap items-center justify-end gap-2">
           <Button
             variant="outline"
-            :disabled="loading"
             @click="emit('update:open', false)"
           >
-            {{ t("common.cancel") }}
+            {{ taskActive ? t("common.close") : t("common.cancel") }}
           </Button>
           <Button
+            v-if="!taskActive"
             :disabled="
               loading ||
               fetchingFolders ||

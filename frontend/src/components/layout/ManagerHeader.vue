@@ -68,6 +68,7 @@ const managerMode = computed(
 const actionsBusy = computed(
   () => props.syncing || props.exporting || props.importing,
 );
+const transferBusy = computed(() => props.exporting || props.importing);
 const topActionButtonClass =
   "h-11 w-full justify-start rounded-xl border border-border/80 bg-card/80 px-3.5 shadow-sm shadow-black/5";
 const activeViewButtonClass =
@@ -146,9 +147,9 @@ function exportData(format: "json" | "csv") {
       <div class="action-group action-group-data">
         <p class="action-group-label">{{ props.t("header.groupData") }}</p>
         <div class="grid grid-cols-3 gap-1.5">
-          <Button size="sm" variant="outline" class="h-10 justify-center px-2" :disabled="actionsBusy" @click="emit('open-webdav-settings')"><DatabaseBackup class="h-4 w-4" /><span class="truncate">{{ props.t("webdav.title") }}</span></Button>
-          <Button size="sm" variant="outline" class="h-10 justify-center px-2" :disabled="actionsBusy" @click="dataDialogOpen = true"><FolderSync class="h-4 w-4" /><span class="truncate">{{ props.t("header.dataTransfer") }}</span></Button>
-          <Button size="sm" variant="outline" class="h-10 justify-center px-2" :disabled="actionsBusy" @click="emit('sync-import')"><RefreshCcw class="h-4 w-4" /><span class="truncate">{{ props.syncing ? props.t("header.syncing") : props.t("header.syncImport") }}</span></Button>
+          <Button size="sm" variant="outline" class="h-10 justify-center px-2" :disabled="transferBusy" @click="emit('open-webdav-settings')"><DatabaseBackup class="h-4 w-4" /><span class="truncate">{{ props.t("webdav.title") }}</span></Button>
+          <Button size="sm" variant="outline" class="h-10 justify-center px-2" :disabled="transferBusy" @click="dataDialogOpen = true"><FolderSync class="h-4 w-4" /><span class="truncate">{{ props.t("header.dataTransfer") }}</span></Button>
+          <Button size="sm" variant="outline" class="h-10 justify-center px-2" :disabled="transferBusy" @click="emit('sync-import')"><RefreshCcw class="h-4 w-4" /><span class="truncate">{{ props.syncing ? props.t("header.syncing") : props.t("header.syncImport") }}</span></Button>
         </div>
       </div>
       <Button variant="outline" class="h-10 w-full justify-start rounded-xl" :aria-expanded="mobileActionsOpen" @click="mobileActionsOpen = !mobileActionsOpen"><Ellipsis class="h-4 w-4" />{{ props.t("header.moreActions") }}</Button>
@@ -183,9 +184,9 @@ function exportData(format: "json" | "csv") {
       <div class="action-group action-group-data">
         <p class="action-group-label">{{ props.t("header.groupData") }}</p>
         <div class="grid gap-2">
-          <Button size="sm" variant="outline" :class="topActionButtonClass" :disabled="actionsBusy" @click="emit('open-webdav-settings')"><DatabaseBackup class="h-3.5 w-3.5" /> {{ props.t("webdav.title") }}</Button>
-          <Button size="sm" variant="outline" :class="topActionButtonClass" :disabled="actionsBusy" @click="dataDialogOpen = true"><FolderSync class="h-3.5 w-3.5" /> {{ props.t("header.dataTransfer") }}</Button>
-          <Button size="sm" variant="outline" :class="topActionButtonClass" :disabled="actionsBusy" @click="emit('sync-import')"><RefreshCcw class="h-3.5 w-3.5" /> {{ props.syncing ? props.t("header.syncing") : props.t("header.syncImport") }}</Button>
+          <Button size="sm" variant="outline" :class="topActionButtonClass" :disabled="transferBusy" @click="emit('open-webdav-settings')"><DatabaseBackup class="h-3.5 w-3.5" /> {{ props.t("webdav.title") }}</Button>
+          <Button size="sm" variant="outline" :class="topActionButtonClass" :disabled="transferBusy" @click="dataDialogOpen = true"><FolderSync class="h-3.5 w-3.5" /> {{ props.t("header.dataTransfer") }}</Button>
+          <Button size="sm" variant="outline" :class="topActionButtonClass" :disabled="transferBusy" @click="emit('sync-import')"><RefreshCcw class="h-3.5 w-3.5" /> {{ props.syncing ? props.t("header.syncing") : props.t("header.syncImport") }}</Button>
         </div>
       </div>
       <div class="action-group action-group-tools">
@@ -227,7 +228,7 @@ function exportData(format: "json" | "csv") {
           <Button variant="outline" class="h-12 justify-start" :disabled="actionsBusy" @click="chooseDataAction('import')">
             <Upload class="h-4 w-4" /> {{ props.t("header.importData") }}
           </Button>
-          <Button variant="outline" class="h-12 justify-start" :disabled="actionsBusy" @click="chooseDataAction('export')">
+          <Button variant="outline" class="h-12 justify-start" :disabled="transferBusy" @click="chooseDataAction('export')">
             <Download class="h-4 w-4" /> {{ props.t("header.exportBackup") }}
           </Button>
         </div>
@@ -241,14 +242,14 @@ function exportData(format: "json" | "csv") {
           <DialogDescription>{{ props.t("header.exportDialogDesc") }}</DialogDescription>
         </DialogHeader>
         <div class="grid gap-2 sm:grid-cols-2">
-          <Button variant="outline" class="h-auto min-h-16 items-start justify-start py-3 text-left" :disabled="actionsBusy" @click="exportData('json')">
+          <Button variant="outline" class="h-auto min-h-16 items-start justify-start py-3 text-left" :disabled="transferBusy" @click="exportData('json')">
             <Download class="mt-0.5 h-4 w-4 shrink-0" />
             <span class="min-w-0">
               <span class="block font-semibold">{{ props.t("header.exportJson") }}</span>
               <span class="mt-1 block whitespace-normal text-xs font-normal text-muted-foreground">{{ props.t("header.exportJsonDescription") }}</span>
             </span>
           </Button>
-          <Button variant="outline" class="h-auto min-h-16 items-start justify-start border-amber-500/45 py-3 text-left hover:border-amber-500/70" :disabled="actionsBusy" @click="exportData('csv')">
+          <Button variant="outline" class="h-auto min-h-16 items-start justify-start border-amber-500/45 py-3 text-left hover:border-amber-500/70" :disabled="transferBusy" @click="exportData('csv')">
             <Download class="mt-0.5 h-4 w-4 shrink-0" />
             <span class="min-w-0">
               <span class="block font-semibold">{{ props.t("header.exportCsv") }}</span>

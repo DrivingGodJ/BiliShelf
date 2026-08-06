@@ -103,7 +103,7 @@ test("background sync result and recovery routes expose invalid-video recovery c
   );
 });
 
-test("frontend wires invalid-video recovery api helpers and prompt dialog", async () => {
+test("frontend keeps unreliable invalid-video recovery out of the manager UI", async () => {
   const apiSource = await readFile(
     path.join(repoRoot, "frontend", "src", "lib", "api.ts"),
     "utf8"
@@ -112,33 +112,10 @@ test("frontend wires invalid-video recovery api helpers and prompt dialog", asyn
     path.join(repoRoot, "frontend", "src", "App.vue"),
     "utf8"
   );
-  const dialogSource = await readFile(
-    path.join(
-      repoRoot,
-      "frontend",
-      "src",
-      "components",
-      "dialogs",
-      "InvalidVideoRecoveryDialog.vue"
-    ),
-    "utf8"
-  );
-  const i18nSource = await readFile(
-    path.join(repoRoot, "frontend", "src", "lib", "manager-i18n.ts"),
-    "utf8"
-  );
-
   assert.match(apiSource, /startInvalidVideoRecovery/);
   assert.match(apiSource, /fetchInvalidVideoRecoveryStatus/);
 
-  assert.match(appSource, /InvalidVideoRecoveryDialog/);
-  assert.match(appSource, /<InvalidVideoRecoveryDialog/);
-  assert.match(appSource, /invalidVideoIds/);
-  assert.match(appSource, /invalidVideoRecovery/);
-
-  assert.match(dialogSource, /defineProps/);
-  assert.match(dialogSource, /emit\(['"]start['"]\)/);
-
-  assert.match(i18nSource, /invalidVideoRecovery\.dialogTitle/);
-  assert.match(i18nSource, /toast\.invalidVideoRecovery/);
+  assert.doesNotMatch(appSource, /InvalidVideoRecoveryDialog/);
+  assert.doesNotMatch(appSource, /invalidVideoRecoveryDialogOpen/);
+  assert.doesNotMatch(appSource, /startInvalidVideoRecovery/);
 });

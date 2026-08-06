@@ -103,6 +103,51 @@ test("zero-item remote favorites are materialized locally", () => {
   }]);
 });
 
+test("a requested stop checkpoints the persistent sync job as paused", () => {
+  const payload = runBackgroundScenario({
+    exports: ["createFavoritesSyncJob", "syncFromBilibiliToState"],
+    setupSource: `
+      globalThis.__mediaRequests = 0;
+      globalThis.fetch = async (request) => {
+        const url = String(request);
+        const data = url.includes("/x/web-interface/nav")
+          ? { isLogin: true, mid: 1 }
+          : url.includes("/x/v3/fav/folder/created/list-all")
+            ? { list: [{ id: 99, title: "Remote", media_count: 20 }] }
+            : url.includes("/x/v3/fav/resource/list")
+              ? (globalThis.__mediaRequests += 1, { medias: [], has_more: false })
+              : null;
+        if (data === null) throw new Error("Unexpected URL: " + url);
+        return new Response(JSON.stringify({ code: 0, data }), { status: 200 });
+      };
+    `,
+    scenarioSource: `
+      const state = ${emptyStateSource};
+      const job = createFavoritesSyncJob([99], 1000);
+      const result = await syncFromBilibiliToState(state, {
+        selectedRemoteFolderIds: [99],
+        job,
+        shouldStop: () => true,
+      });
+      return {
+        stopped: result.stopped,
+        completed: result.completed,
+        phase: job.phase,
+        retryReason: job.retry.reason,
+        mediaRequests: globalThis.__mediaRequests,
+      };
+    `,
+  });
+
+  assert.deepEqual(payload.result, {
+    stopped: true,
+    completed: false,
+    phase: "paused",
+    retryReason: "user-stopped",
+    mediaRequests: 0,
+  });
+});
+
 test("missing BV identities resolve through the view endpoint when aid is available", () => {
   const payload = runBackgroundScenario({
     exports: ["syncFromBilibiliToState"],
