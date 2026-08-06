@@ -245,8 +245,16 @@ test("background tag enrichment status bypasses the serialized withState queue",
     source,
     /Fast-path status endpoints must bypass withState queue[\s\S]*if \(method === "GET" && path === "\/sync\/bilibili\/tag-enrichment\/status"\) \{[\s\S]*return ok\(getTagEnrichmentStatus\(snapshot\)\);[\s\S]*\}/
   );
-  assert.doesNotMatch(
-    source,
-    /return await withState\(async \(state\) => \{[\s\S]*if \(method === "GET" && path === "\/sync\/bilibili\/tag-enrichment\/status"\) \{/
+  const handleApiStart = source.indexOf("async function handleApi(");
+  const fastStatusIndex = source.indexOf(
+    'if (method === "GET" && path === "/sync/bilibili/tag-enrichment/status") {',
+    handleApiStart,
   );
+  const serializedQueueIndex = source.indexOf(
+    "return await withState(async (state) => {",
+    fastStatusIndex,
+  );
+  assert.ok(handleApiStart >= 0);
+  assert.ok(fastStatusIndex > handleApiStart);
+  assert.ok(serializedQueueIndex > fastStatusIndex);
 });

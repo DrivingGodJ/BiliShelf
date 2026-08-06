@@ -19,6 +19,9 @@ const props = defineProps<{
   activeFolder: Folder | null;
   activeFolderId: number | null;
   resultCount: number;
+  collectionLabel?: string;
+  folderHeading?: string;
+  folderItemCountLabel?: string;
   showPlaybackActions: boolean;
   hasSelectedFolderAiRecord: boolean;
   canOpenSelectedFolderAiBrowser: boolean;
@@ -60,6 +63,9 @@ function handleMobileSelect(folderId: number | null) {
         :ai-running-folder-id="props.aiRunningFolderId"
         :show-ai-actions="props.showAiActions"
         :locale="props.locale"
+        :collection-label="props.collectionLabel"
+        :folder-heading="props.folderHeading"
+        :folder-item-count-label="props.folderItemCountLabel"
         @select="emit('select', $event)"
         @create="emit('create', $event)"
         @update="emit('update', $event)"
@@ -77,6 +83,7 @@ function handleMobileSelect(folderId: number | null) {
         :t="props.t"
         :active-folder-name="props.activeFolder?.name ?? null"
         :result-count="props.resultCount"
+        :collection-label="props.collectionLabel"
         @open="drawerOpen = true"
       />
     </div>
@@ -101,6 +108,9 @@ function handleMobileSelect(folderId: number | null) {
           :ai-running-folder-id="props.aiRunningFolderId"
           :show-ai-actions="props.showAiActions"
           :locale="props.locale"
+          :collection-label="props.collectionLabel"
+          :folder-heading="props.folderHeading"
+          :folder-item-count-label="props.folderItemCountLabel"
           @select="handleMobileSelect"
           @create="emit('create', $event)"
           @update="emit('update', $event)"

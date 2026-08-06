@@ -9,21 +9,25 @@ import ManageTagsDialog from "./components/dialogs/ManageTagsDialog.vue";
 import RenameTagDialog from "./components/dialogs/RenameTagDialog.vue";
 import SyncImportDialog from "./components/dialogs/SyncImportDialog.vue";
 import AutoInitSetupDialog from "./components/dialogs/AutoInitSetupDialog.vue";
+import AiOrganizerDialog from "./components/dialogs/AiOrganizerDialog.vue";
 import AiSettingsDialog from "./components/dialogs/AiSettingsDialog.vue";
-import BidirectionalSyncSettingsDialog from "./components/dialogs/BidirectionalSyncSettingsDialog.vue";
 import WebDavBackupDialog from "./components/dialogs/WebDavBackupDialog.vue";
 import VideoDetailDialog from "./components/dialogs/VideoDetailDialog.vue";
 import InvalidVideoRecoveryDialog from "./components/dialogs/InvalidVideoRecoveryDialog.vue";
 import FollowingUpImportDialog from "./components/dialogs/FollowingUpImportDialog.vue";
 import AiCategoryBrowser from "./components/AiCategoryBrowser.vue";
+import AiOrganizerStatusBar from "./components/AiOrganizerStatusBar.vue";
 import TagEnrichmentStatusBar from "./components/sync/TagEnrichmentStatusBar.vue";
 import ManagerFolderNavigation from "./components/layout/ManagerFolderNavigation.vue";
 import ManagerHeader from "./components/layout/ManagerHeader.vue";
 import ManagerPanel from "./components/panels/ManagerPanel.vue";
+import CommentsPanel from "./components/panels/CommentsPanel.vue";
+import FavoriteArticlesPanel from "./components/panels/FavoriteArticlesPanel.vue";
 import FollowingUpPanel from "./components/panels/FollowingUpPanel.vue";
 import TrashPanel from "./components/panels/TrashPanel.vue";
 import {
   PAGE_SIZE_OPTIONS,
+  TRASH_CONTENT_PAGE_SIZE_OPTIONS,
   TRASH_FOLDER_PAGE_SIZE_OPTIONS,
   TRASH_VIDEO_PAGE_SIZE_OPTIONS,
   useLibraryStore,
@@ -35,6 +39,11 @@ import {
   loadAllAiBrowserVideos,
 } from "./lib/ai-category-browser.js";
 import { MANAGER_I18N } from "./lib/manager-i18n";
+import {
+  BACKUP_REMINDER_CHECK_INTERVAL_MS,
+  formatLocalDay,
+  shouldShowBackupReminder,
+} from "./lib/backup-reminder.js";
 import {
   clearFolderSelection,
   estimateSelectedVideoCount,
@@ -55,9 +64,21 @@ import { useRenameTagDialog } from "./composables/use-rename-tag-dialog";
 import { useVideoDetail } from "./composables/use-video-detail";
 import {
   clearFolderAiCategories,
+  applyAiOrganizer,
+  cancelAiOrganizer,
+  deleteFavoriteComment,
+  deleteFavoriteArticle,
+  createArticleFolder,
+  deleteArticleFolder,
+  downloadAiOrganizerBackup,
   exportLibrary,
+  fetchAiOrganizerPreview,
+  fetchAiOrganizerStatus,
   fetchFollowingUpImportStatus,
   fetchFollowingUps,
+  fetchFavoriteComments,
+  fetchFavoriteArticles,
+  fetchArticleFolders,
   fetchAiSettings,
   fetchVideos,
   fetchFolderAiCategories,
@@ -68,13 +89,18 @@ import {
   fetchBilibiliSyncFolders,
   isExtensionLocalApiRuntime,
   importLibrary,
+  markBackupReminderBackupCompleted,
+  markBackupReminderShown,
   downloadWebDavBackup,
   pauseTagEnrichment,
+  pauseAiOrganizer,
+  resumeAiOrganizer,
   resumeTagEnrichment,
   restoreWebDavBackup,
   runFolderAiCategories,
   runTagEnrichmentNow,
   startFollowingUpImport,
+  startAiOrganizer,
   startFolderPlaybackSession,
   startHistoryModelSync,
   startInvalidVideoRecovery,
@@ -84,6 +110,8 @@ import {
   testAiSettings,
   uploadWebDavBackup,
   updateAiSettings,
+  updateArticleFolder,
+  updateAiOrganizerAssignment,
   updateBidirectionalSyncSettings,
   updateWebDavSettings,
   type BidirectionalSyncSettings,
@@ -91,22 +119,37 @@ import {
   type TagEnrichmentStatus,
   type WebDavSettings,
   updateVideo,
+  reorderArticleFolders,
+  undoAiOrganizer,
   type SyncRemoteFolder,
 } from "./lib/api";
 import type {
   AiCategoryKey,
+  AiOrganizerConfig,
+  AiOrganizerPreviewItem,
+  AiOrganizerStatus,
   AiSettings,
   FollowingUpImportStatus,
+  FavoriteComment,
+  FavoriteArticle,
+  ArticleFolder,
   FollowedUp,
   Folder,
   FolderAiCategories,
+  Pagination,
   Tag,
   Video,
   VideoFilter,
 } from "./types";
 
 const uiStore = useAppUiStore();
-const { locale, isDark, videoCardWidth } = storeToRefs(uiStore);
+const {
+  locale,
+  isDark,
+  videoCardWidth,
+  commentCardWidth,
+  articleCardWidth,
+} = storeToRefs(uiStore);
 const router = useRouter();
 const route = useRoute();
 
@@ -139,10 +182,6 @@ const {
   setRenameDialogOpen,
 } = useRenameTagDialog<Tag>();
 
-function toggleLocale() {
-  uiStore.toggleLocale();
-}
-
 const libraryStore = useLibraryStore();
 const {
   folders,
@@ -150,12 +189,15 @@ const {
   videos,
   trashFolders,
   trashVideos,
+  trashComments,
+  trashArticles,
   keyword,
-  searchScope,
   selectedFolderId,
   selectedVideoIds,
   selectedTrashFolderIds,
   selectedTrashVideoIds,
+  selectedTrashCommentIds,
+  selectedTrashArticleIds,
   batchTargetFolderId,
   batchPanelOpen,
   fromDate,
@@ -168,9 +210,15 @@ const {
   trashFolderPageSize,
   trashVideoPage,
   trashVideoPageSize,
+  trashCommentPage,
+  trashCommentPageSize,
+  trashArticlePage,
+  trashArticlePageSize,
   loading,
   total,
   trashVideoTotal,
+  trashCommentTotal,
+  trashArticleTotal,
   customTags,
   manageCustomTagTotalPages,
   pagedManageCustomTags,
@@ -179,6 +227,8 @@ const {
   videoTotalPages,
   trashVideoTotalPages,
   trashFolderTotalPages,
+  trashCommentTotalPages,
+  trashArticleTotalPages,
   pagedTrashFolders,
 } = storeToRefs(libraryStore);
 
@@ -193,6 +243,8 @@ const {
 const toolsOpen = ref(false);
 const trashMode = computed(() => route.name === "trash");
 const followingUpsMode = computed(() => route.name === "following-ups");
+const commentsMode = computed(() => route.name === "comments");
+const articlesMode = computed(() => route.name === "articles");
 const syncingImport = ref(false);
 const invalidVideoRecoveryDialogOpen = ref(false);
 const invalidVideoRecoveryCandidateIds = ref<number[]>([]);
@@ -209,6 +261,31 @@ const followingUpLoading = ref(false);
 const followingUpImportStatus = ref<FollowingUpImportStatus | null>(null);
 const followingUpImportDialogOpen = ref(false);
 let followingUpImportPollTimer: number | null = null;
+const favoriteComments = ref<FavoriteComment[]>([]);
+const favoriteCommentKeyword = ref("");
+const favoriteCommentAppliedKeyword = ref("");
+const favoriteCommentLoading = ref(false);
+const favoriteCommentPagination = ref<Pagination>({
+  page: 1,
+  pageSize: 20,
+  total: 0,
+});
+let favoriteCommentFetchToken = 0;
+const favoriteArticles = ref<FavoriteArticle[]>([]);
+const articleFolders = ref<ArticleFolder[]>([]);
+const favoriteArticleKeyword = ref("");
+const favoriteArticleAppliedKeyword = ref("");
+const favoriteArticleLoading = ref(false);
+const favoriteArticlePagination = ref<Pagination>({ page: 1, pageSize: 20, total: 0 });
+let favoriteArticleFetchToken = 0;
+const navigationFolders = computed(() =>
+  articlesMode.value ? articleFolders.value : folders.value,
+);
+const navigationActiveFolder = computed(
+  () =>
+    navigationFolders.value.find((folder) => folder.id === selectedFolderId.value) ??
+    null,
+);
 const autoInitDialogOpen = ref(false);
 const syncFetchingFolders = ref(false);
 const syncFolders = ref<SyncRemoteFolder[]>([]);
@@ -220,8 +297,30 @@ const autoInitSubmitting = ref(false);
 const tagEnrichmentStatus = ref<TagEnrichmentStatus | null>(null);
 const tagEnrichmentLoading = ref(false);
 const aiSettingsDialogOpen = ref(false);
+const settingsSection = ref<"ai" | "listener" | "language" | "theme" | "cards">("ai");
+const reopenAiOrganizerAfterSettings = ref(false);
 const aiSettings = ref<AiSettings | null>(null);
 const aiSettingsBusy = ref(false);
+const aiOrganizerDialogOpen = ref(false);
+const aiOrganizerStatus = ref<AiOrganizerStatus | null>(null);
+const aiOrganizerBusy = ref(false);
+const aiOrganizerPreviewItems = ref<AiOrganizerPreviewItem[]>([]);
+const aiOrganizerPreviewPagination = ref<Pagination | null>(null);
+const aiOrganizerPreviewLowOnly = ref(false);
+let aiOrganizerPollTimer: number | null = null;
+const aiOrganizerStatusBarVisible = computed(() => {
+  const phase = aiOrganizerStatus.value?.phase;
+  return (
+    Boolean(aiOrganizerStatus.value?.id) &&
+    !trashMode.value &&
+    !followingUpsMode.value &&
+    !commentsMode.value &&
+    !articlesMode.value &&
+    ["planning", "classifying", "waiting", "paused", "ready", "failed"].includes(
+      phase ?? "idle",
+    )
+  );
+});
 const selectedFolderAiCategories = ref<FolderAiCategories | null>(null);
 const folderAiCategoriesCache = ref<Record<number, FolderAiCategories>>({});
 const aiRunningFolderId = ref<number | null>(null);
@@ -229,7 +328,6 @@ const aiCategoryBrowserOpen = ref(false);
 const aiCategoryBrowserCategory = ref<AiCategoryKey | null>(null);
 const aiBrowserFolderVideos = ref<Record<number, Video[]>>({});
 const aiBrowserFolderVideosLoading = ref<Record<number, boolean>>({});
-const bidirectionalSyncDialogOpen = ref(false);
 const bidirectionalSyncSettings = ref<BidirectionalSyncSettings | null>(null);
 const bidirectionalSyncSaving = ref(false);
 const webdavDialogOpen = ref(false);
@@ -237,6 +335,7 @@ const webdavSettings = ref<WebDavSettings | null>(null);
 const webdavBusy = ref(false);
 const AI_CATEGORIES_ENABLED = false;
 const EXTENSION_LOCAL_API_RUNTIME = isExtensionLocalApiRuntime();
+const AI_ORGANIZER_ENABLED = EXTENSION_LOCAL_API_RUNTIME;
 const TAG_SYNC_ENABLED = EXTENSION_LOCAL_API_RUNTIME;
 const BILIBILI_LISTENER_SETTINGS_ENABLED = EXTENSION_LOCAL_API_RUNTIME;
 const autoInitRunning = ref(false);
@@ -248,7 +347,6 @@ const AUTO_INIT_PROBE_SCHEDULE_MS = [
 ];
 const AUTO_INIT_STATE_TIMEOUT_MS = 6 * 60 * 1000;
 const SYNC_CURSOR_STORAGE_KEY = "bilishelf-sync-cursors-v1";
-const EXPORT_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const LAST_EXPORT_AT_KEY = "bilishelf-last-export-at";
 const LAST_EXPORT_REMINDER_DAY_KEY = "bilishelf-last-export-reminder-day";
 const importFileInput = ref<HTMLInputElement | null>(null);
@@ -260,6 +358,7 @@ let autoInitHeartbeatTimer: number | null = null;
 let tagEnrichmentPollTimer: number | null = null;
 let autoInitRetryTimer: number | null = null;
 let tickTimer: number | null = null;
+let exportReminderTimer: number | null = null;
 let folderAiFetchToken = 0;
 
 const { notifySuccess, notifyError } = useAppToast(t);
@@ -384,7 +483,6 @@ const aiCategoryBrowserVideosLoading = computed(() => {
 const {
   currentViewLabel: headerCurrentViewLabel,
   currentScopeLabel: headerCurrentScopeLabel,
-  localeToggleText,
   batchPanelClasses: headerBatchPanelClasses,
   batchOutlineButtonClasses: headerBatchOutlineButtonClasses,
   batchSecondaryButtonClasses: headerBatchSecondaryButtonClasses,
@@ -396,8 +494,10 @@ const {
   isDark,
   trashMode,
   followingUpsMode,
+  commentsMode,
+  articlesMode,
   selectedFolderId,
-  folders,
+  folders: navigationFolders,
 });
 
 const {
@@ -412,7 +512,6 @@ const {
   router,
   trashMode,
   keyword,
-  searchScope,
   selectedFolderId,
   fromDate,
   toDate,
@@ -519,6 +618,242 @@ function openFollowingUpSpace(record: FollowedUp) {
   window.open(record.spaceUrl, "_blank", "noopener,noreferrer");
 }
 
+async function refreshArticleFolders() {
+  try {
+    articleFolders.value = await fetchArticleFolders();
+    if (
+      articlesMode.value &&
+      selectedFolderId.value !== null &&
+      !articleFolders.value.some((folder) => folder.id === selectedFolderId.value)
+    ) {
+      selectedFolderId.value = null;
+    }
+  } catch (error) {
+    notifyError(t("toast.articleFoldersLoadFail"), error);
+  }
+}
+
+async function loadFavoriteCommentCount() {
+  try {
+    const result = await fetchFavoriteComments({ page: 1, pageSize: 1 });
+    favoriteCommentPagination.value.total = result.pagination.total;
+    maybeNotifyExportReminder();
+  } catch (error) {
+    console.warn("[comments] count failed:", error);
+  }
+}
+
+async function loadFavoriteArticleCount() {
+  try {
+    const result = await fetchFavoriteArticles({ page: 1, pageSize: 1 });
+    favoriteArticlePagination.value.total = result.pagination.total;
+    maybeNotifyExportReminder();
+  } catch (error) {
+    console.warn("[articles] count failed:", error);
+  }
+}
+
+async function loadFavoriteComments() {
+  const token = ++favoriteCommentFetchToken;
+  favoriteCommentLoading.value = true;
+  try {
+    const result = await fetchFavoriteComments({
+      q: favoriteCommentAppliedKeyword.value,
+      page: favoriteCommentPagination.value.page,
+      pageSize: favoriteCommentPagination.value.pageSize,
+    });
+    if (token !== favoriteCommentFetchToken) return;
+    favoriteComments.value = result.items;
+    favoriteCommentPagination.value = result.pagination;
+    maybeNotifyExportReminder();
+  } catch (error) {
+    if (token !== favoriteCommentFetchToken) return;
+    notifyError(t("toast.commentsLoadFail"), error);
+  } finally {
+    if (token === favoriteCommentFetchToken) {
+      favoriteCommentLoading.value = false;
+    }
+  }
+}
+
+async function searchFavoriteComments() {
+  favoriteCommentAppliedKeyword.value = favoriteCommentKeyword.value.trim();
+  favoriteCommentPagination.value.page = 1;
+  await loadFavoriteComments();
+}
+
+async function changeFavoriteCommentPage(page: number) {
+  const totalPages = Math.max(
+    1,
+    Math.ceil(
+      favoriteCommentPagination.value.total /
+        favoriteCommentPagination.value.pageSize
+    )
+  );
+  favoriteCommentPagination.value.page = Math.min(
+    Math.max(1, Math.trunc(page)),
+    totalPages
+  );
+  await loadFavoriteComments();
+}
+
+async function changeFavoriteCommentPageSize(pageSize: number) {
+  favoriteCommentPagination.value.page = 1;
+  favoriteCommentPagination.value.pageSize = pageSize;
+  await loadFavoriteComments();
+}
+
+async function removeFavoriteComment(comment: FavoriteComment) {
+  const confirmed = await openConfirmDialog({
+    title: t("comments.deleteTitle"),
+    description: t("comments.deleteDescription", {
+      author: comment.authorName,
+    }),
+    confirmText: t("common.delete"),
+    variant: "destructive",
+  });
+  if (!confirmed) return;
+
+  favoriteCommentLoading.value = true;
+  try {
+    await deleteFavoriteComment(comment.id);
+    if (
+      favoriteComments.value.length === 1 &&
+      favoriteCommentPagination.value.page > 1
+    ) {
+      favoriteCommentPagination.value.page -= 1;
+    }
+    await loadFavoriteComments();
+    notifySuccess(t("toast.commentDeleted"));
+  } catch (error) {
+    notifyError(t("toast.commentDeleteFail"), error);
+  } finally {
+    favoriteCommentLoading.value = false;
+  }
+}
+
+async function loadFavoriteArticles() {
+  const token = ++favoriteArticleFetchToken;
+  favoriteArticleLoading.value = true;
+  try {
+    const result = await fetchFavoriteArticles({
+      q: favoriteArticleAppliedKeyword.value,
+      page: favoriteArticlePagination.value.page,
+      pageSize: favoriteArticlePagination.value.pageSize,
+      folderId: selectedFolderId.value ?? undefined,
+    });
+    if (token !== favoriteArticleFetchToken) return;
+    favoriteArticles.value = result.items;
+    favoriteArticlePagination.value = result.pagination;
+    maybeNotifyExportReminder();
+  } catch (error) {
+    if (token === favoriteArticleFetchToken) notifyError(t("toast.articlesLoadFail"), error);
+  } finally {
+    if (token === favoriteArticleFetchToken) favoriteArticleLoading.value = false;
+  }
+}
+
+async function handleCreateArticleFolder(payload: {
+  name: string;
+  description?: string;
+}) {
+  try {
+    await createArticleFolder(payload);
+    await refreshArticleFolders();
+    notifySuccess(t("toast.articleFolderCreated"));
+  } catch (error) {
+    notifyError(t("toast.articleFolderCreateFail"), error);
+  }
+}
+
+async function handleUpdateArticleFolder(payload: {
+  id: number;
+  name?: string;
+  description?: string | null;
+}) {
+  try {
+    await updateArticleFolder(payload.id, payload);
+    await refreshArticleFolders();
+    notifySuccess(t("toast.articleFolderUpdated"));
+  } catch (error) {
+    notifyError(t("toast.articleFolderUpdateFail"), error);
+  }
+}
+
+async function handleRemoveArticleFolder(id: number) {
+  const confirmed = await openConfirmDialog({
+    title: t("articles.deleteFolderTitle"),
+    description: t("articles.deleteFolderDescription"),
+    confirmText: t("common.delete"),
+    variant: "destructive",
+  });
+  if (!confirmed) return;
+  try {
+    await deleteArticleFolder(id);
+    if (selectedFolderId.value === id) selectedFolderId.value = null;
+    await Promise.all([refreshArticleFolders(), loadFavoriteArticles()]);
+    notifySuccess(t("toast.articleFolderDeleted"));
+  } catch (error) {
+    notifyError(t("toast.articleFolderDeleteFail"), error);
+  }
+}
+
+async function handleReorderArticleFolders(folderIds: number[]) {
+  if (folderIds.length === 0) return;
+  try {
+    await reorderArticleFolders(folderIds);
+    await refreshArticleFolders();
+  } catch (error) {
+    notifyError(t("toast.articleFolderReorderFail"), error);
+  }
+}
+
+async function removeFolderFromManager(id: number) {
+  await handleRemoveFolder(id);
+  if (articlesMode.value) await loadFavoriteArticles();
+}
+
+async function searchFavoriteArticles() {
+  favoriteArticleAppliedKeyword.value = favoriteArticleKeyword.value.trim();
+  favoriteArticlePagination.value.page = 1;
+  await loadFavoriteArticles();
+}
+
+async function changeFavoriteArticlePage(page: number) {
+  const totalPages = Math.max(1, Math.ceil(favoriteArticlePagination.value.total / favoriteArticlePagination.value.pageSize));
+  favoriteArticlePagination.value.page = Math.min(Math.max(1, Math.trunc(page)), totalPages);
+  await loadFavoriteArticles();
+}
+
+async function changeFavoriteArticlePageSize(pageSize: number) {
+  favoriteArticlePagination.value.page = 1;
+  favoriteArticlePagination.value.pageSize = pageSize;
+  await loadFavoriteArticles();
+}
+
+async function removeFavoriteArticle(article: FavoriteArticle) {
+  const confirmed = await openConfirmDialog({
+    title: t("articles.deleteTitle"),
+    description: t("articles.deleteDescription", { title: article.title }),
+    confirmText: t("common.delete"),
+    variant: "destructive",
+  });
+  if (!confirmed) return;
+  favoriteArticleLoading.value = true;
+  try {
+    await deleteFavoriteArticle(article.id);
+    if (favoriteArticles.value.length === 1 && favoriteArticlePagination.value.page > 1) {
+      favoriteArticlePagination.value.page -= 1;
+    }
+    await loadFavoriteArticles();
+    notifySuccess(t("toast.articleDeleted"));
+  } catch (error) {
+    notifyError(t("toast.articleDeleteFail"), error);
+  } finally {
+    favoriteArticleLoading.value = false;
+  }
+}
+
 async function refreshTrash() {
   try {
     await refreshTrashData();
@@ -569,6 +904,14 @@ const {
   handlePurgeFolderFromTrash,
   handleRestoreVideoFromTrash,
   handlePurgeVideoFromTrash,
+  batchRestoreTrashComments,
+  batchPurgeTrashComments,
+  handleRestoreCommentFromTrash,
+  handlePurgeCommentFromTrash,
+  batchRestoreTrashArticles,
+  batchPurgeTrashArticles,
+  handleRestoreArticleFromTrash,
+  handlePurgeArticleFromTrash,
 } = useManagerActions({
   t,
   notifySuccess,
@@ -578,6 +921,8 @@ const {
   selectedVideoIds,
   selectedTrashFolderIds,
   selectedTrashVideoIds,
+  selectedTrashCommentIds,
+  selectedTrashArticleIds,
   batchTargetFolderId,
   batchPanelOpen,
   hasSelection,
@@ -625,6 +970,10 @@ const {
   prevTrashVideoPage,
   nextTrashVideoPage,
   handleTrashVideoPageSizeChange,
+  goToTrashCommentPage,
+  handleTrashCommentPageSizeChange,
+  goToTrashArticlePage,
+  handleTrashArticlePageSizeChange,
 } = useManagerPaginationActions({
   videoPage,
   videoTotalPages,
@@ -641,12 +990,19 @@ const {
   trashVideoTotalPages,
   selectedTrashVideoIds,
   trashVideoPageSize,
+  trashCommentPage,
+  trashCommentTotalPages,
+  selectedTrashCommentIds,
+  trashCommentPageSize,
+  trashArticlePage,
+  trashArticleTotalPages,
+  selectedTrashArticleIds,
+  trashArticlePageSize,
   refreshTrash,
 });
 
 const {
   handleSearchSubmit,
-  handleSearchScopeChange,
   applyDateFilter,
   clearDateFilter,
   handleSelectFolder,
@@ -655,7 +1011,6 @@ const {
 } = useManagerFilterActions({
   trashMode,
   keyword,
-  searchScope,
   fromDate,
   toDate,
   selectedFolderId,
@@ -668,6 +1023,13 @@ const {
 });
 
 async function handleSelectFolderWithAiBrowser(id: number | null) {
+  if (articlesMode.value) {
+    closeAiCategoryBrowser();
+    selectedFolderId.value = id;
+    favoriteArticlePagination.value.page = 1;
+    await loadFavoriteArticles();
+    return;
+  }
   closeAiCategoryBrowser();
   await handleSelectFolder(id);
 }
@@ -680,10 +1042,6 @@ function handleBatchPanelToggle() {
     return;
   }
   batchPanelOpen.value = true;
-}
-
-function toggleTheme() {
-  uiStore.toggleTheme();
 }
 
 function downloadTextFile(filename: string, content: string, mimeType: string) {
@@ -1013,29 +1371,74 @@ function markExportFinishedAt(timestamp = Date.now()) {
   try {
     window.localStorage.setItem(LAST_EXPORT_AT_KEY, String(timestamp));
   } catch {}
+  if (EXTENSION_LOCAL_API_RUNTIME) {
+    void markBackupReminderBackupCompleted(timestamp).catch((error) => {
+      console.warn("[backup-reminder] failed to persist backup time:", error);
+    });
+  }
 }
 
 function maybeNotifyExportReminder() {
-  const hasData = (total.value ?? 0) > 0;
-  if (!hasData) return;
-
+  if (EXTENSION_LOCAL_API_RUNTIME) return;
+  const hasData =
+    (total.value ?? 0) > 0 ||
+    favoriteCommentPagination.value.total > 0 ||
+    favoriteArticlePagination.value.total > 0;
   const now = Date.now();
-  const dayLabel = new Date(now).toISOString().slice(0, 10);
+  const dayLabel = formatLocalDay(now);
   try {
     const lastReminderDay = window.localStorage.getItem(
       LAST_EXPORT_REMINDER_DAY_KEY
-    );
-    if (lastReminderDay === dayLabel) return;
-
+    ) ?? "";
     const lastExportAtRaw = Number(
       window.localStorage.getItem(LAST_EXPORT_AT_KEY) ?? 0
     );
     const lastExportAt = Number.isFinite(lastExportAtRaw) ? lastExportAtRaw : 0;
-    if (lastExportAt > 0 && now - lastExportAt < EXPORT_REMINDER_INTERVAL_MS)
-      return;
+    if (
+      !shouldShowBackupReminder({
+        hasData,
+        now,
+        lastBackupAt: lastExportAt,
+        lastReminderDay,
+      })
+    ) return;
 
     window.localStorage.setItem(LAST_EXPORT_REMINDER_DAY_KEY, dayLabel);
+    if (EXTENSION_LOCAL_API_RUNTIME) {
+      void markBackupReminderShown().catch((error) => {
+        console.warn("[backup-reminder] failed to persist reminder day:", error);
+      });
+    }
     notifyError(t("toast.exportReminderTitle"), t("toast.exportReminderDesc"));
+  } catch {}
+}
+
+function handleExportReminderVisibility() {
+  if (document.visibilityState === "visible") maybeNotifyExportReminder();
+}
+
+function startExportReminderChecks() {
+  if (exportReminderTimer !== null) window.clearInterval(exportReminderTimer);
+  exportReminderTimer = window.setInterval(
+    maybeNotifyExportReminder,
+    BACKUP_REMINDER_CHECK_INTERVAL_MS,
+  );
+  document.addEventListener("visibilitychange", handleExportReminderVisibility);
+}
+
+function migrateBackupReminderState() {
+  if (!EXTENSION_LOCAL_API_RUNTIME) return;
+  try {
+    const lastExportAt = Number(
+      window.localStorage.getItem(LAST_EXPORT_AT_KEY) ?? 0
+    );
+    if (Number.isFinite(lastExportAt) && lastExportAt > 0) {
+      void markBackupReminderBackupCompleted(lastExportAt, {
+        migration: true,
+      }).catch((error) => {
+        console.warn("[backup-reminder] migration failed:", error);
+      });
+    }
   } catch {}
 }
 
@@ -1346,10 +1749,28 @@ async function performClearFolderAiCategories(folderId: number) {
   }
 }
 
-function openAiSettingsDialog() {
-  if (!EXTENSION_LOCAL_API_RUNTIME) return;
+function openSettingsDialog(
+  section: "ai" | "listener" | "language" | "theme" | "cards" = "ai",
+) {
+  settingsSection.value = EXTENSION_LOCAL_API_RUNTIME ? section : "language";
+  reopenAiOrganizerAfterSettings.value = aiOrganizerDialogOpen.value;
+  aiOrganizerDialogOpen.value = false;
   aiSettingsDialogOpen.value = true;
-  void refreshAiSettings();
+  if (EXTENSION_LOCAL_API_RUNTIME) {
+    void refreshAiSettings();
+    void refreshBidirectionalSyncSettings();
+  }
+}
+
+function openAiSettingsDialog() {
+  openSettingsDialog("ai");
+}
+
+function handleAiSettingsDialogOpen(value: boolean) {
+  aiSettingsDialogOpen.value = value;
+  if (value || !reopenAiOrganizerAfterSettings.value) return;
+  reopenAiOrganizerAfterSettings.value = false;
+  void openAiOrganizerDialog();
 }
 
 async function saveAiSettings(payload: {
@@ -1362,11 +1783,29 @@ async function saveAiSettings(payload: {
 }) {
   if (!EXTENSION_LOCAL_API_RUNTIME) return;
   if (aiSettingsBusy.value) return;
+  const organizerActive =
+    aiOrganizerStatus.value?.phase === "planning" ||
+    aiOrganizerStatus.value?.phase === "classifying" ||
+    aiOrganizerStatus.value?.phase === "waiting" ||
+    aiOrganizerStatus.value?.phase === "paused";
+  const providerChanging =
+    organizerActive &&
+    aiSettings.value &&
+    ((payload.provider && payload.provider !== aiSettings.value.provider) ||
+      (payload.model && payload.model !== aiSettings.value.model));
+  if (providerChanging) {
+    const confirmed = await openConfirmDialog({
+      title: t("ai.organizer.settingsChangeTitle"),
+      description: t("ai.organizer.settingsChangeDesc"),
+      confirmText: t("common.confirm"),
+      variant: "default",
+    });
+    if (!confirmed) return;
+  }
   aiSettingsBusy.value = true;
   try {
     aiSettings.value = await updateAiSettings(payload);
     notifySuccess(t("toast.aiSettingsSaved"));
-    aiSettingsDialogOpen.value = false;
   } catch (error) {
     notifyError(t("toast.aiSettingsSaveFail"), error);
   } finally {
@@ -1395,12 +1834,6 @@ async function testAiSettingsFromUi(payload: {
   }
 }
 
-function openBidirectionalSyncSettingsDialog() {
-  if (!BILIBILI_LISTENER_SETTINGS_ENABLED) return;
-  bidirectionalSyncDialogOpen.value = true;
-  void refreshBidirectionalSyncSettings();
-}
-
 async function saveBidirectionalSyncSettings(payload: {
   biliToLocalEnabled: boolean;
 }) {
@@ -1412,7 +1845,6 @@ async function saveBidirectionalSyncSettings(payload: {
       payload
     );
     notifySuccess(t("toast.syncSettingsSaved"));
-    bidirectionalSyncDialogOpen.value = false;
   } catch (error) {
     notifyError(t("toast.syncSettingsSaveFail"), error);
   } finally {
@@ -1480,11 +1912,15 @@ async function uploadWebDavFromUi() {
   try {
     const result = await uploadWebDavBackup();
     webdavSettings.value = result;
+    markExportFinishedAt();
     notifySuccess(
       t("toast.webdavUploadDone"),
       t("toast.webdavUploadSummary", {
         videos: result.summary.videos,
+        followedUps: result.summary.followedUps,
         tags: result.summary.tags,
+        comments: result.summary.comments,
+        articles: result.summary.articles,
       })
     );
   } catch (error) {
@@ -1517,12 +1953,18 @@ async function restoreWebDavFromUi() {
     webdavSettings.value = result.webdav;
     await refreshFoldersVideosAndTags();
     await refreshTrash();
+    await loadFavoriteCommentCount();
+    if (articlesMode.value) await loadFavoriteArticles();
+    else await loadFavoriteArticleCount();
     notifySuccess(
       t("toast.webdavRestoreDone"),
       t("toast.webdavRestoreSummary", {
         videos: result.summary.videosUpserted,
+        followedUps: result.summary.followedUpsUpserted,
         links: result.summary.folderLinksAdded,
         tags: result.summary.tagsBound,
+        comments: result.summary.commentsUpserted,
+        articles: result.summary.articlesUpserted,
       })
     );
   } catch (error) {
@@ -1565,6 +2007,235 @@ async function loadSyncFolderOptions(force = false) {
     notifyError(t("toast.syncLoadFoldersFail"), error);
   } finally {
     syncFetchingFolders.value = false;
+  }
+}
+
+function stopAiOrganizerPolling() {
+  if (aiOrganizerPollTimer !== null) {
+    window.clearInterval(aiOrganizerPollTimer);
+    aiOrganizerPollTimer = null;
+  }
+}
+
+function ensureAiOrganizerPolling() {
+  const phase = aiOrganizerStatus.value?.phase;
+  const shouldPoll =
+    phase === "planning" || phase === "classifying" || phase === "waiting";
+  if (!shouldPoll) {
+    stopAiOrganizerPolling();
+    return;
+  }
+  if (aiOrganizerPollTimer !== null) return;
+  aiOrganizerPollTimer = window.setInterval(() => {
+    void refreshAiOrganizerState(true);
+  }, 2_500);
+}
+
+async function loadAiOrganizerPreview(page = 1) {
+  if (!AI_ORGANIZER_ENABLED || !aiOrganizerStatus.value?.id) {
+    aiOrganizerPreviewItems.value = [];
+    aiOrganizerPreviewPagination.value = null;
+    return;
+  }
+  const result = await fetchAiOrganizerPreview({
+    page,
+    pageSize: 30,
+    lowConfidence: aiOrganizerPreviewLowOnly.value,
+  });
+  aiOrganizerPreviewItems.value = result.items;
+  aiOrganizerPreviewPagination.value = result.pagination;
+}
+
+async function refreshAiOrganizerState(silent = false) {
+  if (!AI_ORGANIZER_ENABLED) return;
+  try {
+    const previousPhase = aiOrganizerStatus.value?.phase;
+    aiOrganizerStatus.value = await fetchAiOrganizerStatus();
+    ensureAiOrganizerPolling();
+    const phase = aiOrganizerStatus.value.phase;
+    if (
+      aiOrganizerDialogOpen.value &&
+      (phase === "ready" || phase === "completed") &&
+      (previousPhase !== phase || aiOrganizerPreviewItems.value.length === 0)
+    ) {
+      await loadAiOrganizerPreview(1);
+    }
+  } catch (error) {
+    if (!silent) notifyError(t("toast.aiOrganizerLoadFail"), error);
+  }
+}
+
+async function openAiOrganizerDialog() {
+  if (!AI_ORGANIZER_ENABLED) return;
+  aiOrganizerDialogOpen.value = true;
+  await Promise.all([refreshAiSettings(), refreshAiOrganizerState()]);
+  if ((aiOrganizerStatus.value?.processed ?? 0) > 0) {
+    await loadAiOrganizerPreview(1).catch((error) =>
+      notifyError(t("toast.aiOrganizerPreviewFail"), error),
+    );
+  }
+}
+
+async function startAiOrganizerFromUi(config: Partial<AiOrganizerConfig>) {
+  if (aiOrganizerBusy.value) return;
+  let replaceExisting = false;
+  if (aiOrganizerStatus.value?.id && aiOrganizerStatus.value.phase !== "idle") {
+    const confirmed = await openConfirmDialog({
+      title: t("ai.organizer.replaceTitle"),
+      description: t("ai.organizer.replaceDesc"),
+      confirmText: t("ai.organizer.start"),
+      variant: "default",
+    });
+    if (!confirmed) return;
+    replaceExisting = true;
+  }
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerPreviewItems.value = [];
+    aiOrganizerPreviewPagination.value = null;
+    aiOrganizerStatus.value = await startAiOrganizer({
+      ...config,
+      locale: locale.value,
+      replaceExisting,
+    });
+    ensureAiOrganizerPolling();
+    notifySuccess(t("toast.aiOrganizerStarted"));
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerStartFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function pauseAiOrganizerFromUi() {
+  if (aiOrganizerBusy.value) return;
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerStatus.value = await pauseAiOrganizer();
+    ensureAiOrganizerPolling();
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerPauseFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function resumeAiOrganizerFromUi() {
+  if (aiOrganizerBusy.value) return;
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerStatus.value = await resumeAiOrganizer();
+    ensureAiOrganizerPolling();
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerResumeFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function cancelAiOrganizerFromUi() {
+  if (aiOrganizerBusy.value) return;
+  const confirmed = await openConfirmDialog({
+    title: t("ai.organizer.cancelTitle"),
+    description: t("ai.organizer.cancelDesc"),
+    confirmText: t("ai.organizer.cancel"),
+    variant: "destructive",
+  });
+  if (!confirmed) return;
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerStatus.value = await cancelAiOrganizer();
+    ensureAiOrganizerPolling();
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerCancelFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function applyAiOrganizerFromUi() {
+  if (aiOrganizerBusy.value || !aiOrganizerStatus.value?.canApply) return;
+  const confirmed = await openConfirmDialog({
+    title: t("ai.organizer.applyTitle"),
+    description: t("ai.organizer.applyDesc", {
+      folders: aiOrganizerStatus.value.taxonomy.length,
+      videos: aiOrganizerStatus.value.total,
+    }),
+    confirmText: t("ai.organizer.apply"),
+    variant: "default",
+  });
+  if (!confirmed) return;
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerStatus.value = await applyAiOrganizer();
+    await refreshFoldersAndVideos();
+    notifySuccess(t("toast.aiOrganizerApplied"));
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerApplyFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function undoAiOrganizerFromUi() {
+  if (aiOrganizerBusy.value || !aiOrganizerStatus.value?.canUndo) return;
+  const confirmed = await openConfirmDialog({
+    title: t("ai.organizer.undoTitle"),
+    description: t("ai.organizer.undoDesc"),
+    confirmText: t("ai.organizer.undo"),
+    variant: "default",
+  });
+  if (!confirmed) return;
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerStatus.value = await undoAiOrganizer();
+    await refreshFoldersAndVideos();
+    notifySuccess(t("toast.aiOrganizerUndone"));
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerUndoFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function downloadAiOrganizerBackupFromUi() {
+  if (aiOrganizerBusy.value) return;
+  aiOrganizerBusy.value = true;
+  try {
+    const payload = await downloadAiOrganizerBackup();
+    downloadTextFile(payload.filename, payload.content, payload.mimeType);
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerBackupFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
+  }
+}
+
+async function setAiOrganizerPreviewLowOnly(value: boolean) {
+  aiOrganizerPreviewLowOnly.value = value;
+  try {
+    await loadAiOrganizerPreview(1);
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerPreviewFail"), error);
+  }
+}
+
+async function updateAiOrganizerAssignmentFromUi(
+  videoId: number,
+  folderKey: string,
+) {
+  if (aiOrganizerBusy.value) return;
+  aiOrganizerBusy.value = true;
+  try {
+    aiOrganizerStatus.value = await updateAiOrganizerAssignment({
+      videoId,
+      folderKey,
+    });
+    await loadAiOrganizerPreview(aiOrganizerPreviewPagination.value?.page ?? 1);
+  } catch (error) {
+    notifyError(t("toast.aiOrganizerEditFail"), error);
+  } finally {
+    aiOrganizerBusy.value = false;
   }
 }
 
@@ -2240,12 +2911,15 @@ async function handleExport(format: "json" | "csv") {
       throw new Error("Export content is empty");
     }
     downloadTextFile(payload.filename, payload.content, payload.mimeType);
-    markExportFinishedAt();
+    if (format === "json") markExportFinishedAt();
     notifySuccess(
       t("toast.exportDone"),
       t("toast.exportSummary", {
         videos: payload.summary.videos,
+        followedUps: payload.summary.followedUps,
         tags: payload.summary.tags,
+        comments: payload.summary.comments,
+        articles: payload.summary.articles,
       })
     );
   } catch (error) {
@@ -2298,13 +2972,26 @@ async function handleImportFilePicked(event: Event) {
     });
     await refreshFoldersVideosAndTags();
     await refreshTrash();
+    if (commentsMode.value) {
+      await loadFavoriteComments();
+    } else {
+      await loadFavoriteCommentCount();
+    }
+    if (articlesMode.value) {
+      await Promise.all([refreshArticleFolders(), loadFavoriteArticles()]);
+    } else {
+      await loadFavoriteArticleCount();
+    }
 
     notifySuccess(
       t("toast.importDone"),
       t("toast.importSummary", {
         videos: result.summary.videosUpserted,
+        followedUps: result.summary.followedUpsUpserted,
         links: result.summary.folderLinksAdded,
         tags: result.summary.tagsBound,
+        comments: result.summary.commentsUpserted,
+        articles: result.summary.articlesUpserted,
       })
     );
   } catch (error) {
@@ -2371,6 +3058,30 @@ function clearTrashVideoSelection() {
   libraryStore.clearTrashVideoSelection();
 }
 
+function setTrashCommentSelection(id: number, checked: boolean) {
+  libraryStore.setTrashCommentSelection(id, checked);
+}
+
+function selectAllTrashComments() {
+  libraryStore.selectAllTrashComments();
+}
+
+function clearTrashCommentSelection() {
+  libraryStore.clearTrashCommentSelection();
+}
+
+function setTrashArticleSelection(id: number, checked: boolean) {
+  libraryStore.setTrashArticleSelection(id, checked);
+}
+
+function selectAllTrashArticles() {
+  libraryStore.selectAllTrashArticles();
+}
+
+function clearTrashArticleSelection() {
+  libraryStore.clearTrashArticleSelection();
+}
+
 function isTrashFolderSelected(id: number) {
   return libraryStore.isTrashFolderSelected(id);
 }
@@ -2379,13 +3090,23 @@ function isTrashVideoSelected(id: number) {
   return libraryStore.isTrashVideoSelected(id);
 }
 
-async function applyViewMode(next: boolean) {
+function isTrashCommentSelected(id: number) {
+  return libraryStore.isTrashCommentSelected(id);
+}
+
+function isTrashArticleSelected(id: number) {
+  return libraryStore.isTrashArticleSelected(id);
+}
+
+async function applyViewMode(nextName: unknown) {
   resetForViewSwitch();
-  if (next) {
+  if (nextName === "trash") {
     trashFolderPage.value = 1;
     trashVideoPage.value = 1;
+    trashCommentPage.value = 1;
+    trashArticlePage.value = 1;
     await refreshTrash();
-  } else {
+  } else if (nextName === "manager") {
     applyManagerQuery(route.query);
     await refreshFoldersAndVideos();
   }
@@ -2411,13 +3132,30 @@ async function toggleFollowingUpsMode(next: boolean) {
   await router.push({ name: targetName, query: buildManagerQuery() });
 }
 
+async function toggleCommentsMode(next: boolean) {
+  const targetName = next ? "comments" : "manager";
+  if (route.name === targetName) return;
+  if (next) {
+    await router.push({ name: targetName });
+    return;
+  }
+  await router.push({ name: targetName, query: buildManagerQuery() });
+}
+
+async function toggleArticlesMode(next: boolean) {
+  const targetName = next ? "articles" : "manager";
+  if (route.name === targetName) return;
+  if (next) await router.push({ name: targetName });
+  else await router.push({ name: targetName, query: buildManagerQuery() });
+}
+
 watch(
   () => route.name,
   async (nextName, previousName) => {
     if (!routeReady.value) return;
     if (nextName === previousName) return;
     try {
-      await applyViewMode(nextName === "trash");
+      await applyViewMode(nextName);
       if (nextName === "manager") {
         startTagEnrichmentPolling();
         maybePromptAutoInitSetupDialog();
@@ -2425,6 +3163,12 @@ watch(
         stopTagEnrichmentPolling();
         await loadFollowingUps();
         await refreshFollowingUpImportStatus();
+      } else if (nextName === "comments") {
+        stopTagEnrichmentPolling();
+        await loadFavoriteComments();
+      } else if (nextName === "articles") {
+        stopTagEnrichmentPolling();
+        await Promise.all([refreshArticleFolders(), loadFavoriteArticles()]);
       } else {
         stopTagEnrichmentPolling();
       }
@@ -2463,6 +3207,20 @@ watch(
 );
 
 watch(
+  () => favoriteCommentPagination.value.total,
+  () => {
+    maybeNotifyExportReminder();
+  }
+);
+
+watch(
+  () => favoriteArticlePagination.value.total,
+  () => {
+    maybeNotifyExportReminder();
+  },
+);
+
+watch(
   [selectedFolderId, trashMode],
   ([folderId, isTrash], [previousFolderId, wasTrash] = [null, false]) => {
     if (!AI_CATEGORIES_ENABLED || isTrash || folderId === null) {
@@ -2496,6 +3254,8 @@ onMounted(async () => {
     tickNow.value = Date.now();
   }, 1000);
   window.addEventListener("storage", handleStorageSync);
+  startExportReminderChecks();
+  migrateBackupReminderState();
   uiStore.initFromStorage();
   if (route.name === "manager") {
     applyManagerQuery(route.query);
@@ -2505,6 +3265,9 @@ onMounted(async () => {
     await libraryStore.ensureBootstrapped();
     if (BILIBILI_LISTENER_SETTINGS_ENABLED) {
       await refreshBidirectionalSyncSettings();
+    }
+    if (AI_ORGANIZER_ENABLED) {
+      await refreshAiOrganizerState(true);
     }
     if (
       selectedFolderId.value !== null &&
@@ -2517,14 +3280,26 @@ onMounted(async () => {
     } else if (route.name === "following-ups") {
       await loadFollowingUps();
       await refreshFollowingUpImportStatus();
+    } else if (route.name === "comments") {
+      await loadFavoriteComments();
+    } else if (route.name === "articles") {
+      await Promise.all([refreshArticleFolders(), loadFavoriteArticles()]);
     } else {
       await refreshVideos();
-      maybeNotifyExportReminder();
       if (TAG_SYNC_ENABLED) {
         await refreshTagEnrichmentState();
         startTagEnrichmentPolling();
       }
     }
+    if (route.name !== "comments" && route.name !== "articles") {
+      await loadFavoriteCommentCount();
+      await loadFavoriteArticleCount();
+    } else if (route.name === "comments") {
+      await loadFavoriteArticleCount();
+    } else {
+      await loadFavoriteCommentCount();
+    }
+    maybeNotifyExportReminder();
     routeReady.value = true;
     if (route.name === "manager") {
       maybePromptAutoInitSetupDialog();
@@ -2539,6 +3314,11 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("storage", handleStorageSync);
+  document.removeEventListener("visibilitychange", handleExportReminderVisibility);
+  if (exportReminderTimer !== null) {
+    window.clearInterval(exportReminderTimer);
+    exportReminderTimer = null;
+  }
   if (tickTimer !== null) {
     window.clearInterval(tickTimer);
     tickTimer = null;
@@ -2550,6 +3330,7 @@ onBeforeUnmount(() => {
   stopInvalidVideoRecoveryPolling();
   stopFollowingUpImportPolling();
   stopTagEnrichmentPolling();
+  stopAiOrganizerPolling();
   stopAutoInitLockHeartbeat();
   releaseAutoInitLock();
 });
@@ -2558,26 +3339,29 @@ onBeforeUnmount(() => {
 <template>
   <main
     class="mx-auto grid min-h-screen w-full max-w-[1840px] grid-cols-1 gap-5 px-4 py-5 lg:h-[100dvh] lg:min-h-0 lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden lg:px-6 lg:py-7"
-    :class="followingUpsMode ? '' : 'lg:grid-cols-[320px_1fr]'"
+    :class="followingUpsMode || commentsMode ? '' : 'lg:grid-cols-[320px_1fr]'"
   >
     <ManagerFolderNavigation
-      v-if="!followingUpsMode"
+      v-if="!followingUpsMode && !commentsMode"
       :t="t"
-      :folders="folders"
-      :active-folder="activeFolder"
+      :folders="navigationFolders"
+      :active-folder="navigationActiveFolder"
       :active-folder-id="selectedFolderId"
-      :result-count="total"
-      :show-playback-actions="EXTENSION_LOCAL_API_RUNTIME && !trashMode"
+      :result-count="articlesMode ? favoriteArticlePagination.total : total"
+      :collection-label="articlesMode ? t('articles.allFolders') : ''"
+      :folder-heading="articlesMode ? t('articles.folders') : ''"
+      :folder-item-count-label="articlesMode ? t('articles.folderCountTemplate') : ''"
+      :show-playback-actions="EXTENSION_LOCAL_API_RUNTIME && !trashMode && !articlesMode"
       :has-selected-folder-ai-record="selectedFolderHasAiRecord"
       :can-open-selected-folder-ai-browser="selectedFolderCanOpenAiBrowser"
       :ai-running-folder-id="aiRunningFolderId"
-      :show-ai-actions="AI_CATEGORIES_ENABLED && EXTENSION_LOCAL_API_RUNTIME && !trashMode"
+      :show-ai-actions="AI_CATEGORIES_ENABLED && EXTENSION_LOCAL_API_RUNTIME && !trashMode && !articlesMode"
       :locale="locale"
       @select="handleSelectFolderWithAiBrowser"
-      @create="handleCreateFolder"
-      @update="handleUpdateFolder"
-      @remove="handleRemoveFolder"
-      @reorder="handleReorderFolders"
+      @create="articlesMode ? handleCreateArticleFolder($event) : handleCreateFolder($event)"
+      @update="articlesMode ? handleUpdateArticleFolder($event) : handleUpdateFolder($event)"
+      @remove="articlesMode ? handleRemoveArticleFolder($event) : removeFolderFromManager($event)"
+      @reorder="articlesMode ? handleReorderArticleFolders($event) : handleReorderFolders($event)"
       @start-playback="handleStartFolderPlayback"
       @analyze="handleAnalyzeFolder"
       @clear-ai="handleClearFolderAi"
@@ -2589,19 +3373,18 @@ onBeforeUnmount(() => {
         :t="t"
         :trash-mode="trashMode"
         :following-ups-mode="followingUpsMode"
-        :show-ai-settings="AI_CATEGORIES_ENABLED && EXTENSION_LOCAL_API_RUNTIME"
-        :show-sync-settings="BILIBILI_LISTENER_SETTINGS_ENABLED"
+        :comments-mode="commentsMode"
+        :articles-mode="articlesMode"
+        :show-ai-organizer="AI_ORGANIZER_ENABLED"
         :current-view-label="headerCurrentViewLabel"
         :current-scope-label="headerCurrentScopeLabel"
-        :locale-toggle-text="localeToggleText"
-        :is-dark="isDark"
         :progress-value="progressValue"
         :syncing="syncingImport"
         :exporting="exportingLibrary"
         :importing="importingLibrary"
+        @open-settings="openSettingsDialog()"
         @open-tags="toolsOpen = true"
-        @open-ai-settings="openAiSettingsDialog"
-        @open-sync-settings="openBidirectionalSyncSettingsDialog"
+        @open-ai-organizer="openAiOrganizerDialog"
         @open-webdav-settings="openWebDavDialog"
         @sync-import="openSyncImportDialog"
         @import-file="openImportFileDialog"
@@ -2609,12 +3392,12 @@ onBeforeUnmount(() => {
         @export-csv="handleExport('csv')"
         @toggle-trash="toggleTrashMode(!trashMode)"
         @open-following-ups="toggleFollowingUpsMode(!followingUpsMode)"
-        @toggle-locale="toggleLocale"
-        @toggle-theme="toggleTheme"
+        @open-comments="toggleCommentsMode(!commentsMode)"
+        @open-articles="toggleArticlesMode(!articlesMode)"
       />
 
       <section
-        v-if="showAutoInitProgressPanel && !trashMode"
+        v-if="showAutoInitProgressPanel && !trashMode && !followingUpsMode && !commentsMode && !articlesMode"
         class="panel-surface space-y-3 rounded-lg border p-4"
       >
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -2690,7 +3473,15 @@ onBeforeUnmount(() => {
       </section>
 
       <TagEnrichmentStatusBar
-        v-if="TAG_SYNC_ENABLED && !trashMode && !followingUpsMode"
+        v-if="
+          TAG_SYNC_ENABLED &&
+          tagEnrichmentStatus &&
+          tagEnrichmentStatus.phase !== 'idle' &&
+          !trashMode &&
+          !followingUpsMode &&
+          !commentsMode &&
+          !articlesMode
+        "
         :status="tagEnrichmentStatus"
         :loading="tagEnrichmentLoading"
         :now-ms="tickNow"
@@ -2701,8 +3492,20 @@ onBeforeUnmount(() => {
         @run="runTagEnrichmentNowFromUi"
       />
 
+      <AiOrganizerStatusBar
+        v-if="aiOrganizerStatusBarVisible && aiOrganizerStatus"
+        :status="aiOrganizerStatus"
+        :busy="aiOrganizerBusy"
+        :now-ms="tickNow"
+        :t="t"
+        @open="openAiOrganizerDialog"
+        @pause="pauseAiOrganizerFromUi"
+        @resume="resumeAiOrganizerFromUi"
+        @stop="cancelAiOrganizerFromUi"
+      />
+
       <AiCategoryBrowser
-        v-if="AI_CATEGORIES_ENABLED && !trashMode && aiCategoryBrowserOpen"
+        v-if="AI_CATEGORIES_ENABLED && !trashMode && !commentsMode && !articlesMode && aiCategoryBrowserOpen"
         :t="t"
         :locale="locale"
         :folder="activeFolder"
@@ -2727,13 +3530,47 @@ onBeforeUnmount(() => {
         @open-space="openFollowingUpSpace"
       />
 
+      <CommentsPanel
+        v-else-if="commentsMode"
+        :t="t"
+        :locale="locale"
+        :comments="favoriteComments"
+        :keyword="favoriteCommentKeyword"
+        :loading="favoriteCommentLoading"
+        :pagination="favoriteCommentPagination"
+        :card-width="commentCardWidth"
+        @update:keyword="favoriteCommentKeyword = $event"
+        @search="searchFavoriteComments"
+        @refresh="loadFavoriteComments"
+        @delete="removeFavoriteComment"
+        @change-page="changeFavoriteCommentPage"
+        @change-page-size="changeFavoriteCommentPageSize"
+      />
+
+      <FavoriteArticlesPanel
+        v-else-if="articlesMode"
+        :t="t"
+        :locale="locale"
+        :articles="favoriteArticles"
+        :active-folder-id="selectedFolderId"
+        :keyword="favoriteArticleKeyword"
+        :loading="favoriteArticleLoading"
+        :pagination="favoriteArticlePagination"
+        :card-width="articleCardWidth"
+        @update:keyword="favoriteArticleKeyword = $event"
+        @search="searchFavoriteArticles"
+        @refresh="loadFavoriteArticles"
+        @delete="removeFavoriteArticle"
+        @change-page="changeFavoriteArticlePage"
+        @change-page-size="changeFavoriteArticlePageSize"
+      />
+
       <ManagerPanel
         v-else-if="!trashMode"
         :t="t"
         :locale="locale"
         :keyword="keyword"
-        :search-scope="searchScope"
-        :current-folder-available="selectedFolderId !== null"
+        :active-folder="activeFolder"
         :tags="tags"
         :from-date="fromDate"
         :to-date="toDate"
@@ -2756,11 +3593,9 @@ onBeforeUnmount(() => {
         :page-size-options="PAGE_SIZE_OPTIONS"
         :video-card-width="videoCardWidth"
         @update:keyword="keyword = $event"
-        @update:search-scope="handleSearchScopeChange"
         @update:from-date="fromDate = $event"
         @update:to-date="toDate = $event"
         @update:batch-target-folder-id="batchTargetFolderId = $event"
-        @update:video-card-width="uiStore.setVideoCardWidth($event)"
         @append-field-token="handleAppendFieldToken"
         @search="handleSearchSubmit"
         @clear-search="clearSearch"
@@ -2788,9 +3623,15 @@ onBeforeUnmount(() => {
         :trash-folders="trashFolders"
         :paged-trash-folders="pagedTrashFolders"
         :trash-videos="trashVideos"
+        :trash-comments="trashComments"
+        :trash-articles="trashArticles"
         :trash-video-total="trashVideoTotal"
+        :trash-comment-total="trashCommentTotal"
+        :trash-article-total="trashArticleTotal"
         :selected-trash-folder-ids="selectedTrashFolderIds"
         :selected-trash-video-ids="selectedTrashVideoIds"
+        :selected-trash-comment-ids="selectedTrashCommentIds"
+        :selected-trash-article-ids="selectedTrashArticleIds"
         :trash-folder-page="trashFolderPage"
         :trash-folder-total-pages="trashFolderTotalPages"
         :trash-folder-page-size="trashFolderPageSize"
@@ -2799,8 +3640,18 @@ onBeforeUnmount(() => {
         :trash-video-total-pages="trashVideoTotalPages"
         :trash-video-page-size="trashVideoPageSize"
         :trash-video-page-size-options="TRASH_VIDEO_PAGE_SIZE_OPTIONS"
+        :trash-comment-page="trashCommentPage"
+        :trash-comment-total-pages="trashCommentTotalPages"
+        :trash-comment-page-size="trashCommentPageSize"
+        :trash-comment-page-size-options="TRASH_CONTENT_PAGE_SIZE_OPTIONS"
+        :trash-article-page="trashArticlePage"
+        :trash-article-total-pages="trashArticleTotalPages"
+        :trash-article-page-size="trashArticlePageSize"
+        :trash-article-page-size-options="TRASH_CONTENT_PAGE_SIZE_OPTIONS"
         :is-trash-folder-selected="isTrashFolderSelected"
         :is-trash-video-selected="isTrashVideoSelected"
+        :is-trash-comment-selected="isTrashCommentSelected"
+        :is-trash-article-selected="isTrashArticleSelected"
         @select-all-trash-folders="selectAllTrashFolders"
         @clear-trash-folder-selection="clearTrashFolderSelection"
         @batch-restore-trash-folders="batchRestoreTrashFolders"
@@ -2825,6 +3676,26 @@ onBeforeUnmount(() => {
         @trash-video-page-size-change="handleTrashVideoPageSizeChange($event)"
         @restore-video-from-trash="handleRestoreVideoFromTrash"
         @purge-video-from-trash="handlePurgeVideoFromTrash"
+        @select-all-trash-comments="selectAllTrashComments"
+        @clear-trash-comment-selection="clearTrashCommentSelection"
+        @batch-restore-trash-comments="batchRestoreTrashComments"
+        @batch-purge-trash-comments="batchPurgeTrashComments"
+        @set-trash-comment-selection="setTrashCommentSelection($event.id, $event.checked)"
+        @prev-trash-comment-page="goToTrashCommentPage(trashCommentPage - 1)"
+        @next-trash-comment-page="goToTrashCommentPage(trashCommentPage + 1)"
+        @trash-comment-page-size-change="handleTrashCommentPageSizeChange($event)"
+        @restore-comment-from-trash="handleRestoreCommentFromTrash"
+        @purge-comment-from-trash="handlePurgeCommentFromTrash"
+        @select-all-trash-articles="selectAllTrashArticles"
+        @clear-trash-article-selection="clearTrashArticleSelection"
+        @batch-restore-trash-articles="batchRestoreTrashArticles"
+        @batch-purge-trash-articles="batchPurgeTrashArticles"
+        @set-trash-article-selection="setTrashArticleSelection($event.id, $event.checked)"
+        @prev-trash-article-page="goToTrashArticlePage(trashArticlePage - 1)"
+        @next-trash-article-page="goToTrashArticlePage(trashArticlePage + 1)"
+        @trash-article-page-size-change="handleTrashArticlePageSizeChange($event)"
+        @restore-article-from-trash="handleRestoreArticleFromTrash"
+        @purge-article-from-trash="handlePurgeArticleFromTrash"
       />
     </section>
 
@@ -2863,25 +3734,58 @@ onBeforeUnmount(() => {
     />
 
     <AiSettingsDialog
-      v-if="AI_CATEGORIES_ENABLED"
       :open="aiSettingsDialogOpen"
       :t="t"
       :loading="aiSettingsBusy"
       :settings="aiSettings"
-      @update:open="aiSettingsDialogOpen = $event"
+      :section="settingsSection"
+      :listener-loading="bidirectionalSyncSaving"
+      :listener-settings="bidirectionalSyncSettings"
+      :show-ai="AI_ORGANIZER_ENABLED || AI_CATEGORIES_ENABLED"
+      :show-listener="BILIBILI_LISTENER_SETTINGS_ENABLED"
+      :locale="locale"
+      :is-dark="isDark"
+      :video-card-width="videoCardWidth"
+      :comment-card-width="commentCardWidth"
+      :article-card-width="articleCardWidth"
+      @update:open="handleAiSettingsDialogOpen"
+      @update:section="settingsSection = $event"
       @reload="refreshAiSettings"
       @save="saveAiSettings"
       @test="testAiSettingsFromUi"
+      @reload-listener="refreshBidirectionalSyncSettings"
+      @save-listener="saveBidirectionalSyncSettings"
+      @set-locale="uiStore.setLocale($event)"
+      @set-theme="uiStore.setTheme($event)"
+      @set-video-card-width="uiStore.setVideoCardWidth($event)"
+      @set-comment-card-width="uiStore.setCommentCardWidth($event)"
+      @set-article-card-width="uiStore.setArticleCardWidth($event)"
     />
 
-    <BidirectionalSyncSettingsDialog
-      :open="bidirectionalSyncDialogOpen"
+    <AiOrganizerDialog
+      v-if="AI_ORGANIZER_ENABLED"
+      :open="aiOrganizerDialogOpen"
       :t="t"
-      :loading="bidirectionalSyncSaving"
-      :settings="bidirectionalSyncSettings"
-      @update:open="bidirectionalSyncDialogOpen = $event"
-      @reload="refreshBidirectionalSyncSettings"
-      @save="saveBidirectionalSyncSettings"
+      :status="aiOrganizerStatus"
+      :settings="aiSettings"
+      :current-folder="activeFolder"
+      :busy="aiOrganizerBusy"
+      :preview-items="aiOrganizerPreviewItems"
+      :preview-pagination="aiOrganizerPreviewPagination"
+      :preview-low-only="aiOrganizerPreviewLowOnly"
+      @update:open="aiOrganizerDialogOpen = $event"
+      @settings="openAiSettingsDialog"
+      @refresh="refreshAiOrganizerState()"
+      @start="startAiOrganizerFromUi"
+      @pause="pauseAiOrganizerFromUi"
+      @resume="resumeAiOrganizerFromUi"
+      @cancel="cancelAiOrganizerFromUi"
+      @apply="applyAiOrganizerFromUi"
+      @undo="undoAiOrganizerFromUi"
+      @backup="downloadAiOrganizerBackupFromUi"
+      @preview-page="loadAiOrganizerPreview"
+      @update:preview-low-only="setAiOrganizerPreviewLowOnly"
+      @update-assignment="updateAiOrganizerAssignmentFromUi"
     />
 
     <WebDavBackupDialog

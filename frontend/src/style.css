@@ -3,54 +3,54 @@
 @tailwind utilities;
 
 :root {
-  --background: 210 44% 98%;
-  --foreground: 216 38% 14%;
+  --background: 200 18% 97%;
+  --foreground: 208 30% 14%;
   --card: 0 0% 100%;
-  --card-foreground: 216 38% 14%;
+  --card-foreground: 208 30% 14%;
   --popover: 0 0% 100%;
-  --popover-foreground: 216 38% 14%;
-  --primary: 210 95% 46%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 208 42% 94%;
-  --secondary-foreground: 217 32% 20%;
-  --muted: 208 38% 95%;
-  --muted-foreground: 216 19% 40%;
-  --accent: 198 100% 96%;
-  --accent-foreground: 208 90% 35%;
+  --popover-foreground: 208 30% 14%;
+  --primary: 343 65% 55%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 196 16% 93%;
+  --secondary-foreground: 207 25% 20%;
+  --muted: 195 15% 94%;
+  --muted-foreground: 205 13% 40%;
+  --accent: 171 39% 91%;
+  --accent-foreground: 174 55% 25%;
   --destructive: 0 73% 52%;
   --destructive-foreground: 0 0% 98%;
-  --border: 212 33% 86%;
-  --input: 212 33% 86%;
-  --ring: 208 100% 45%;
-  --radius: 1rem;
-  --hero-a: 207 100% 54%;
-  --hero-b: 184 88% 43%;
-  --surface-shadow: 216 50% 12%;
+  --border: 198 14% 84%;
+  --input: 198 14% 84%;
+  --ring: 343 68% 56%;
+  --radius: 0.5rem;
+  --hero-a: 343 78% 62%;
+  --hero-b: 172 54% 48%;
+  --surface-shadow: 207 38% 12%;
 }
 
 .dark {
-  --background: 219 44% 8%;
-  --foreground: 210 40% 98%;
-  --card: 220 31% 12%;
-  --card-foreground: 210 40% 98%;
-  --popover: 220 31% 12%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 199 100% 62%;
-  --primary-foreground: 222 47% 11%;
-  --secondary: 217 28% 18%;
-  --secondary-foreground: 210 40% 96%;
-  --muted: 217 28% 18%;
-  --muted-foreground: 215 20% 68%;
-  --accent: 204 52% 22%;
-  --accent-foreground: 197 94% 72%;
+  --background: 207 29% 8%;
+  --foreground: 195 20% 96%;
+  --card: 205 24% 12%;
+  --card-foreground: 195 20% 96%;
+  --popover: 205 24% 12%;
+  --popover-foreground: 195 20% 96%;
+  --primary: 343 86% 69%;
+  --primary-foreground: 207 29% 10%;
+  --secondary: 203 18% 18%;
+  --secondary-foreground: 195 20% 94%;
+  --muted: 203 18% 18%;
+  --muted-foreground: 201 13% 68%;
+  --accent: 174 34% 21%;
+  --accent-foreground: 171 62% 75%;
   --destructive: 0 63% 44%;
   --destructive-foreground: 210 40% 98%;
-  --border: 217 28% 24%;
-  --input: 217 28% 24%;
-  --ring: 198 100% 62%;
-  --hero-a: 207 88% 46%;
-  --hero-b: 183 81% 37%;
-  --surface-shadow: 220 45% 4%;
+  --border: 202 17% 24%;
+  --input: 202 17% 24%;
+  --ring: 343 86% 69%;
+  --hero-a: 343 72% 58%;
+  --hero-b: 172 54% 45%;
+  --surface-shadow: 207 40% 4%;
 }
 
 * {
@@ -76,38 +76,17 @@
 body {
   @apply bg-background text-foreground min-h-screen;
   font-family: "Noto Sans SC", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
-  background-image:
-    radial-gradient(circle at 10% 0%, hsl(var(--hero-a) / 0.18), transparent 38%),
-    radial-gradient(circle at 100% 100%, hsl(var(--hero-b) / 0.16), transparent 44%),
-    linear-gradient(180deg, hsl(var(--background)), hsl(var(--background)));
-  letter-spacing: 0.01em;
+  background-image: none;
+  letter-spacing: 0;
   text-rendering: geometricPrecision;
 }
 
 .dark body {
-  background-image:
-    radial-gradient(circle at 12% 0%, hsl(var(--hero-a) / 0.2), transparent 38%),
-    radial-gradient(circle at 100% 100%, hsl(var(--hero-b) / 0.16), transparent 44%),
-    linear-gradient(180deg, hsl(var(--background)), hsl(var(--background)));
+  background-image: none;
 }
 
 body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: -1;
-  background-image: linear-gradient(
-      120deg,
-      transparent 0%,
-      hsl(var(--foreground) / 0.02) 44%,
-      transparent 88%
-    ),
-    radial-gradient(
-      circle at 24% 20%,
-      hsl(var(--primary) / 0.05) 0%,
-      transparent 44%
-    );
+  content: none;
 }
 
 .date-input {
@@ -164,7 +143,7 @@ details > summary::-webkit-details-marker {
 
 @layer components {
   .panel-surface {
-    @apply rounded-2xl border bg-card;
+    @apply rounded-lg border bg-card;
     box-shadow:
       0 20px 48px -30px hsl(var(--surface-shadow) / 0.48),
       inset 0 1px 0 hsl(0 0% 100% / 0.45);
@@ -176,7 +155,7 @@ details > summary::-webkit-details-marker {
   }
 
   .panel-surface-soft {
-    @apply rounded-xl border bg-background/[0.97] backdrop-blur-[2px];
+    @apply rounded-md border bg-background/[0.97];
     box-shadow: 0 12px 30px -24px hsl(var(--surface-shadow) / 0.35);
     transition:
       box-shadow 220ms ease,
@@ -196,17 +175,32 @@ details > summary::-webkit-details-marker {
   }
 
   .hero-surface {
-    background:
-      linear-gradient(
-        135deg,
-        hsl(var(--hero-a) / 0.14) 0%,
-        hsl(var(--hero-b) / 0.1) 58%,
-        hsl(var(--card)) 100%
-      );
-    @apply rounded-2xl border border-border/80;
+    position: relative;
+    overflow: hidden;
+    background: hsl(var(--card));
+    @apply rounded-lg border border-border/80;
     box-shadow:
       0 22px 52px -34px hsl(var(--surface-shadow) / 0.46),
       inset 0 1px 0 hsl(0 0% 100% / 0.42);
+  }
+
+  .hero-surface::before,
+  .hero-surface::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 4px;
+    pointer-events: none;
+  }
+
+  .hero-surface::before {
+    left: 0;
+    width: 100%;
+    background: hsl(var(--hero-a));
+  }
+
+  .hero-surface::after {
+    content: none;
   }
 
   .action-chip {
@@ -228,5 +222,115 @@ details > summary::-webkit-details-marker {
       box-shadow 180ms ease,
       transform 180ms ease,
       opacity 180ms ease;
+  }
+}
+
+.Vue-Toastification__container {
+  width: min(100%, 392px);
+  padding: 16px;
+  gap: 8px;
+  z-index: 1200;
+}
+
+.Vue-Toastification__toast.bilishelf-toast {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-left: 3px solid hsl(var(--toast-accent));
+  border-radius: 8px;
+  background: hsl(var(--card) / 0.98);
+  color: hsl(var(--foreground));
+  box-shadow: 0 16px 34px -22px hsl(var(--surface-shadow) / 0.62);
+}
+
+.Vue-Toastification__toast.bilishelf-toast .Vue-Toastification__progress-bar {
+  height: 2px;
+  background: hsl(var(--toast-accent));
+  opacity: 0.5;
+}
+
+.Vue-Toastification__toast.bilishelf-toast--success {
+  --toast-accent: 171 54% 42%;
+}
+
+.Vue-Toastification__toast.bilishelf-toast--error {
+  --toast-accent: 343 70% 55%;
+}
+
+.bilishelf-toast__body {
+  width: 100%;
+  padding: 11px 36px 11px 12px;
+}
+
+.app-toast-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-toast-message__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+  border-radius: 7px;
+  background: hsl(var(--toast-accent) / 0.14);
+  color: hsl(var(--toast-accent));
+}
+
+.app-toast-message__copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.app-toast-message__title {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.app-toast-message__description {
+  overflow-wrap: anywhere;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.Vue-Toastification__toast.bilishelf-toast .Vue-Toastification__close-button {
+  top: 9px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: hsl(var(--muted-foreground));
+  opacity: 0;
+  transition: opacity 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.Vue-Toastification__toast.bilishelf-toast:hover .Vue-Toastification__close-button,
+.Vue-Toastification__toast.bilishelf-toast:focus-within .Vue-Toastification__close-button {
+  opacity: 1;
+}
+
+.Vue-Toastification__toast.bilishelf-toast .Vue-Toastification__close-button:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+@media (max-width: 520px) {
+  .Vue-Toastification__container {
+    width: 100%;
+    padding: 10px;
   }
 }

@@ -3,19 +3,27 @@ import { computed, ref } from "vue";
 import {
   fetchFolders,
   fetchTags,
+  fetchTrashArticles,
+  fetchTrashComments,
   fetchTrashFolders,
   fetchTrashVideos,
   fetchVideos,
   searchVideos,
 } from "@/lib/api";
-import type { Folder, Tag, Video, VideoFilter } from "@/types";
+import type {
+  FavoriteArticle,
+  FavoriteComment,
+  Folder,
+  Tag,
+  Video,
+  VideoFilter,
+} from "@/types";
 
 export const PAGE_SIZE_OPTIONS = [12, 24, 30, 48, 60];
 export const TRASH_VIDEO_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
 export const TRASH_FOLDER_PAGE_SIZE_OPTIONS = [5, 10, 20, 30];
+export const TRASH_CONTENT_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
 export const MANAGE_CUSTOM_TAG_PAGE_SIZE = 24;
-export type SearchScope = "all" | "folder";
-
 function toNumericId(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -27,13 +35,16 @@ export const useLibraryStore = defineStore("library", () => {
   const videos = ref<Video[]>([]);
   const trashFolders = ref<Folder[]>([]);
   const trashVideos = ref<Video[]>([]);
+  const trashComments = ref<FavoriteComment[]>([]);
+  const trashArticles = ref<FavoriteArticle[]>([]);
 
   const keyword = ref("");
-  const searchScope = ref<SearchScope>("all");
   const selectedFolderId = ref<number | null>(null);
   const selectedVideoIds = ref<number[]>([]);
   const selectedTrashFolderIds = ref<number[]>([]);
   const selectedTrashVideoIds = ref<number[]>([]);
+  const selectedTrashCommentIds = ref<number[]>([]);
+  const selectedTrashArticleIds = ref<number[]>([]);
   const batchTargetFolderId = ref<number | null>(null);
   const batchPanelOpen = ref(false);
   const fromDate = ref("");
@@ -46,10 +57,16 @@ export const useLibraryStore = defineStore("library", () => {
   const trashFolderPageSize = ref(10);
   const trashVideoPage = ref(1);
   const trashVideoPageSize = ref(20);
+  const trashCommentPage = ref(1);
+  const trashCommentPageSize = ref(20);
+  const trashArticlePage = ref(1);
+  const trashArticlePageSize = ref(20);
 
   const loading = ref(false);
   const total = ref(0);
   const trashVideoTotal = ref(0);
+  const trashCommentTotal = ref(0);
+  const trashArticleTotal = ref(0);
   const bootstrapped = ref(false);
   let bootstrapPromise: Promise<void> | null = null;
   let refreshVideosRunId = 0;
@@ -69,9 +86,7 @@ export const useLibraryStore = defineStore("library", () => {
   });
   const hasSelection = computed(() => selectedVideoIds.value.length > 0);
   const canMoveFromCurrentFolder = computed(
-    () =>
-      selectedFolderId.value !== null &&
-      !(keyword.value.trim() && searchScope.value === "all")
+    () => selectedFolderId.value !== null
   );
   const videoTotalPages = computed(() =>
     Math.max(1, Math.ceil(total.value / videoPageSize.value))
@@ -81,6 +96,12 @@ export const useLibraryStore = defineStore("library", () => {
   );
   const trashFolderTotalPages = computed(() =>
     Math.max(1, Math.ceil(trashFolders.value.length / trashFolderPageSize.value))
+  );
+  const trashCommentTotalPages = computed(() =>
+    Math.max(1, Math.ceil(trashCommentTotal.value / trashCommentPageSize.value))
+  );
+  const trashArticleTotalPages = computed(() =>
+    Math.max(1, Math.ceil(trashArticleTotal.value / trashArticlePageSize.value))
   );
   const pagedTrashFolders = computed(() => {
     const start = (trashFolderPage.value - 1) * trashFolderPageSize.value;
@@ -155,15 +176,10 @@ export const useLibraryStore = defineStore("library", () => {
       if (params.extracted.systemTag) filters.systemTag = params.extracted.systemTag;
       if (params.extracted.customTag) filters.customTag = params.extracted.customTag;
 
-      const hasKeywordSearch = Boolean(params.globalKeyword.trim()) ||
-        Object.values(params.extracted).some((value) => Boolean(value?.trim()));
       const query = {
         page: videoPage.value,
         pageSize: videoPageSize.value,
-        folderId:
-          hasKeywordSearch && searchScope.value === "all"
-            ? undefined
-            : selectedFolderId.value ?? undefined,
+        folderId: selectedFolderId.value ?? undefined,
         filters,
       };
 
@@ -201,30 +217,32 @@ export const useLibraryStore = defineStore("library", () => {
   async function refreshTrash() {
     loading.value = true;
     try {
-      const [folderResult, videoResult] = await Promise.all([
+      let [folderResult, videoResult, commentResult, articleResult] = await Promise.all([
         fetchTrashFolders(),
         fetchTrashVideos({
           page: trashVideoPage.value,
           pageSize: trashVideoPageSize.value,
         }),
+        fetchTrashComments({
+          page: trashCommentPage.value,
+          pageSize: trashCommentPageSize.value,
+        }),
+        fetchTrashArticles({
+          page: trashArticlePage.value,
+          pageSize: trashArticlePageSize.value,
+        }),
       ]);
-
-      trashFolders.value = folderResult.map((folder) => ({
-        ...folder,
-        id: toNumericId(folder.id),
-      }));
-      trashVideos.value = videoResult.items.map((video) => ({
-        ...video,
-        id: toNumericId(video.id),
-      }));
-      trashVideoTotal.value = videoResult.pagination.total;
 
       const maxTrashVideoPage = Math.max(
         1,
-        Math.ceil(trashVideoTotal.value / trashVideoPageSize.value)
+        Math.ceil(videoResult.pagination.total / trashVideoPageSize.value)
       );
       if (trashVideoPage.value > maxTrashVideoPage) {
         trashVideoPage.value = maxTrashVideoPage;
+        videoResult = await fetchTrashVideos({
+          page: trashVideoPage.value,
+          pageSize: trashVideoPageSize.value,
+        });
       }
 
       const maxTrashFolderPage = Math.max(
@@ -235,24 +253,81 @@ export const useLibraryStore = defineStore("library", () => {
         trashFolderPage.value = maxTrashFolderPage;
       }
 
+      const maxTrashCommentPage = Math.max(
+        1,
+        Math.ceil(commentResult.pagination.total / trashCommentPageSize.value),
+      );
+      if (trashCommentPage.value > maxTrashCommentPage) {
+        trashCommentPage.value = maxTrashCommentPage;
+        commentResult = await fetchTrashComments({
+          page: trashCommentPage.value,
+          pageSize: trashCommentPageSize.value,
+        });
+      }
+
+      const maxTrashArticlePage = Math.max(
+        1,
+        Math.ceil(articleResult.pagination.total / trashArticlePageSize.value),
+      );
+      if (trashArticlePage.value > maxTrashArticlePage) {
+        trashArticlePage.value = maxTrashArticlePage;
+        articleResult = await fetchTrashArticles({
+          page: trashArticlePage.value,
+          pageSize: trashArticlePageSize.value,
+        });
+      }
+
+      trashFolders.value = folderResult.map((folder) => ({
+        ...folder,
+        id: toNumericId(folder.id),
+      }));
+      trashVideos.value = videoResult.items.map((video) => ({
+        ...video,
+        id: toNumericId(video.id),
+      }));
+      trashVideoTotal.value = videoResult.pagination.total;
+      trashComments.value = commentResult.items.map((comment) => ({
+        ...comment,
+        id: toNumericId(comment.id),
+      }));
+      trashCommentTotal.value = commentResult.pagination.total;
+      trashArticles.value = articleResult.items.map((article) => ({
+        ...article,
+        id: toNumericId(article.id),
+      }));
+      trashArticleTotal.value = articleResult.pagination.total;
+
       selectedTrashFolderIds.value = selectedTrashFolderIds.value.filter((id) =>
         trashFolders.value.some((folder) => folder.id === id)
       );
       selectedTrashVideoIds.value = selectedTrashVideoIds.value.filter((id) =>
         trashVideos.value.some((video) => video.id === id)
       );
+      selectedTrashCommentIds.value = selectedTrashCommentIds.value.filter((id) =>
+        trashComments.value.some((comment) => comment.id === id),
+      );
+      selectedTrashArticleIds.value = selectedTrashArticleIds.value.filter((id) =>
+        trashArticles.value.some((article) => article.id === id),
+      );
     } finally {
       loading.value = false;
     }
   }
 
-  async function prefetchForRoute(view: "manager" | "trash" | "following-ups") {
+  async function prefetchForRoute(
+    view: "manager" | "trash" | "following-ups" | "comments" | "articles"
+  ) {
     await ensureBootstrapped();
-    if (view === "following-ups") {
+    if (view === "following-ups" || view === "comments" || view === "articles") {
       return;
     }
     if (view === "trash") {
-      if (trashFolders.value.length === 0 && trashVideos.value.length === 0) {
+      if (
+        trashFolders.value.length === 0 &&
+        trashVideos.value.length === 0 &&
+        trashComments.value.length === 0 &&
+        trashArticles.value.length === 0
+      ) {
         await refreshTrash();
       }
       return;
@@ -292,6 +367,20 @@ export const useLibraryStore = defineStore("library", () => {
       : selectedTrashVideoIds.value.filter((item) => item !== videoId);
   }
 
+  function setTrashCommentSelection(id: number, checked: boolean) {
+    const commentId = toNumericId(id);
+    selectedTrashCommentIds.value = checked
+      ? [...new Set([...selectedTrashCommentIds.value, commentId])]
+      : selectedTrashCommentIds.value.filter((item) => item !== commentId);
+  }
+
+  function setTrashArticleSelection(id: number, checked: boolean) {
+    const articleId = toNumericId(id);
+    selectedTrashArticleIds.value = checked
+      ? [...new Set([...selectedTrashArticleIds.value, articleId])]
+      : selectedTrashArticleIds.value.filter((item) => item !== articleId);
+  }
+
   function selectAllTrashFolders() {
     selectedTrashFolderIds.value = pagedTrashFolders.value.map((item) =>
       toNumericId(item.id)
@@ -312,6 +401,22 @@ export const useLibraryStore = defineStore("library", () => {
     selectedTrashVideoIds.value = [];
   }
 
+  function selectAllTrashComments() {
+    selectedTrashCommentIds.value = trashComments.value.map((item) => toNumericId(item.id));
+  }
+
+  function clearTrashCommentSelection() {
+    selectedTrashCommentIds.value = [];
+  }
+
+  function selectAllTrashArticles() {
+    selectedTrashArticleIds.value = trashArticles.value.map((item) => toNumericId(item.id));
+  }
+
+  function clearTrashArticleSelection() {
+    selectedTrashArticleIds.value = [];
+  }
+
   function isTrashFolderSelected(id: number) {
     const folderId = toNumericId(id);
     return selectedTrashFolderIds.value.some(
@@ -326,11 +431,23 @@ export const useLibraryStore = defineStore("library", () => {
     );
   }
 
+  function isTrashCommentSelected(id: number) {
+    const commentId = toNumericId(id);
+    return selectedTrashCommentIds.value.some((item) => toNumericId(item) === commentId);
+  }
+
+  function isTrashArticleSelected(id: number) {
+    const articleId = toNumericId(id);
+    return selectedTrashArticleIds.value.some((item) => toNumericId(item) === articleId);
+  }
+
   function resetForViewSwitch() {
     batchPanelOpen.value = false;
     selectedVideoIds.value = [];
     selectedTrashFolderIds.value = [];
     selectedTrashVideoIds.value = [];
+    selectedTrashCommentIds.value = [];
+    selectedTrashArticleIds.value = [];
     videoPage.value = 1;
   }
 
@@ -340,12 +457,15 @@ export const useLibraryStore = defineStore("library", () => {
     videos,
     trashFolders,
     trashVideos,
+    trashComments,
+    trashArticles,
     keyword,
-    searchScope,
     selectedFolderId,
     selectedVideoIds,
     selectedTrashFolderIds,
     selectedTrashVideoIds,
+    selectedTrashCommentIds,
+    selectedTrashArticleIds,
     batchTargetFolderId,
     batchPanelOpen,
     fromDate,
@@ -358,9 +478,15 @@ export const useLibraryStore = defineStore("library", () => {
     trashFolderPageSize,
     trashVideoPage,
     trashVideoPageSize,
+    trashCommentPage,
+    trashCommentPageSize,
+    trashArticlePage,
+    trashArticlePageSize,
     loading,
     total,
     trashVideoTotal,
+    trashCommentTotal,
+    trashArticleTotal,
     bootstrapped,
     customTags,
     manageCustomTagTotalPages,
@@ -370,6 +496,8 @@ export const useLibraryStore = defineStore("library", () => {
     videoTotalPages,
     trashVideoTotalPages,
     trashFolderTotalPages,
+    trashCommentTotalPages,
+    trashArticleTotalPages,
     pagedTrashFolders,
     refreshFolders,
     refreshTags,
@@ -382,12 +510,20 @@ export const useLibraryStore = defineStore("library", () => {
     selectAllVisible,
     setTrashFolderSelection,
     setTrashVideoSelection,
+    setTrashCommentSelection,
+    setTrashArticleSelection,
     selectAllTrashFolders,
     clearTrashFolderSelection,
     selectAllTrashVideos,
     clearTrashVideoSelection,
+    selectAllTrashComments,
+    clearTrashCommentSelection,
+    selectAllTrashArticles,
+    clearTrashArticleSelection,
     isTrashFolderSelected,
     isTrashVideoSelected,
+    isTrashCommentSelected,
+    isTrashArticleSelected,
     resetForViewSwitch,
   };
 });

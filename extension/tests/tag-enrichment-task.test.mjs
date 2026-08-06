@@ -16,7 +16,7 @@ const databaseSetup = `
   const database = {
     objectStoreNames: { contains() { return true; } },
     transaction() {
-      return {
+      const transaction = {
         objectStore() {
           return {
             get() {
@@ -32,12 +32,14 @@ const databaseSetup = `
               queueMicrotask(() => {
                 globalThis.__storedState = structuredClone(record.value);
                 request.onsuccess?.();
+                transaction.oncomplete?.();
               });
               return request;
             },
           };
         },
       };
+      return transaction;
     },
   };
   globalThis.indexedDB = {

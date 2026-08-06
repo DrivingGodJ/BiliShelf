@@ -31,6 +31,50 @@ export type Video = {
   systemTags?: string[];
 };
 
+export type ArticleFolder = Folder;
+
+export type FavoriteComment = {
+  id: number;
+  sourceKey: string;
+  rpid: string;
+  rootRpid: string;
+  bvid: string;
+  videoTitle: string;
+  videoUrl: string;
+  sourceUrl: string;
+  content: string;
+  contentImageUrls: string[];
+  authorName: string;
+  authorMid: string;
+  authorAvatarUrl: string;
+  authorSpaceUrl: string;
+  replyToName: string;
+  likeCount: number;
+  publishedAt: number | null;
+  publishedAtText: string;
+  savedAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+export type FavoriteArticle = {
+  id: number;
+  sourceKey: string;
+  opusId: string;
+  title: string;
+  summary: string;
+  content: string;
+  coverUrl: string;
+  authorName: string;
+  authorMid: string;
+  authorAvatarUrl: string;
+  sourceUrl: string;
+  folderIds: number[];
+  savedAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
 export type Tag = {
   id: number;
   name: string;
@@ -105,6 +149,87 @@ export type AiSettingsModelsResponse = {
   models: AiSettingsModelOption[];
   source: "builtin" | "remote";
   supportsRemoteFetch: boolean;
+};
+
+export type AiOrganizerConfig = {
+  scope: "all" | "folder";
+  folderId: number | null;
+  locale: "zh-CN" | "en-US";
+  folderCount: number;
+  referenceExistingFolders: boolean;
+  instructions: string;
+  confidenceThreshold: number;
+  batchSize: number;
+};
+
+export type AiOrganizerPhase =
+  | "idle"
+  | "planning"
+  | "classifying"
+  | "waiting"
+  | "paused"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "completed"
+  | "undone";
+
+export type AiOrganizerStatus = {
+  id?: string;
+  phase: AiOrganizerPhase;
+  stage?: Exclude<AiOrganizerPhase, "idle" | "waiting" | "paused">;
+  running: boolean;
+  paused: boolean;
+  config?: AiOrganizerConfig;
+  sourceFolderName?: string | null;
+  total: number;
+  processed: number;
+  progress: number;
+  skippedInvalid?: number;
+  estimatedFolderLinksAdded?: number;
+  estimatedFolderLinksRemoved?: number;
+  taxonomy: Array<{
+    key: string;
+    name: string;
+    description: string;
+    include: string;
+    exclude: string;
+    count: number;
+  }>;
+  lowConfidence: number;
+  invalidResults: number;
+  provider?: string;
+  model?: string;
+  retryAttempt?: number;
+  nextRunAt?: number | null;
+  startedAt?: number | null;
+  updatedAt?: number | null;
+  finishedAt?: number | null;
+  appliedAt?: number | null;
+  undoneAt?: number | null;
+  canApply: boolean;
+  canUndo: boolean;
+  lastError: string | null;
+  applySummary?: {
+    foldersCreated: number;
+    folderLinksAdded: number;
+    folderLinksRemoved: number;
+    lowConfidence: number;
+  } | null;
+};
+
+export type AiOrganizerPreviewItem = {
+  videoId: number;
+  bvid: string;
+  title: string;
+  uploader: string;
+  currentFolders: string[];
+  suggestedFolderKey: string;
+  suggestedFolderName: string;
+  appliedFolderName: string;
+  confidence: number;
+  lowConfidence: boolean;
+  reason: string;
 };
 
 export type AiCategoryKey =

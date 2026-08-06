@@ -7,6 +7,7 @@ const props = defineProps<{
   t: (key: string, vars?: Record<string, string | number>) => string;
   activeFolderName: string | null;
   resultCount: number;
+  collectionLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -35,7 +36,7 @@ const emit = defineEmits<{
         <span>{{ props.t("mobile.scope") }}</span>
       </div>
       <p class="mt-0.5 truncate text-sm font-semibold">
-        {{ props.activeFolderName || props.t("mobile.allVideos") }}
+        {{ props.activeFolderName || props.collectionLabel || props.t("mobile.allVideos") }}
       </p>
     </div>
 

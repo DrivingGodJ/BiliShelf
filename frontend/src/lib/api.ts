@@ -1,9 +1,14 @@
 import type {
   AiCategoryKey,
+  AiOrganizerConfig,
+  AiOrganizerPreviewItem,
+  AiOrganizerStatus,
   AiProvider,
   AiSettings,
   AiSettingsModelsResponse,
   CreateVideoPayload,
+  FavoriteArticle,
+  FavoriteComment,
   FollowingUpImportStatus,
   FollowedUp,
   FolderAiCategories,
@@ -233,9 +238,130 @@ export async function fetchFolders() {
   return data.items;
 }
 
+export async function fetchArticleFolders() {
+  const data = await request<{ items: Folder[] }>("/article-folders");
+  return data.items;
+}
+
 export async function fetchFollowingUps() {
   const data = await request<{ items: FollowedUp[] }>("/following-ups");
   return data.items;
+}
+
+export async function fetchFavoriteComments(options?: {
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const params = new URLSearchParams();
+  if (options?.q) params.set("q", options.q);
+  params.set("page", String(options?.page ?? 1));
+  params.set("pageSize", String(options?.pageSize ?? 20));
+  return request<{ items: FavoriteComment[]; pagination: Pagination }>(
+    `/comments?${params.toString()}`
+  );
+}
+
+export async function deleteFavoriteComment(id: number) {
+  return request<{ ok: true }>(`/comments/${id}`, { method: "DELETE" });
+}
+
+export async function fetchTrashComments(options?: {
+  page?: number;
+  pageSize?: number;
+}) {
+  const params = new URLSearchParams();
+  params.set("page", String(options?.page ?? 1));
+  params.set("pageSize", String(options?.pageSize ?? 20));
+  return request<{ items: FavoriteComment[]; pagination: Pagination }>(
+    `/trash/comments?${params.toString()}`,
+  );
+}
+
+export async function restoreTrashComment(id: number) {
+  return request<{ ok: true }>(`/trash/comments/${id}/restore`, { method: "POST" });
+}
+
+export async function purgeTrashComment(id: number) {
+  return request<void>(`/trash/comments/${id}`, { method: "DELETE" });
+}
+
+export async function fetchFavoriteArticles(options?: {
+  q?: string;
+  page?: number;
+  pageSize?: number;
+  folderId?: number;
+}) {
+  const params = new URLSearchParams();
+  if (options?.q) params.set("q", options.q);
+  params.set("page", String(options?.page ?? 1));
+  params.set("pageSize", String(options?.pageSize ?? 20));
+  if (options?.folderId) params.set("folderId", String(options.folderId));
+  return request<{ items: FavoriteArticle[]; pagination: Pagination }>(
+    `/articles?${params.toString()}`
+  );
+}
+
+export async function deleteFavoriteArticle(id: number) {
+  return request<{ ok: true }>(`/articles/${id}`, { method: "DELETE" });
+}
+
+export async function fetchTrashArticles(options?: {
+  page?: number;
+  pageSize?: number;
+}) {
+  const params = new URLSearchParams();
+  params.set("page", String(options?.page ?? 1));
+  params.set("pageSize", String(options?.pageSize ?? 20));
+  return request<{ items: FavoriteArticle[]; pagination: Pagination }>(
+    `/trash/articles?${params.toString()}`,
+  );
+}
+
+export async function restoreTrashArticle(id: number) {
+  return request<{ ok: true }>(`/trash/articles/${id}/restore`, { method: "POST" });
+}
+
+export async function purgeTrashArticle(id: number) {
+  return request<void>(`/trash/articles/${id}`, { method: "DELETE" });
+}
+
+export async function updateFavoriteArticleFolders(id: number, folderIds: number[]) {
+  return request<FavoriteArticle>(`/articles/${id}/folders`, {
+    method: "PATCH",
+    body: JSON.stringify({ folderIds }),
+  });
+}
+
+export async function createArticleFolder(payload: {
+  name: string;
+  description?: string;
+}) {
+  return request<Folder>("/article-folders", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateArticleFolder(
+  id: number,
+  payload: { name?: string; description?: string | null },
+) {
+  return request<Folder>(`/article-folders/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteArticleFolder(id: number) {
+  return request<void>(`/article-folders/${id}`, { method: "DELETE" });
+}
+
+export async function reorderArticleFolders(folderIds: number[]) {
+  return request<{ ok: true; orderedIds: number[] }>("/article-folders/order", {
+    method: "PATCH",
+    body: JSON.stringify({ folderIds }),
+  });
 }
 
 export async function startFollowingUpImport(payload?: Record<string, never>) {
@@ -720,6 +846,9 @@ export type ExportLibraryResult = {
     folders: number;
     videos: number;
     tags: number;
+    comments: number;
+    articles: number;
+    followedUps: number;
   };
 };
 
@@ -737,6 +866,11 @@ export type ImportLibraryResult = {
     foldersCreated: number;
     tagsCreated: number;
     rowsSkipped: number;
+    commentsUpserted: number;
+    commentsSkipped: number;
+    articlesUpserted: number;
+    articlesSkipped: number;
+    followedUpsUpserted: number;
   };
   importedAt: number;
 };
@@ -831,6 +965,68 @@ export async function fetchAiSettings() {
   return request<AiSettings>("/ai/settings");
 }
 
+export async function fetchAiOrganizerStatus() {
+  return request<AiOrganizerStatus>("/ai/organizer/status");
+}
+
+export async function startAiOrganizer(
+  payload: Partial<AiOrganizerConfig> & { replaceExisting?: boolean }
+) {
+  return request<AiOrganizerStatus>("/ai/organizer/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function pauseAiOrganizer() {
+  return request<AiOrganizerStatus>("/ai/organizer/pause", { method: "POST" });
+}
+
+export async function resumeAiOrganizer() {
+  return request<AiOrganizerStatus>("/ai/organizer/resume", { method: "POST" });
+}
+
+export async function cancelAiOrganizer() {
+  return request<AiOrganizerStatus>("/ai/organizer/cancel", { method: "POST" });
+}
+
+export async function applyAiOrganizer() {
+  return request<AiOrganizerStatus>("/ai/organizer/apply", { method: "POST" });
+}
+
+export async function undoAiOrganizer() {
+  return request<AiOrganizerStatus>("/ai/organizer/undo", { method: "POST" });
+}
+
+export async function fetchAiOrganizerPreview(options?: {
+  page?: number;
+  pageSize?: number;
+  lowConfidence?: boolean;
+}) {
+  const params = new URLSearchParams();
+  params.set("page", String(options?.page ?? 1));
+  params.set("pageSize", String(options?.pageSize ?? 30));
+  if (options?.lowConfidence) params.set("lowConfidence", "1");
+  return request<{
+    items: AiOrganizerPreviewItem[];
+    pagination: Pagination;
+  }>(`/ai/organizer/preview?${params.toString()}`);
+}
+
+export async function downloadAiOrganizerBackup() {
+  return request<ExportLibraryResult>("/ai/organizer/backup");
+}
+
+export async function updateAiOrganizerAssignment(payload: {
+  videoId: number;
+  folderKey: string;
+}) {
+  return request<AiOrganizerStatus>("/ai/organizer/assignments", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function updateAiSettings(payload: {
   provider?: AiProvider;
   customProviderName?: string;
@@ -891,6 +1087,26 @@ export async function fetchWebDavSettings() {
   return request<WebDavSettings>("/backup/webdav/settings");
 }
 
+export async function markBackupReminderBackupCompleted(
+  timestamp = Date.now(),
+  options?: { migration?: boolean }
+) {
+  return request<{ ok: true; lastBackupAt: number; lastReminderDay: string }>(
+    "/backup/reminder/backup-completed",
+    {
+      method: "POST",
+      body: JSON.stringify({ timestamp, migration: options?.migration === true }),
+    }
+  );
+}
+
+export async function markBackupReminderShown() {
+  return request<{ ok: true; lastBackupAt: number; lastReminderDay: string }>(
+    "/backup/reminder/shown",
+    { method: "POST" }
+  );
+}
+
 export async function updateWebDavSettings(payload: {
   enabled?: boolean;
   baseUrl?: string;
@@ -916,7 +1132,14 @@ export async function uploadWebDavBackup() {
       ok: true;
       latestFileName: string;
       snapshotFileName: string;
-      summary: { folders: number; videos: number; tags: number };
+      summary: {
+        folders: number;
+        videos: number;
+        tags: number;
+        comments: number;
+        articles: number;
+        followedUps: number;
+      };
     } & WebDavSettings
   >("/backup/webdav/upload", {
     method: "POST",
@@ -946,6 +1169,11 @@ export async function restoreWebDavBackup(payload?: { fileName?: string }) {
       foldersCreated: number;
       tagsCreated: number;
       rowsSkipped: number;
+      commentsUpserted: number;
+      commentsSkipped: number;
+      articlesUpserted: number;
+      articlesSkipped: number;
+      followedUpsUpserted: number;
     };
     restoredAt: number;
     webdav: WebDavSettings;

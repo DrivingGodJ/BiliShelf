@@ -7,9 +7,13 @@ import {
   deleteFolder,
   deleteTag,
   purgeTrashFolder,
+  purgeTrashComment,
+  purgeTrashArticle,
   purgeTrashVideo,
   reorderFolders,
   restoreTrashFolder,
+  restoreTrashComment,
+  restoreTrashArticle,
   restoreTrashVideo,
   updateFolder,
   updateTag,
@@ -35,6 +39,8 @@ type UseManagerActionsParams = {
   selectedVideoIds: Ref<number[]>;
   selectedTrashFolderIds: Ref<number[]>;
   selectedTrashVideoIds: Ref<number[]>;
+  selectedTrashCommentIds: Ref<number[]>;
+  selectedTrashArticleIds: Ref<number[]>;
   batchTargetFolderId: Ref<number | null>;
   batchPanelOpen: Ref<boolean>;
   hasSelection: Ref<boolean>;
@@ -66,6 +72,8 @@ export function useManagerActions(params: UseManagerActionsParams) {
     selectedVideoIds,
     selectedTrashFolderIds,
     selectedTrashVideoIds,
+    selectedTrashCommentIds,
+    selectedTrashArticleIds,
     batchTargetFolderId,
     batchPanelOpen,
     hasSelection,
@@ -446,6 +454,130 @@ export function useManagerActions(params: UseManagerActionsParams) {
     }
   }
 
+  async function batchRestoreTrashComments() {
+    if (selectedTrashCommentIds.value.length === 0) {
+      return notifyError(t("toast.selectTrashCommentsFirst"));
+    }
+    try {
+      await Promise.all(selectedTrashCommentIds.value.map((id) => restoreTrashComment(id)));
+      selectedTrashCommentIds.value = [];
+      await refreshTrash();
+      notifySuccess(t("toast.commentsRestored"));
+    } catch (error) {
+      notifyError(t("toast.restoreCommentFail"), error);
+    }
+  }
+
+  async function batchPurgeTrashComments() {
+    if (selectedTrashCommentIds.value.length === 0) {
+      return notifyError(t("toast.selectTrashCommentsFirst"));
+    }
+    const confirmed = await openConfirmDialog({
+      title: t("confirm.purgeComments.title"),
+      description: t("confirm.purgeComments.desc"),
+      confirmText: t("common.delete"),
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    try {
+      await Promise.all(selectedTrashCommentIds.value.map((id) => purgeTrashComment(id)));
+      selectedTrashCommentIds.value = [];
+      await refreshTrash();
+      notifySuccess(t("toast.commentsPurged"));
+    } catch (error) {
+      notifyError(t("toast.purgeCommentFail"), error);
+    }
+  }
+
+  async function handleRestoreCommentFromTrash(id: number) {
+    try {
+      await restoreTrashComment(id);
+      await refreshTrash();
+      notifySuccess(t("toast.commentRestored"));
+    } catch (error) {
+      notifyError(t("toast.restoreCommentFail"), error);
+    }
+  }
+
+  async function handlePurgeCommentFromTrash(id: number) {
+    const confirmed = await openConfirmDialog({
+      title: t("confirm.purgeCommentSingle.title"),
+      description: t("confirm.purgeCommentSingle.desc"),
+      confirmText: t("common.delete"),
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    try {
+      await purgeTrashComment(id);
+      await refreshTrash();
+      notifySuccess(t("toast.commentPurged"));
+    } catch (error) {
+      notifyError(t("toast.purgeCommentFail"), error);
+    }
+  }
+
+  async function batchRestoreTrashArticles() {
+    if (selectedTrashArticleIds.value.length === 0) {
+      return notifyError(t("toast.selectTrashArticlesFirst"));
+    }
+    try {
+      await Promise.all(selectedTrashArticleIds.value.map((id) => restoreTrashArticle(id)));
+      selectedTrashArticleIds.value = [];
+      await refreshTrash();
+      notifySuccess(t("toast.articlesRestored"));
+    } catch (error) {
+      notifyError(t("toast.restoreArticleFail"), error);
+    }
+  }
+
+  async function batchPurgeTrashArticles() {
+    if (selectedTrashArticleIds.value.length === 0) {
+      return notifyError(t("toast.selectTrashArticlesFirst"));
+    }
+    const confirmed = await openConfirmDialog({
+      title: t("confirm.purgeArticles.title"),
+      description: t("confirm.purgeArticles.desc"),
+      confirmText: t("common.delete"),
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    try {
+      await Promise.all(selectedTrashArticleIds.value.map((id) => purgeTrashArticle(id)));
+      selectedTrashArticleIds.value = [];
+      await refreshTrash();
+      notifySuccess(t("toast.articlesPurged"));
+    } catch (error) {
+      notifyError(t("toast.purgeArticleFail"), error);
+    }
+  }
+
+  async function handleRestoreArticleFromTrash(id: number) {
+    try {
+      await restoreTrashArticle(id);
+      await refreshTrash();
+      notifySuccess(t("toast.articleRestored"));
+    } catch (error) {
+      notifyError(t("toast.restoreArticleFail"), error);
+    }
+  }
+
+  async function handlePurgeArticleFromTrash(id: number) {
+    const confirmed = await openConfirmDialog({
+      title: t("confirm.purgeArticleSingle.title"),
+      description: t("confirm.purgeArticleSingle.desc"),
+      confirmText: t("common.delete"),
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    try {
+      await purgeTrashArticle(id);
+      await refreshTrash();
+      notifySuccess(t("toast.articlePurged"));
+    } catch (error) {
+      notifyError(t("toast.purgeArticleFail"), error);
+    }
+  }
+
   return {
     handleCreateFolder,
     handleUpdateFolder,
@@ -467,5 +599,13 @@ export function useManagerActions(params: UseManagerActionsParams) {
     handlePurgeFolderFromTrash,
     handleRestoreVideoFromTrash,
     handlePurgeVideoFromTrash,
+    batchRestoreTrashComments,
+    batchPurgeTrashComments,
+    handleRestoreCommentFromTrash,
+    handlePurgeCommentFromTrash,
+    batchRestoreTrashArticles,
+    batchPurgeTrashArticles,
+    handleRestoreArticleFromTrash,
+    handlePurgeArticleFromTrash,
   };
 }

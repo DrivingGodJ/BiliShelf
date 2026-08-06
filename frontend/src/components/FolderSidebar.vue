@@ -42,6 +42,9 @@ const props = withDefaults(
     aiRunningFolderId: number | null;
     showAiActions?: boolean;
     locale?: Locale;
+  collectionLabel?: string;
+  folderHeading?: string;
+  folderItemCountLabel?: string;
   }>(),
   {
     locale: "zh-CN",
@@ -340,7 +343,9 @@ function triggerClear() {
       >
         <LibraryBig class="h-4 w-4" />
       </span>
-      <h2 class="text-sm font-semibold tracking-wide">{{ t("folders") }}</h2>
+      <h2 class="text-sm font-semibold tracking-wide">
+        {{ props.folderHeading || t("folders") }}
+      </h2>
     </div>
 
     <div class="space-y-2">
@@ -392,26 +397,31 @@ function triggerClear() {
 
     <section
       v-if="props.showPlaybackActions"
-      class="mt-4 space-y-3 rounded-xl border border-border/80 bg-card/70 p-3"
+      class="mt-3 flex items-center gap-2 rounded-lg border border-border/80 bg-card/70 p-2"
     >
-      <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <div class="flex min-w-0 flex-1 items-center gap-2">
         <Play class="h-3.5 w-3.5" />
-        <span>{{ t("playbackTitle") }}</span>
+        <div class="min-w-0">
+          <p class="text-xs font-semibold text-foreground">{{ t("playbackTitle") }}</p>
+          <p class="truncate text-[11px] text-muted-foreground">
+            {{
+              hasActiveFolder
+                ? t("playbackTarget", { name: activeFolderName })
+                : t("playbackNoFolder")
+            }}
+          </p>
+        </div>
       </div>
-
-      <p v-if="hasActiveFolder" class="text-xs text-muted-foreground">
-        {{ t("playbackTarget", { name: activeFolderName }) }}
-      </p>
-      <p v-else class="text-xs text-muted-foreground">
-        {{ t("playbackNoFolder") }}
-      </p>
-
-      <div class="flex justify-end">
-        <Button size="sm" class="gap-1" :disabled="!canStartActiveFolderPlayback" @click="triggerPlayback">
-          <Play class="h-3.5 w-3.5" />
-          {{ t("playbackStart") }}
-        </Button>
-      </div>
+      <Button
+        size="icon"
+        class="h-8 w-8 shrink-0"
+        :title="t('playbackStart')"
+        :aria-label="t('playbackStart')"
+        :disabled="!canStartActiveFolderPlayback"
+        @click="triggerPlayback"
+      >
+        <Play class="h-3.5 w-3.5" />
+      </Button>
     </section>
 
     <section
@@ -481,7 +491,7 @@ function triggerClear() {
           @click="emit('select', null)"
         >
           <LibraryBig class="h-4 w-4 shrink-0" />
-          <span class="truncate">{{ t("allVideos") }}</span>
+          <span class="truncate">{{ props.collectionLabel || t("allVideos") }}</span>
         </button>
 
         <div
@@ -536,7 +546,11 @@ function triggerClear() {
                 <span class="truncate text-sm font-medium">{{ folder.name }}</span>
                 <span
                   class="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
-                  :title="t('videosCount', { count: folder.itemCount ?? 0 })"
+                  :title="
+                    props.folderItemCountLabel
+                      ? props.folderItemCountLabel.replace('{count}', String(folder.itemCount ?? 0))
+                      : t('videosCount', { count: folder.itemCount ?? 0 })
+                  "
                 >
                   {{ folder.itemCount ?? 0 }}
                 </span>

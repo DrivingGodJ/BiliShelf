@@ -13,6 +13,7 @@ export type AiRuntimeFetch = (
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<AiRuntimeFetchResponse>;
 
@@ -21,6 +22,9 @@ export function requestAiJson(
   prompt: string,
   options?: {
     fetchImpl?: AiRuntimeFetch;
+    maxTokens?: number;
+    temperature?: number;
+    signal?: AbortSignal;
   },
 ): Promise<Record<string, unknown>>;
 

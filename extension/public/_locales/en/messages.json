@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "BiliShelf Video Library"
+  },
+  "extensionShortName": {
+    "message": "BiliShelf"
+  },
+  "extensionDescription": {
+    "message": "Save Bilibili videos to a local library with search, tags, batch management, and backups."
+  },
+  "extensionActionTitle": {
+    "message": "Open BiliShelf Video Library"
+  }
+}

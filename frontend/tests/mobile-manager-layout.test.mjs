@@ -53,8 +53,9 @@ test("manager header compacts secondary actions behind a mobile More control", a
   const source = await readSource("components", "layout", "ManagerHeader.vue");
 
   assert.match(source, /const mobileActionsOpen = ref\(false\);/);
-  assert.match(source, /class="mt-3 grid grid-cols-2 gap-2 md:hidden"/);
+  assert.match(source, /v-if="managerMode" class="mt-\d+ space-y-2 md:hidden"/);
   assert.match(source, /header\.moreActions/);
+  assert.match(source, /v-else[\s\S]*md:hidden[\s\S]*header\.backManager/s);
   assert.match(source, /class="desktop-action-grid/);
   assert.match(source, /hidden line-clamp-1 text-sm text-muted-foreground md:block/);
   assert.match(source, /@media \(max-width: 767px\)/);

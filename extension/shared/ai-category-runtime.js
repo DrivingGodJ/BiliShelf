@@ -88,6 +88,17 @@ function extractGeminiText(payload) {
 
 export async function requestAiJson(meta, prompt, options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const signal = options.signal;
+  const requestedMaxTokens = Number(options.maxTokens);
+  const requestedTemperature = Number(options.temperature);
+  const maxTokens = Math.min(
+    8192,
+    Math.max(128, Number.isFinite(requestedMaxTokens) ? requestedMaxTokens : 2048),
+  );
+  const temperature = Math.min(
+    1,
+    Math.max(0, Number.isFinite(requestedTemperature) ? requestedTemperature : 0.1),
+  );
 
   let response;
   if (meta.provider === "gemini") {
@@ -95,6 +106,7 @@ export async function requestAiJson(meta, prompt, options = {}) {
       `${joinUrl(meta.baseUrl, `models/${encodeURIComponent(meta.model)}:generateContent`)}?key=${encodeURIComponent(meta.apiKey)}`,
       {
         method: "POST",
+        signal,
         headers: {
           "Content-Type": "application/json",
         },
@@ -105,12 +117,18 @@ export async function requestAiJson(meta, prompt, options = {}) {
               parts: [{ text: prompt }],
             },
           ],
+          generationConfig: {
+            maxOutputTokens: maxTokens,
+            temperature,
+            responseMimeType: "application/json",
+          },
         }),
       },
     );
   } else if (meta.provider === "claude") {
     response = await fetchImpl(joinUrl(meta.baseUrl, "messages"), {
       method: "POST",
+      signal,
       headers: {
         "Content-Type": "application/json",
         "x-api-key": meta.apiKey,
@@ -118,7 +136,8 @@ export async function requestAiJson(meta, prompt, options = {}) {
       },
       body: JSON.stringify({
         model: meta.model,
-        max_tokens: 512,
+        max_tokens: maxTokens,
+        temperature,
         messages: [
           {
             role: "user",
@@ -130,13 +149,15 @@ export async function requestAiJson(meta, prompt, options = {}) {
   } else {
     response = await fetchImpl(joinUrl(meta.baseUrl, "chat/completions"), {
       method: "POST",
+      signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${meta.apiKey}`,
       },
       body: JSON.stringify({
         model: meta.model,
-        temperature: 0.2,
+        max_tokens: maxTokens,
+        temperature,
         messages: [
           {
             role: "system",

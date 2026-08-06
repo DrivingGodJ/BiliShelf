@@ -36,7 +36,7 @@ async function readManagerI18nSource() {
   return source.replace(/\r\n/g, "\n");
 }
 
-test("manager header removes the AI placeholder action and keeps the trash toggle icon carrier", async () => {
+test("manager header removes the AI placeholder and exposes unified settings and data actions", async () => {
   const headerSource = await readManagerHeaderSource();
   const appSource = await readManagerAppSource();
   const i18nSource = await readManagerI18nSource();
@@ -46,26 +46,21 @@ test("manager header removes the AI placeholder action and keeps the trash toggl
   assert.doesNotMatch(headerSource, /"open-ai-placeholder": \[\];/);
   assert.doesNotMatch(headerSource, /props\.t\("header\.aiPlaceholder"\)/);
   assert.doesNotMatch(headerSource, /@click="emit\('open-ai-placeholder'\)"/);
-  assert.match(headerSource, /const topActionButtonClass = "[^"]*border[^"]*shadow/);
-  assert.match(headerSource, /const secondaryActionButtonClass = "[^"]*border[^"]*shadow/);
-  assert.match(headerSource, /const activeViewButtonClass = "[^"]*border-primary\/35[^"]*bg-primary\/12[^"]*text-primary/);
-  assert.match(headerSource, /const trashActionIconClass = "[^"]*rounded[^"]*border[^"]*transition-colors/);
-  assert.match(headerSource, /const trashActionIconIdleClass = "[^"]*text-foreground[^"]*dark:text-white/);
-  assert.match(headerSource, /const trashActionIconActiveClass = "[^"]*text-primary/);
-  assert.match(
-    headerSource,
-    /<span\s+:class="\[trashActionIconClass, props\.trashMode \? trashActionIconActiveClass : trashActionIconIdleClass\]"\s*>\s*<Trash2 class="h-3\.5 w-3\.5" \/>/,
-  );
+  assert.match(headerSource, /const topActionButtonClass\s*=\s*"[^"]*border[^"]*shadow/);
+  assert.match(headerSource, /@click="emit\('open-settings'\)"/);
+  assert.match(headerSource, /<Settings class="h-4 w-4"/);
+  assert.match(headerSource, /props\.t\("header\.dataTransfer"\)/);
+  assert.match(i18nSource, /"header\.syncImport": \{ "zh-CN": "同步 B 站"/);
   assert.doesNotMatch(appSource, /@open-ai-placeholder="handleOpenAiPlaceholder"/);
   assert.doesNotMatch(appSource, /function handleOpenAiPlaceholder\(\)/);
   assert.doesNotMatch(appSource, /notifySuccess\(t\("toast\.comingSoon"\)\)/);
 });
 
-test("folder sidebar playback action aligns its trigger to the right", async () => {
+test("folder sidebar playback action uses a compact icon trigger", async () => {
   const source = await readFolderSidebarSource();
 
   assert.match(
     source,
-    /<div class="flex justify-end">\s*<Button size="sm" class="gap-1"/,
+    /v-if="props\.showPlaybackActions"\s+class="mt-3 flex items-center gap-2 rounded-lg[\s\S]*?<Button\s+size="icon"[\s\S]*?:aria-label="t\('playbackStart'\)"/s,
   );
 });

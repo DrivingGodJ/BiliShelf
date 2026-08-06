@@ -2,11 +2,20 @@ import { defineConfig } from "wxt";
 
 export default defineConfig({
   manifest: {
-    name: "BiliShelf Manager",
-    short_name: "BiliShelf",
-    description: "Capture Bilibili videos into local folders, then search, tag, and batch-manage.",
-    version: "0.1.5",
-    permissions: ["storage", "activeTab", "tabs", "scripting", "alarms", "cookies"],
+    default_locale: "zh_CN",
+    name: "__MSG_extensionName__",
+    short_name: "__MSG_extensionShortName__",
+    description: "__MSG_extensionDescription__",
+    version: "0.1.19",
+    permissions: [
+      "storage",
+      "activeTab",
+      "tabs",
+      "scripting",
+      "alarms",
+      "cookies",
+      "notifications",
+    ],
     options_page: "manager/index.html",
     icons: {
       "16": "icons/16.png",
@@ -15,7 +24,7 @@ export default defineConfig({
       "128": "icons/128.png"
     },
     action: {
-      default_title: "BiliShelf Manager",
+      default_title: "__MSG_extensionActionTitle__",
       default_icon: {
         "16": "icons/16.png",
         "32": "icons/32.png"

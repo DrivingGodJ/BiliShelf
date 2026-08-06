@@ -120,8 +120,10 @@ test("tag status bar exposes persisted progress and explicit task controls", asy
   assert.match(component, /emit\('stop'\)/);
   assert.match(component, /emit\('run'\)/);
   assert.match(app, /<TagEnrichmentStatusBar/);
+  assert.match(app, /tagEnrichmentStatus\.phase !== 'idle'/);
   assert.match(app, /@start="resumeTagEnrichmentFromUi"/);
   assert.match(app, /@stop="pauseTagEnrichmentFromUi"/);
+  assert.match(component, /panel-surface rounded-2xl/);
 });
 
 test("tag task controls and phases have matching Chinese and English copy", async () => {

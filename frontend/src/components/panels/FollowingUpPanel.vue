@@ -136,7 +136,15 @@ function submitFollowingUpPageJump() {
     </div>
 
     <div class="flex flex-wrap items-center gap-3">
-      <div class="relative w-full max-w-sm">
+      <p v-if="props.status" class="text-xs text-muted-foreground">
+        {{
+          props.t("followingUps.statusSummary", {
+            current: props.status.current,
+            total: props.status.total,
+          })
+        }}
+      </p>
+      <div class="relative ml-auto w-full max-w-sm">
         <Search
           class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
         />
@@ -147,14 +155,6 @@ function submitFollowingUpPageJump() {
           @update:model-value="emit('update:keyword', String($event))"
         />
       </div>
-      <p v-if="props.status" class="text-xs text-muted-foreground">
-        {{
-          props.t("followingUps.statusSummary", {
-            current: props.status.current,
-            total: props.status.total,
-          })
-        }}
-      </p>
     </div>
 
     <div

@@ -9,12 +9,23 @@ type UseManagerHeaderStateParams = {
   isDark: Ref<boolean>;
   trashMode: Ref<boolean>;
   followingUpsMode?: Ref<boolean>;
+  commentsMode?: Ref<boolean>;
+  articlesMode?: Ref<boolean>;
   selectedFolderId: Ref<number | null>;
   folders: Ref<Array<{ id: number; name: string }>>;
 };
 
 export function useManagerHeaderState(params: UseManagerHeaderStateParams) {
-  const { t, locale, trashMode, followingUpsMode, selectedFolderId, folders } = params;
+  const {
+    t,
+    locale,
+    trashMode,
+    followingUpsMode,
+    commentsMode,
+    articlesMode,
+    selectedFolderId,
+    folders,
+  } = params;
 
   const currentFolderName = computed(() => {
     if (selectedFolderId.value === null) return t("folder.allVideos");
@@ -25,11 +36,19 @@ export function useManagerHeaderState(params: UseManagerHeaderStateParams) {
   });
 
   const currentViewLabel = computed(() => {
+    if (commentsMode?.value) return t("view.comments");
+    if (articlesMode?.value) return t("view.articles");
     if (followingUpsMode?.value) return t("view.followingUps");
     return trashMode.value ? t("view.trash") : t("view.manager");
   });
 
   const currentScopeLabel = computed(() => {
+    if (commentsMode?.value) return t("scope.comments");
+    if (articlesMode?.value) {
+      return selectedFolderId.value === null
+        ? t("scope.articles")
+        : t("scope.articleFolder", { name: currentFolderName.value });
+    }
     if (followingUpsMode?.value) return t("scope.followingUps");
     return trashMode.value
       ? t("scope.trash")

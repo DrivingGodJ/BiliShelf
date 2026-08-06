@@ -11,11 +11,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  VIDEO_CARD_WIDTH_MAX,
-  VIDEO_CARD_WIDTH_MIN,
   type Locale,
 } from "@/stores/app-ui";
-import type { SearchScope } from "@/stores/library";
 import type { Folder, Tag, Video } from "@/types";
 import {
   CalendarDays,
@@ -24,7 +21,6 @@ import {
   ChevronRight,
   Copy,
   Filter,
-  Grid2X2,
   MoveRight,
   Trash2,
 } from "lucide-vue-next";
@@ -43,8 +39,7 @@ const props = defineProps<{
   t: (key: string, vars?: Record<string, string | number>) => string;
   locale: Locale;
   keyword: string;
-  searchScope: SearchScope;
-  currentFolderAvailable: boolean;
+  activeFolder: Folder | null;
   tags: Tag[];
   fromDate: string;
   toDate: string;
@@ -70,11 +65,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:keyword": [value: string];
-  "update:searchScope": [value: SearchScope];
   "update:fromDate": [value: string];
   "update:toDate": [value: string];
   "update:batchTargetFolderId": [value: number | null];
-  "update:videoCardWidth": [value: number];
   appendFieldToken: [field: SearchFieldToken];
   search: [];
   clearSearch: [];
@@ -166,48 +159,38 @@ function submitVideoPageJump() {
   emit("jumpVideoPage", target);
 }
 
-function handleVideoCardWidthInput(event: Event) {
-  const target = event.target as HTMLInputElement | null;
-  if (!target) return;
-  emit("update:videoCardWidth", Number(target.value));
-}
 </script>
 
 <template>
   <SearchBar
     :keyword="keyword"
     :tags="tags"
-    :search-scope="searchScope"
-    :current-folder-available="currentFolderAvailable"
     :locale="locale"
     @update:keyword="emit('update:keyword', String($event))"
-    @update:search-scope="emit('update:searchScope', $event)"
     @append-field-token="emit('appendFieldToken', $event)"
     @search="emit('search')"
     @clear="emit('clearSearch')"
   />
 
-  <section class="panel-surface p-3 md:p-4">
-    <div class="mb-3 flex items-center gap-3 border-b border-border/70 pb-3">
-      <Grid2X2 class="h-4 w-4 shrink-0 text-muted-foreground" />
-      <label for="video-card-width" class="shrink-0 text-xs font-medium text-muted-foreground">
-        {{ t("video.cardSize") }}
-      </label>
-      <input
-        id="video-card-width"
-        :value="videoCardWidth"
-        type="range"
-        :min="VIDEO_CARD_WIDTH_MIN"
-        :max="VIDEO_CARD_WIDTH_MAX"
-        step="20"
-        class="h-8 min-w-0 flex-1 cursor-pointer accent-primary sm:max-w-[260px]"
-        @input="handleVideoCardWidthInput"
-      />
-      <output for="video-card-width" class="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-        {{ videoCardWidth }}px
-      </output>
+  <section
+    v-if="activeFolder"
+    class="panel-surface flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between"
+  >
+    <div class="min-w-0">
+      <p class="text-sm font-semibold break-words">{{ activeFolder.name }}</p>
+      <p
+        v-if="activeFolder.description"
+        class="mt-1 whitespace-pre-wrap break-words text-sm leading-5 text-muted-foreground"
+      >
+        {{ activeFolder.description }}
+      </p>
     </div>
+    <span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+      {{ t("common.videosCount", { count: total }) }}
+    </span>
+  </section>
 
+  <section class="panel-surface p-3 md:p-4">
     <div class="flex items-center gap-2 md:hidden">
       <Button
         size="sm"
@@ -232,13 +215,13 @@ function handleVideoCardWidthInput(event: Event) {
 
     <div class="hidden flex-wrap items-center justify-between gap-3.5 md:flex">
       <div class="flex flex-wrap items-center gap-2 overflow-x-auto pb-1">
-        <div class="relative min-w-[190px]">
+        <div class="relative w-[168px] min-w-[168px]">
           <Input
             :model-value="formatDateForDisplay(fromDate)"
             type="text"
             inputmode="numeric"
             placeholder="yyyy/mm/dd"
-            class="date-input h-10 min-w-[190px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
+            class="date-input h-10 w-[168px] min-w-[168px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
             @update:model-value="handleFromDateInput(String($event))"
           />
           <input
@@ -258,13 +241,13 @@ function handleVideoCardWidthInput(event: Event) {
           </button>
         </div>
         <span class="px-1 text-sm text-muted-foreground">{{ t("search.to") }}</span>
-        <div class="relative min-w-[190px]">
+        <div class="relative w-[168px] min-w-[168px]">
           <Input
             :model-value="formatDateForDisplay(toDate)"
             type="text"
             inputmode="numeric"
             placeholder="yyyy/mm/dd"
-            class="date-input h-10 min-w-[190px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
+            class="date-input h-10 w-[168px] min-w-[168px] rounded-lg border-muted-foreground/20 bg-muted/40 pr-10 focus-visible:border-primary/55 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:shadow-none"
             @update:model-value="handleToDateInput(String($event))"
           />
           <input

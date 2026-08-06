@@ -3,9 +3,12 @@
   extractFavoriteFolderIdFromUrl,
   extractBvidFromAny,
   isActionSyncPageUrl,
+  isArticleUiUrl,
   isCollectorUiUrl,
+  extractOpusId,
   normalizeBvidToken,
 } from "./utils/bili-action-sync.js";
+import { buildArticleSourceKey, normalizeOpusId } from "./shared/article-favorite.js";
 import {
   buildQuickFavoriteToastMessage,
   isEditableTarget,
@@ -29,6 +32,11 @@ import {
   appendSuggestedCustomTag,
   findMatchingCustomTagSuggestions,
 } from "./utils/custom-tag-suggestions.js";
+import {
+  normalizeFavoriteComment,
+  parseBilibiliCount,
+  parseCommentPublishedAt,
+} from "./shared/comment-favorite.js";
 
 (function () {
   const LOCAL_API_MESSAGE = "BILISHELF_LOCAL_API";
@@ -52,6 +60,7 @@ import {
   const LOCAL_API_TIMEOUT_MS = 45_000;
   const BIDIRECTIONAL_SETTINGS_CACHE_MS = 30_000;
   const BILI_SYNC_PULL_DEBOUNCE_MS = 1800;
+  const COMMENT_SCAN_INTERVAL_MS = 2_000;
 
   const I18N = {
     "title.collector": {
@@ -64,7 +73,9 @@ import {
     },
     "button.close": { [LOCALE_ZH]: "关闭", [LOCALE_EN]: "Close" },
     "button.save": { [LOCALE_ZH]: "保存", [LOCALE_EN]: "Save" },
+    "button.saving": { [LOCALE_ZH]: "正在保存...", [LOCALE_EN]: "Saving..." },
     "button.newFolder": { [LOCALE_ZH]: "新建收藏夹", [LOCALE_EN]: "New Folder" },
+    "button.newArticleFolder": { [LOCALE_ZH]: "新建专栏文件夹", [LOCALE_EN]: "New Article Folder" },
     "button.selectAll": { [LOCALE_ZH]: "全选", [LOCALE_EN]: "Select all" },
     "button.clear": { [LOCALE_ZH]: "清空", [LOCALE_EN]: "Clear" },
     "button.cancel": { [LOCALE_ZH]: "取消", [LOCALE_EN]: "Cancel" },
@@ -78,7 +89,11 @@ import {
     "button.expand": { [LOCALE_ZH]: "展开", [LOCALE_EN]: "Expand" },
     "button.openManager": { [LOCALE_ZH]: "回到管理页", [LOCALE_EN]: "Open manager" },
     "button.endPlayback": { [LOCALE_ZH]: "结束播放", [LOCALE_EN]: "End playback" },
+    "button.favoriteComment": { [LOCALE_ZH]: "收藏评论", [LOCALE_EN]: "Save comment" },
+    "button.savedComment": { [LOCALE_ZH]: "已收藏", [LOCALE_EN]: "Saved" },
+    "button.unfavoriteComment": { [LOCALE_ZH]: "取消收藏", [LOCALE_EN]: "Remove saved comment" },
     "section.folders": { [LOCALE_ZH]: "收藏夹", [LOCALE_EN]: "Folders" },
+    "section.articleFolders": { [LOCALE_ZH]: "专栏文件夹", [LOCALE_EN]: "Article Folders" },
     "section.customTags": { [LOCALE_ZH]: "自定义标签", [LOCALE_EN]: "Custom Tags" },
     "field.searchFolders": { [LOCALE_ZH]: "搜索收藏夹...", [LOCALE_EN]: "Search folders..." },
     "field.quickFavoriteSearch": {
@@ -99,17 +114,46 @@ import {
     "status.coverAlt": { [LOCALE_ZH]: "视频封面", [LOCALE_EN]: "Video cover" },
     "status.selectedCount": { [LOCALE_ZH]: "已选 {count}", [LOCALE_EN]: "{count} selected" },
     "status.videosCount": { [LOCALE_ZH]: "{count} 个视频", [LOCALE_EN]: "{count} videos" },
+    "status.articlesCount": { [LOCALE_ZH]: "{count} 篇专栏", [LOCALE_EN]: "{count} articles" },
     "status.noFolders": { [LOCALE_ZH]: "没有匹配的收藏夹", [LOCALE_EN]: "No folders found" },
-    "status.savedFoldersCurrent": {
-      [LOCALE_ZH]: "当前已在本地收藏夹：{folders}",
-      [LOCALE_EN]: "Already saved in local folders: {folders}"
+    "status.favoriteButton": { [LOCALE_ZH]: "收藏视频", [LOCALE_EN]: "Save video" },
+    "status.favoriteButtonSaved": {
+      [LOCALE_ZH]: "该视频已收藏，点击管理",
+      [LOCALE_EN]: "This video is saved. Click to manage"
     },
-    "status.savedBadge": { [LOCALE_ZH]: "已收藏", [LOCALE_EN]: "Saved" },
+    "status.favoriteArticleButton": {
+      [LOCALE_ZH]: "收藏专栏",
+      [LOCALE_EN]: "Save article"
+    },
+    "status.favoriteArticleButtonSaved": {
+      [LOCALE_ZH]: "该专栏已收藏，点击管理",
+      [LOCALE_EN]: "This article is saved. Click to manage"
+    },
+    "status.articleSaved": { [LOCALE_ZH]: "专栏已收藏", [LOCALE_EN]: "Article saved" },
+    "status.articleRemoved": { [LOCALE_ZH]: "已取消专栏收藏", [LOCALE_EN]: "Article removed" },
+    "status.favoriteSavedTitle": { [LOCALE_ZH]: "收藏成功", [LOCALE_EN]: "Saved" },
+    "status.favoriteAlreadySavedTitle": {
+      [LOCALE_ZH]: "该视频已经收藏",
+      [LOCALE_EN]: "This video is already saved"
+    },
+    "status.favoriteUpdatedTitle": {
+      [LOCALE_ZH]: "收藏夹已更新",
+      [LOCALE_EN]: "Folders updated"
+    },
+    "status.articleSavedTitle": { [LOCALE_ZH]: "专栏收藏成功", [LOCALE_EN]: "Article saved" },
+    "status.articleAlreadySavedTitle": { [LOCALE_ZH]: "该专栏已经收藏", [LOCALE_EN]: "This article is already saved" },
+    "status.articleUpdatedTitle": { [LOCALE_ZH]: "专栏文件夹已更新", [LOCALE_EN]: "Article folders updated" },
+    "status.articleRemovedTitle": { [LOCALE_ZH]: "已取消专栏收藏", [LOCALE_EN]: "Article removed" },
+    "status.favoriteRemovedTitle": {
+      [LOCALE_ZH]: "已取消本地收藏",
+      [LOCALE_EN]: "Removed from local library"
+    },
     "status.quickFavoriteHint": {
       [LOCALE_ZH]: "快捷键 {shortcut}",
       [LOCALE_EN]: "Shortcut {shortcut}"
     },
     "modal.createFolder": { [LOCALE_ZH]: "新建收藏夹", [LOCALE_EN]: "Create Folder" },
+    "modal.createArticleFolder": { [LOCALE_ZH]: "新建专栏文件夹", [LOCALE_EN]: "Create Article Folder" },
     "modal.name": { [LOCALE_ZH]: "名称", [LOCALE_EN]: "Name" },
     "modal.description": { [LOCALE_ZH]: "简介", [LOCALE_EN]: "Description" },
     "modal.folderNamePlaceholder": { [LOCALE_ZH]: "收藏夹名称", [LOCALE_EN]: "Folder name" },
@@ -143,6 +187,14 @@ import {
       [LOCALE_ZH]: "视频信息不完整，无法保存",
       [LOCALE_EN]: "Video info is incomplete"
     },
+    "toast.articleIncomplete": {
+      [LOCALE_ZH]: "专栏信息不完整，无法保存",
+      [LOCALE_EN]: "Article info is incomplete"
+    },
+    "toast.articleFolderRequired": {
+      [LOCALE_ZH]: "请至少选择一个专栏文件夹",
+      [LOCALE_EN]: "Select at least one article folder"
+    },
     "toast.saved": { [LOCALE_ZH]: "已保存到本地 BiliShelf", [LOCALE_EN]: "Saved to local BiliShelf" },
     "toast.savedAddedFolders": {
       [LOCALE_ZH]: "已加入收藏夹 {folders}",
@@ -173,6 +225,11 @@ import {
       [LOCALE_EN]: "Detected Bilibili favorite action and synced locally"
     },
     "toast.saveFail": { [LOCALE_ZH]: "保存失败", [LOCALE_EN]: "Save failed" },
+    "toast.commentSaveFail": { [LOCALE_ZH]: "评论收藏失败", [LOCALE_EN]: "Failed to save comment" },
+    "toast.commentReadFail": {
+      [LOCALE_ZH]: "暂时无法读取这条评论，请展开评论后重试",
+      [LOCALE_EN]: "This comment could not be read. Expand it and try again"
+    },
     "status.readingCurrentPage": { [LOCALE_ZH]: "正在读取当前页面...", [LOCALE_EN]: "Reading current page..." },
     "quickFavorite.title": {
       [LOCALE_ZH]: "快捷收藏",
@@ -236,6 +293,10 @@ import {
   }
 
   let activeLocale = LOCALE_EN;
+  let articleMode = false;
+  let currentArticle = null;
+  let currentArticleFavorite = null;
+  let articleSaved = false;
 
   function t(key, vars = {}) {
     const table = I18N[key];
@@ -247,7 +308,15 @@ import {
   function syncFloatingButtonLabel() {
     if (!floatingBtn) return;
     const shortcutLabel = formatShortcutLabel(activeQuickFavoriteShortcut);
-    const label = `${t("title.collector")} (${shortcutLabel})`;
+    const saved = floatingBtn.dataset.favoriteState === "saved";
+    const actionLabel = articleMode
+      ? saved
+        ? t("status.favoriteArticleButtonSaved")
+        : t("status.favoriteArticleButton")
+      : saved
+        ? t("status.favoriteButtonSaved")
+        : t("status.favoriteButton");
+    const label = `${actionLabel} (${shortcutLabel})`;
     floatingBtn.title = label;
     floatingBtn.setAttribute("aria-label", label);
   }
@@ -259,9 +328,9 @@ import {
   let modal = null;
   let toastRoot = null;
   let folderListEl = null;
-  let existingFoldersSummaryEl = null;
   let folderSearchInput = null;
   let customTagsInput = null;
+  let customTagsSection = null;
   let customTagSuggestionsEl = null;
   let saveBtn = null;
   let closeBtn = null;
@@ -272,6 +341,9 @@ import {
   let videoTitleEl = null;
   let videoMetaEl = null;
   let videoCoverEl = null;
+  let saveFeedbackEl = null;
+  let saveFeedbackTitleEl = null;
+  let saveFeedbackMessageEl = null;
   let folderNameCountEl = null;
   let folderDescCountEl = null;
   let folderModalNameInput = null;
@@ -296,6 +368,10 @@ import {
   let playbackCollapsed = false;
   let extensionContextInvalidated = false;
   let extensionReloadToastShown = false;
+  let collectorCloseTimer = 0;
+  let saveFeedbackTimer = 0;
+  let floatingFavoriteRequestId = 0;
+  let lastFloatingFavoriteBvid = "";
 
   let suppressButtonClick = false;
   let allFolders = [];
@@ -303,6 +379,7 @@ import {
   let selectedFolderIds = new Set();
   let currentVideo = null;
   let currentVideoLocalFolders = [];
+  let currentArticleLocalFolders = [];
   let activeThemePreference = THEME_AUTO;
   let activeQuickFavoriteShortcut = resolveStoredShortcut(null);
   let bidirectionalSettingsCache = {
@@ -314,6 +391,9 @@ import {
   let pendingNativeFavoriteFolderId = 0;
   let pendingForceFolderReconcile = false;
   let nativeFavoriteActionListenerBound = false;
+  let commentScanTimer = 0;
+  let savedCommentKeys = new Set();
+  const commentFavoriteButtons = new Set();
 
   const themeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -364,30 +444,31 @@ import {
     return el;
   }
 
-  function createBrandMarkSvg(fillColor) {
+  function createBrandMarkSvg() {
     return createSvgEl(
       "svg",
-      { viewBox: "0 0 24 24", fill: "none" },
+      { viewBox: "0 0 128 128", fill: "none" },
       [
-        createSvgEl("path", {
-          d: "M12 4.5L19 8.5V15.5L12 19.5L5 15.5V8.5L12 4.5Z",
-          fill: fillColor
+        createSvgEl("rect", {
+          x: "6", y: "6", width: "116", height: "116", rx: "30", fill: "#18232D"
+        }),
+        createSvgEl("rect", {
+          x: "23", y: "36", width: "75", height: "46", rx: "10", fill: "#344550"
+        }),
+        createSvgEl("rect", {
+          x: "30", y: "28", width: "75", height: "48", rx: "10", fill: "#F7F9FA"
         }),
         createSvgEl("path", {
-          d: "M12 8L16 10.3V13.7L12 16L8 13.7V10.3L12 8Z",
-          fill: "#4C66FF"
+          d: "M59 42.5V61.5L75 52L59 42.5Z", fill: "#18232D"
         }),
         createSvgEl("path", {
-          d: "M12 4.5V19.5",
-          stroke: "#4C66FF",
-          "stroke-width": "1.5",
-          "stroke-linecap": "round"
+          d: "M84 20H103V63L93.5 56.5L84 63V20Z", fill: "#F36F98"
         }),
-        createSvgEl("path", {
-          d: "M5 8.5L19 15.5",
-          stroke: "#4C66FF",
-          "stroke-width": "1.5",
-          "stroke-linecap": "round"
+        createSvgEl("rect", {
+          x: "22", y: "87", width: "84", height: "10", rx: "5", fill: "#4CCBBB"
+        }),
+        createSvgEl("rect", {
+          x: "31", y: "103", width: "66", height: "5", rx: "2.5", fill: "#F7F9FA"
         })
       ]
     );
@@ -399,24 +480,26 @@ import {
       { viewBox: "0 0 24 24", fill: "none", "aria-hidden": "true" },
       [
         createSvgEl("path", {
-          d: "M12 4.5L19 8.5V15.5L12 19.5L5 15.5V8.5L12 4.5Z",
-          fill: "currentColor"
-        }),
+          d: "M7 4.75C7 3.78 7.78 3 8.75 3h6.5C16.22 3 17 3.78 17 4.75V21l-5-3.2L7 21V4.75Z",
+          stroke: "currentColor",
+          "stroke-width": "1.8",
+          "stroke-linejoin": "round"
+        })
+      ]
+    );
+  }
+
+  function createCheckSvg() {
+    return createSvgEl(
+      "svg",
+      { viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+      [
         createSvgEl("path", {
-          d: "M12 8L16 10.3V13.7L12 16L8 13.7V10.3L12 8Z",
-          fill: "#4C66FF"
-        }),
-        createSvgEl("path", {
-          d: "M12 4.5V19.5",
-          stroke: "#4C66FF",
-          "stroke-width": "1.5",
-          "stroke-linecap": "round"
-        }),
-        createSvgEl("path", {
-          d: "M5 8.5L19 15.5",
-          stroke: "#4C66FF",
-          "stroke-width": "1.5",
-          "stroke-linecap": "round"
+          d: "M3.5 8.2 6.6 11l5.9-6.2",
+          stroke: "currentColor",
+          "stroke-width": "2",
+          "stroke-linecap": "round",
+          "stroke-linejoin": "round"
         })
       ]
     );
@@ -688,7 +771,10 @@ import {
   }
 
   async function fetchFolders() {
-    const data = await requestLocalApi("GET", "/folders");
+    const data = await requestLocalApi(
+      "GET",
+      articleMode ? "/article-folders" : "/folders",
+    );
     return data?.items || [];
   }
 
@@ -728,26 +814,151 @@ import {
       .filter(Boolean);
   }
 
-  function currentVideoLocalFolderNames() {
-    return currentVideoLocalFolders.map((folder) => folder.name).filter(Boolean);
-  }
-
   function currentVideoLocalFolderIds() {
     return currentVideoLocalFolders
       .map((folder) => Number(folder?.id))
       .filter((id) => Number.isInteger(id) && id > 0);
   }
 
-  function renderExistingFolderSummary(target) {
-    if (!target) return;
-    const folders = currentVideoLocalFolderNames();
-    if (folders.length === 0) {
-      target.textContent = "";
-      target.classList.add("bl-hidden");
+  function setFloatingFavoriteState(saved) {
+    if (!floatingBtn) return;
+    floatingBtn.dataset.favoriteState = saved ? "saved" : "idle";
+    floatingBtn.setAttribute("aria-pressed", saved ? "true" : "false");
+    syncFloatingButtonLabel();
+  }
+
+  function normalizeArticleText(value, max = 12000) {
+    return String(value || "")
+      .replace(/\u0000/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+      .slice(0, max);
+  }
+
+  function pickArticlePayload() {
+    const opusId = normalizeOpusId(extractOpusId(location.href));
+    if (!opusId) return null;
+    const canonical = ensureAbsoluteUrl(
+      attrOf('link[rel="canonical"]', "href"),
+      `https://www.bilibili.com/opus/${opusId}`
+    );
+    const contentSelectors = [
+      ".opus-module-content",
+      ".opus-module-content-inner",
+      "article",
+      "[class*='opus-module']",
+      "main"
+    ];
+    let content = "";
+    for (const selector of contentSelectors) {
+      const element = document.querySelector(selector);
+      const value = normalizeArticleText(element?.innerText || element?.textContent || "");
+      if (value.length > content.length) content = value;
+    }
+    const title = normalizeArticleText(
+      attrOf('meta[property="og:title"]', "content") ||
+        textOf("h1") ||
+        document.title.replace(/_bilibili$/i, "").trim(),
+      300
+    );
+    const summary = normalizeArticleText(
+      attrOf('meta[property="og:description"]', "content") || content,
+      1200
+    );
+    const authorLink =
+      document.querySelector("a[href*='space.bilibili.com']") ||
+      document.querySelector("a[href*='space.bilibili.com']");
+    const authorSpaceUrl = ensureAbsoluteUrl(authorLink?.getAttribute("href") || "", "");
+    const authorMid = authorSpaceUrl.match(/space\.bilibili\.com\/(\d+)/)?.[1] || "";
+    const authorName = normalizeArticleText(
+      authorLink?.textContent ||
+        textOf(".opus-author-name") ||
+        textOf("[class*='author']"),
+      160
+    );
+    return {
+      sourceKey: buildArticleSourceKey(opusId),
+      opusId,
+      title: title || `Bilibili 专栏 ${opusId}`,
+      summary,
+      content,
+      coverUrl: ensureAbsoluteUrl(
+        attrOf('meta[property="og:image"]', "content") ||
+          attrOf('meta[itemprop="image"]', "content"),
+        ""
+      ),
+      authorName,
+      authorMid,
+      authorAvatarUrl: ensureAbsoluteUrl(
+        document.querySelector("img[class*='avatar'], img[class*='face']")?.getAttribute("src") || "",
+        ""
+      ),
+      sourceUrl: canonical
+    };
+  }
+
+  async function loadArticleFavorite() {
+    currentArticle = pickArticlePayload();
+    currentArticleFavorite = null;
+    currentArticleLocalFolders = [];
+    if (!currentArticle) {
+      setFloatingFavoriteState(false);
       return;
     }
-    target.classList.remove("bl-hidden");
-    target.textContent = t("status.savedFoldersCurrent", { folders: folders.join("、") });
+    try {
+      const data = await requestLocalApi(
+        "GET",
+        `/articles/by-key?sourceKey=${encodeURIComponent(currentArticle.sourceKey)}`,
+      );
+      currentArticleFavorite = data || null;
+      currentArticleLocalFolders = Array.isArray(data?.folderIds)
+        ? data.folderIds.map((id) => ({ id: Number(id) }))
+        : [];
+      articleSaved = Boolean(data?.sourceKey);
+    } catch {
+      articleSaved = false;
+    }
+    renderVideo(currentArticle);
+    setFloatingFavoriteState(articleSaved);
+  }
+
+  function currentCollectorFolderIds() {
+    const folders = articleMode ? currentArticleLocalFolders : currentVideoLocalFolders;
+    return folders
+      .map((folder) => Number(folder?.id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+  }
+
+  function syncCurrentFavoriteUi() {
+    const saved = currentVideoLocalFolders.length > 0;
+    setFloatingFavoriteState(saved);
+  }
+
+  async function refreshFloatingFavoriteStateFromPage(force = false) {
+    const bvid = normalizeBvidToken(pickBasePayload()?.bvid || "");
+    if (!bvid) {
+      lastFloatingFavoriteBvid = "";
+      setFloatingFavoriteState(false);
+      return;
+    }
+    if (!force && bvid === lastFloatingFavoriteBvid) return;
+    lastFloatingFavoriteBvid = bvid;
+    const requestId = ++floatingFavoriteRequestId;
+    floatingBtn?.setAttribute("data-favorite-state", "loading");
+    try {
+      const folders = await fetchCurrentVideoLocalFoldersByBvid(bvid);
+      if (requestId !== floatingFavoriteRequestId) return;
+      if (normalizeBvidToken(currentVideo?.bvid || "") === bvid) {
+        currentVideoLocalFolders = folders;
+      }
+      setFloatingFavoriteState(folders.length > 0);
+    } catch {
+      if (requestId === floatingFavoriteRequestId) {
+        floatingBtn?.setAttribute("data-favorite-state", "idle");
+        syncFloatingButtonLabel();
+      }
+    }
   }
 
   async function fetchCurrentVideoLocalFoldersByBvid(bvid) {
@@ -772,7 +983,7 @@ import {
     const bvid = normalizeBvidToken(currentVideo?.bvid || "");
     if (!bvid) {
       currentVideoLocalFolders = [];
-      renderExistingFolderSummary(existingFoldersSummaryEl);
+      syncCurrentFavoriteUi();
       return;
     }
     try {
@@ -780,11 +991,16 @@ import {
     } catch {
       currentVideoLocalFolders = [];
     }
-    renderExistingFolderSummary(existingFoldersSummaryEl);
+    lastFloatingFavoriteBvid = bvid;
+    syncCurrentFavoriteUi();
   }
 
   async function createFolder(payload) {
-    return requestLocalApi("POST", "/folders", payload);
+    return requestLocalApi(
+      "POST",
+      articleMode ? "/article-folders" : "/folders",
+      payload,
+    );
   }
 
   function normalizeBidirectionalSettings(raw) {
@@ -931,6 +1147,7 @@ import {
       ) {
         showToast(t("toast.biliPullSynced"), "info");
       }
+      await refreshFloatingFavoriteStateFromPage(true);
       if (forceFolderReconcile && Number.isFinite(preferredFolderId) && preferredFolderId > 0) {
         await startFavoriteFolderReconcileFromBiliAction(preferredFolderId);
       }
@@ -1005,10 +1222,11 @@ import {
       type === "err" ? "error" : type === "info" ? "info" : "success";
     const node = document.createElement("div");
     node.className = `Vue-Toastification__toast Vue-Toastification__toast--${toastType}`;
+    node.setAttribute("role", toastType === "error" ? "alert" : "status");
 
     const icon = document.createElement("span");
     icon.className = "Vue-Toastification__icon";
-    icon.textContent = toastType === "error" ? "x" : toastType === "info" ? "i" : "ok";
+    icon.textContent = toastType === "error" ? "!" : toastType === "info" ? "i" : "✓";
 
     const body = document.createElement("div");
     body.className = "Vue-Toastification__toast-body";
@@ -1044,8 +1262,13 @@ import {
       return;
     }
 
-    videoTitleEl.textContent = video.title || t("status.untitled");
-    videoMetaEl.textContent = `${video.uploader || t("status.unknownUploader")} - ${video.bvid || "-"}`;
+    if (articleMode) {
+      videoTitleEl.textContent = video.title || t("status.untitled");
+      videoMetaEl.textContent = `${video.authorName || t("status.unknownUploader")} - opus:${video.opusId || "-"}`;
+    } else {
+      videoTitleEl.textContent = video.title || t("status.untitled");
+      videoMetaEl.textContent = `${video.uploader || t("status.unknownUploader")} - ${video.bvid || "-"}`;
+    }
     videoCoverEl.src = ensureAbsoluteUrl(video.coverUrl, DEFAULT_COVER);
   }
 
@@ -1122,7 +1345,9 @@ import {
         createEl("p", { className: "bl-folder-name", text: folder.name }),
         createEl("p", {
           className: "bl-folder-meta",
-          text: t("status.videosCount", { count: folder.itemCount ?? 0 })
+          text: t(articleMode ? "status.articlesCount" : "status.videosCount", {
+            count: folder.itemCount ?? 0
+          })
         })
       ]);
       node.appendChild(checkbox);
@@ -1157,20 +1382,30 @@ import {
 
   async function openCollectorModal() {
     if (!panel || !panelBackdrop) return;
+    if (collectorCloseTimer) {
+      window.clearTimeout(collectorCloseTimer);
+      collectorCloseTimer = 0;
+    }
+    panel.classList.remove("is-closing");
+    panelBackdrop.classList.remove("is-closing");
     panelBackdrop.classList.remove("bl-hidden");
     panel.classList.remove("bl-hidden");
+    panel.setAttribute("aria-hidden", "false");
+    floatingBtn?.setAttribute("aria-expanded", "true");
+    clearSaveFeedback();
     if (folderSearchInput) {
       folderSearchInput.value = "";
     }
     if (customTagsInput) {
       customTagsInput.value = "";
     }
+    customTagsSection?.classList.toggle("bl-hidden", articleMode);
     await refreshCollectorData();
-    const rememberedFolderIds = await readRememberedCollectorFolderIds();
-    const currentVideoFolderIds = currentVideoLocalFolders
-      .map((folder) => Number(folder?.id))
-      .filter((id) => Number.isInteger(id) && id > 0);
-    selectedFolderIds = new Set([...currentVideoFolderIds, ...rememberedFolderIds]);
+    const rememberedFolderIds = articleMode ? [] : await readRememberedCollectorFolderIds();
+    selectedFolderIds = new Set([
+      ...currentCollectorFolderIds(),
+      ...rememberedFolderIds,
+    ]);
     renderFolders("");
     renderCustomTagSuggestions();
     folderSearchInput?.focus();
@@ -1178,8 +1413,20 @@ import {
 
   function closeCollectorModal() {
     if (!panel || !panelBackdrop) return;
-    panel.classList.add("bl-hidden");
-    panelBackdrop.classList.add("bl-hidden");
+    if (panel.classList.contains("bl-hidden") || panel.classList.contains("is-closing")) {
+      return;
+    }
+    panel.classList.add("is-closing");
+    panelBackdrop.classList.add("is-closing");
+    panel.setAttribute("aria-hidden", "true");
+    floatingBtn?.setAttribute("aria-expanded", "false");
+    collectorCloseTimer = window.setTimeout(() => {
+      panel?.classList.add("bl-hidden");
+      panelBackdrop?.classList.add("bl-hidden");
+      panel?.classList.remove("is-closing");
+      panelBackdrop?.classList.remove("is-closing");
+      collectorCloseTimer = 0;
+    }, 190);
     closeCreateFolderModal();
   }
 
@@ -1382,13 +1629,17 @@ import {
   }
 
   async function refreshCollectorData() {
+    if (articleMode) {
+      await Promise.all([loadFolders(), loadArticleFavorite()]);
+      return;
+    }
     await Promise.all([loadVideo(), loadFolders(), loadCustomTags()]);
   }
 
   function handleQuickFavoriteShortcut(event) {
     if (matchesQuickFavoriteShortcut(event, activeQuickFavoriteShortcut)) {
       if (isEditableTarget(event.target)) return;
-      if (!isCollectorUiUrl(location.href)) return;
+      if (!isCollectorUiUrl(location.href) && !articleMode) return;
       event.preventDefault();
       event.stopPropagation();
       void openCollectorModal();
@@ -1412,7 +1663,7 @@ import {
     if (event.key === "Enter") {
       if (modal && !modal.classList.contains("bl-hidden")) return;
       event.preventDefault();
-      void saveVideo();
+      void saveCollectorItem();
     }
 
     if (isEditableTarget(event.target)) return;
@@ -1449,7 +1700,6 @@ import {
       currentVideo = null;
       currentVideoLocalFolders = [];
       renderVideo(null);
-      renderExistingFolderSummary(existingFoldersSummaryEl);
       setStatus(t("toast.detectBvidFail"), "err");
       return;
     }
@@ -1501,7 +1751,6 @@ import {
       currentVideo = null;
       currentVideoLocalFolders = [];
       renderVideo(null);
-      renderExistingFolderSummary(existingFoldersSummaryEl);
       setStatus(t("toast.videoLoadFail"), "err");
       return;
     }
@@ -1566,6 +1815,7 @@ import {
       const message = error instanceof Error ? error.message : t("error.unknown");
       const isConflict =
         message.includes("Folder name already exists") ||
+        message.includes("Article folder name already exists") ||
         message.includes("statusCode\":409");
 
       if (isConflict) {
@@ -1599,13 +1849,71 @@ import {
       .filter(Boolean);
   }
 
+  function clearSaveFeedback() {
+    if (saveFeedbackTimer) {
+      window.clearTimeout(saveFeedbackTimer);
+      saveFeedbackTimer = 0;
+    }
+    saveFeedbackEl?.classList.add("bl-hidden");
+  }
+
+  function showSaveFeedback(result, message, wasSaved) {
+    if (!saveFeedbackEl || !saveFeedbackTitleEl || !saveFeedbackMessageEl) return;
+    const addedCount = Array.isArray(result?.addedFolderIds)
+      ? result.addedFolderIds.length
+      : 0;
+    const existingCount = Array.isArray(result?.existingFolderIds)
+      ? result.existingFolderIds.length
+      : 0;
+    const removedCount = Array.isArray(result?.removedFolderIds)
+      ? result.removedFolderIds.length
+      : 0;
+    const saved = articleMode
+      ? articleSaved
+      : currentVideoLocalFolders.length > 0;
+    const title = articleMode
+      ? !saved
+        ? t("status.articleRemovedTitle")
+        : addedCount > 0 && !wasSaved
+          ? t("status.articleSavedTitle")
+          : addedCount > 0 || removedCount > 0
+            ? t("status.articleUpdatedTitle")
+            : existingCount > 0
+              ? t("status.articleAlreadySavedTitle")
+              : t("status.articleUpdatedTitle")
+      : !saved
+        ? t("status.favoriteRemovedTitle")
+        : addedCount > 0 && !wasSaved
+          ? t("status.favoriteSavedTitle")
+          : addedCount > 0 || removedCount > 0
+            ? t("status.favoriteUpdatedTitle")
+            : existingCount > 0
+              ? t("status.favoriteAlreadySavedTitle")
+              : t("status.favoriteUpdatedTitle");
+    saveFeedbackTitleEl.textContent = title;
+    saveFeedbackMessageEl.textContent = message;
+    saveFeedbackEl.dataset.state = saved ? "saved" : "removed";
+    saveFeedbackEl.classList.remove("bl-hidden", "is-entering");
+    void saveFeedbackEl.offsetWidth;
+    saveFeedbackEl.classList.add("is-entering");
+    if (saveFeedbackTimer) window.clearTimeout(saveFeedbackTimer);
+    saveFeedbackTimer = window.setTimeout(() => {
+      saveFeedbackEl?.classList.add("bl-hidden");
+      saveFeedbackTimer = 0;
+    }, 5200);
+  }
+
   async function saveVideoWithFolderIds(folderIds, options = {}) {
     if (!currentVideo?.bvid || !currentVideo?.title || !currentVideo?.bvidUrl) {
       setStatus(t("toast.videoIncomplete"), "err");
       return;
     }
     const triggerButton = options.button || null;
-    if (triggerButton) triggerButton.disabled = true;
+    const wasSaved = currentVideoLocalFolders.length > 0;
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.textContent = t("button.saving");
+    }
     try {
       const payload = {
         ...currentVideo,
@@ -1632,16 +1940,16 @@ import {
             )
           : t("toast.saved");
 
-      setStatus(toastMessage, "ok");
       currentVideoLocalFolders = Array.isArray(result?.finalFolders) ? result.finalFolders : [];
       selectedFolderIds = new Set(currentVideoLocalFolderIds());
+      showSaveFeedback(result, toastMessage, wasSaved);
       try {
         await chrome.storage.local.set(
           createRememberedCollectorFolderIdsRecord([...folderIds])
         );
       } catch {
       }
-      renderExistingFolderSummary(existingFoldersSummaryEl);
+      syncCurrentFavoriteUi();
       renderFolders(folderSearchInput?.value || "");
       await loadFolders();
       return result;
@@ -1651,13 +1959,78 @@ import {
         "err"
       );
     } finally {
-      if (triggerButton) triggerButton.disabled = false;
+      if (triggerButton) {
+        triggerButton.disabled = false;
+        triggerButton.textContent = t("button.save");
+      }
     }
   }
 
   async function saveVideo() {
     if (!saveBtn) return;
     return saveVideoWithFolderIds(selectedFolderIds, { button: saveBtn });
+  }
+
+  async function saveArticleWithFolderIds(folderIds, options = {}) {
+    if (!currentArticle?.sourceKey || !currentArticle?.title) {
+      setStatus(t("toast.articleIncomplete"), "err");
+      return;
+    }
+    const normalizedFolderIds = [...folderIds].map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    if (normalizedFolderIds.length === 0 && !articleSaved) {
+      setStatus(t("toast.articleFolderRequired"), "err");
+      return;
+    }
+    const triggerButton = options.button || null;
+    const wasSaved = articleSaved;
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.textContent = t("button.saving");
+    }
+    try {
+      const result = await requestLocalApi("POST", "/articles", {
+        ...currentArticle,
+        folderIds: normalizedFolderIds,
+      });
+      articleSaved = Boolean(result?.saved);
+      currentArticleFavorite = result?.article || null;
+      currentArticleLocalFolders = Array.isArray(result?.finalFolders)
+        ? result.finalFolders
+        : [];
+      const addedFolderNames = folderNamesFromSaveResult(result, "addedFolderIds");
+      const existingFolderNames = folderNamesFromSaveResult(result, "existingFolderIds");
+      const removedFolderNames = folderNamesFromSaveResult(result, "removedFolderIds");
+      const toastMessage =
+        addedFolderNames.length > 0 || existingFolderNames.length > 0 || removedFolderNames.length > 0
+          ? buildQuickFavoriteToastMessage(
+              { addedFolderNames, existingFolderNames, removedFolderNames },
+              t,
+            )
+          : articleSaved
+            ? t("status.articleSaved")
+            : t("status.articleRemoved");
+      selectedFolderIds = new Set(currentCollectorFolderIds());
+      showSaveFeedback(result, toastMessage, wasSaved);
+      setFloatingFavoriteState(articleSaved);
+      await loadFolders();
+      renderFolders(folderSearchInput?.value || "");
+      return result;
+    } catch (error) {
+      setStatus(
+        `${t("toast.saveFail")}: ${error instanceof Error ? error.message : t("error.unknown")}`,
+        "err",
+      );
+    } finally {
+      if (triggerButton) {
+        triggerButton.disabled = false;
+        triggerButton.textContent = t("button.save");
+      }
+    }
+  }
+
+  async function saveCollectorItem() {
+    if (articleMode) return saveArticleWithFolderIds(selectedFolderIds, { button: saveBtn });
+    return saveVideo();
   }
 
   function readButtonPositionFromLocalStorage(key) {
@@ -1985,6 +2358,7 @@ import {
     playbackOverlayTimer = window.setInterval(() => {
       if (lastPlaybackOverlayUrl !== location.href) {
         lastPlaybackOverlayUrl = location.href;
+        void refreshFloatingFavoriteStateFromPage(true);
       }
       void refreshPlaybackOverlay();
     }, 1500);
@@ -1992,11 +2366,13 @@ import {
     window.addEventListener("focus", () => {
       lastPlaybackOverlayUrl = location.href;
       void refreshPlaybackOverlay();
+      void refreshFloatingFavoriteStateFromPage(true);
     });
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") return;
       lastPlaybackOverlayUrl = location.href;
       void refreshPlaybackOverlay();
+      void refreshFloatingFavoriteStateFromPage(true);
     });
   }
 
@@ -2046,31 +2422,47 @@ import {
         position: fixed;
         z-index: 999999;
         pointer-events: auto;
-        width: 44px;
-        height: 40px;
-        border-radius: 12px;
-        border: 1px solid rgba(120, 156, 255, .58);
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        border: 1px solid;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: grab;
         user-select: none;
         touch-action: none;
-        transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease;
+        isolation: isolate;
+        transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease, border-color .18s ease, color .18s ease;
       }
       #bl-floating-btn[data-theme="light"] {
-        background: linear-gradient(145deg, #79a3ff 0%, #3e5dfe 100%);
-        color: #fff;
-        box-shadow: 0 10px 24px rgba(62, 93, 254, .38);
+        background: rgba(255, 255, 255, .98);
+        border-color: rgba(27, 36, 53, .12);
+        color: #313746;
+        box-shadow: 0 8px 24px rgba(20, 28, 43, .18), 0 1px 2px rgba(20, 28, 43, .08);
       }
       #bl-floating-btn[data-theme="dark"] {
-        background: linear-gradient(145deg, #9ab6ff 0%, #7194ff 100%);
-        color: #081229;
-        box-shadow: 0 10px 24px rgba(113, 148, 255, .33);
+        background: rgba(28, 31, 40, .98);
+        border-color: rgba(255, 255, 255, .16);
+        color: #f1f3f7;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, .32), 0 1px 2px rgba(0, 0, 0, .24);
       }
-      #bl-floating-btn:hover { transform: translateY(-1px); }
+      #bl-floating-btn:hover { transform: translateY(-2px); }
+      #bl-floating-btn[data-theme="light"]:hover {
+        border-color: rgba(251, 114, 153, .48);
+        box-shadow: 0 12px 28px rgba(20, 28, 43, .2), 0 0 0 3px rgba(251, 114, 153, .1);
+      }
+      #bl-floating-btn[data-theme="dark"]:hover {
+        border-color: rgba(251, 114, 153, .58);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, .38), 0 0 0 3px rgba(251, 114, 153, .12);
+      }
       #bl-floating-btn:active { cursor: grabbing; transform: scale(.98); }
-      #bl-floating-btn svg { width: 18px; height: 18px; }
+      #bl-floating-btn > svg { width: 22px; height: 22px; }
+      #bl-floating-btn[data-favorite-state="loading"] > svg { animation: bl-favorite-loading .8s ease-in-out infinite alternate; }
+      @keyframes bl-favorite-loading {
+        from { opacity: .38; transform: scale(.92); }
+        to { opacity: .8; transform: scale(1.04); }
+      }
 
       #bl-collector-backdrop {
         pointer-events: auto;
@@ -2078,7 +2470,9 @@ import {
         inset: 0;
         z-index: 999999;
         background: rgba(8, 14, 30, .42);
+        animation: bl-backdrop-in .2s ease-out both;
       }
+      #bl-collector-backdrop.is-closing { animation: bl-backdrop-out .18s ease-in both; }
 
       #bl-floating-panel {
         pointer-events: auto;
@@ -2097,40 +2491,49 @@ import {
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
         box-shadow: 0 24px 52px rgba(8, 14, 30, .24);
+        transform-origin: center;
+        animation: bl-panel-in .24s cubic-bezier(.2, .8, .2, 1) both;
+      }
+      #bl-floating-panel.is-closing { animation: bl-panel-out .18s ease-in both; }
+      @keyframes bl-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes bl-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+      @keyframes bl-panel-in {
+        from { opacity: 0; transform: translate(-50%, calc(-50% + 18px)) scale(.965); }
+        to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      }
+      @keyframes bl-panel-out {
+        from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        to { opacity: 0; transform: translate(-50%, calc(-50% + 10px)) scale(.98); }
       }
       #bl-floating-panel[data-theme="light"] {
-        border-color: rgba(201, 216, 246, .98);
-        background: linear-gradient(165deg, rgba(255,255,255,.995), rgba(247,250,255,.99));
-        color: #17213b;
+        border-color: #d7dfe1;
+        background: #f7f9f9;
+        color: #18232d;
       }
       #bl-floating-panel[data-theme="dark"] {
-        border-color: rgba(82, 103, 154, .95);
-        background: linear-gradient(165deg, rgba(16,26,49,.992), rgba(13,22,43,.988));
-        color: #e2e8f0;
+        border-color: #36454e;
+        background: #11191f;
+        color: #e7edef;
       }
 
       .bl-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
       .bl-title-row { display: flex; align-items: center; gap: 8px; }
       .bl-brand-mark {
-        width: 20px;
-        height: 20px;
-        border-radius: 6px;
-        background: linear-gradient(145deg, #79a3ff 0%, #3e5dfe 100%);
+        width: 28px;
+        height: 28px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        color: #fff;
-        box-shadow: 0 8px 16px rgba(62, 93, 254, .34);
       }
-      .bl-brand-mark svg { width: 13px; height: 13px; }
+      .bl-brand-mark svg { width: 28px; height: 28px; }
       .bl-title-wrap { display: flex; flex-direction: column; gap: 2px; }
       .bl-title { margin: 0; font-size: 18px; font-weight: 700; }
-      #bl-floating-panel[data-theme="light"] .bl-title { color: #111c37; }
-      #bl-floating-panel[data-theme="dark"] .bl-title { color: #f1f5ff; }
+      #bl-floating-panel[data-theme="light"] .bl-title { color: #18232d; }
+      #bl-floating-panel[data-theme="dark"] .bl-title { color: #f7f9fa; }
 
       .bl-btn {
         border: 1px solid transparent;
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 7px 11px;
         font-size: 12px;
         font-weight: 700;
@@ -2139,66 +2542,47 @@ import {
         transition: all .14s ease;
       }
       .bl-btn:disabled { opacity: .56; cursor: not-allowed; }
-      .bl-btn-primary { background: linear-gradient(135deg, #5f7eff 0%, #3e5dfe 100%); color: #fff; border-color: rgba(62, 93, 254, .55); }
-      .bl-btn-secondary { background: #eaf0ff; color: #2d436f; border-color: #d4dff5; }
+      .bl-btn-primary { background: #d94872; color: #fff; border-color: #d94872; }
+      .bl-btn-secondary { background: #e8f7f4; color: #17675d; border-color: #bfe8e1; }
       .bl-btn-outline { background: transparent; border: 1px solid; }
-      #bl-floating-panel[data-theme="dark"] .bl-btn-secondary { background: #20355c; color: #d8e7ff; border-color: #304a7d; }
-      #bl-floating-panel[data-theme="light"] .bl-btn-outline { border-color: #d2dcf2; color: #32486a; }
-      #bl-floating-panel[data-theme="dark"] .bl-btn-outline { border-color: #42557d; color: #d1ddf3; }
+      #bl-floating-panel[data-theme="dark"] .bl-btn-secondary { background: #173d39; color: #a8eee5; border-color: #276159; }
+      #bl-floating-panel[data-theme="light"] .bl-btn-outline { border-color: #d4dcde; color: #33424b; }
+      #bl-floating-panel[data-theme="dark"] .bl-btn-outline { border-color: #465761; color: #dce4e7; }
 
       .bl-video-card {
         margin-top: 12px;
         border: 1px solid;
-        border-radius: 14px;
+        border-radius: 8px;
         display: grid;
         grid-template-columns: 116px 1fr;
         gap: 10px;
         padding: 10px;
       }
-      #bl-floating-panel[data-theme="light"] .bl-video-card { border-color: rgba(206, 220, 248, .98); background: rgba(255, 255, 255, .92); }
-      #bl-floating-panel[data-theme="dark"] .bl-video-card { border-color: rgba(67, 86, 130, .96); background: rgba(17, 27, 50, .9); }
-      .bl-video-cover { width: 116px; height: 65px; border-radius: 10px; object-fit: cover; background: #d9e0ef; }
+      #bl-floating-panel[data-theme="light"] .bl-video-card { border-color: #d7dfe1; background: #fff; }
+      #bl-floating-panel[data-theme="dark"] .bl-video-card { border-color: #36454e; background: #1a242c; }
+      .bl-video-cover { width: 116px; height: 65px; border-radius: 6px; object-fit: cover; background: #d9e0ef; }
       .bl-video-title { margin: 0; font-size: 13px; line-height: 1.35; font-weight: 650; }
       .bl-video-meta { margin-top: 6px; font-size: 12px; }
-      #bl-floating-panel[data-theme="light"] .bl-video-meta { color: #60708e; }
-      #bl-floating-panel[data-theme="dark"] .bl-video-meta { color: #98a8c5; }
-      .bl-existing-folders-summary {
-        margin-top: 8px;
-        font-size: 12px;
-        line-height: 1.45;
-        border-radius: 10px;
-        border: 1px dashed;
-        padding: 8px 10px;
-      }
-      #bl-floating-panel[data-theme="light"] .bl-existing-folders-summary {
-        color: #47597d;
-        border-color: #cdd8ef;
-        background: rgba(243, 247, 255, .92);
-      }
-      #bl-floating-panel[data-theme="dark"] .bl-existing-folders-summary {
-        color: #c6d4ee;
-        border-color: #42557d;
-        background: rgba(18, 31, 58, .86);
-      }
-
-      .bl-card { margin-top: 12px; border: 1px solid; border-radius: 14px; padding: 10px; }
-      #bl-floating-panel[data-theme="light"] .bl-card { border-color: rgba(210, 223, 249, .96); background: rgba(255, 255, 255, .94); }
-      #bl-floating-panel[data-theme="dark"] .bl-card { border-color: rgba(66, 84, 127, .95); background: rgba(14, 23, 44, .9); }
+      #bl-floating-panel[data-theme="light"] .bl-video-meta { color: #63717a; }
+      #bl-floating-panel[data-theme="dark"] .bl-video-meta { color: #9eabb2; }
+      .bl-card { margin-top: 12px; border: 1px solid; border-radius: 8px; padding: 10px; }
+      #bl-floating-panel[data-theme="light"] .bl-card { border-color: #d7dfe1; background: #fff; }
+      #bl-floating-panel[data-theme="dark"] .bl-card { border-color: #36454e; background: #1a242c; }
       .bl-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
       .bl-label { font-size: 12px; font-weight: 600; }
 
       .bl-input {
         width: 100%;
         box-sizing: border-box;
-        border-radius: 10px;
+        border-radius: 8px;
         border: 1px solid;
         padding: 9px 10px;
         font-size: 13px;
         transition: border-color .16s ease, box-shadow .16s ease;
       }
-      #bl-floating-panel[data-theme="light"] .bl-input { border-color: #d5def1; background: rgba(255, 255, 255, .92); color: #15213e; }
-      #bl-floating-panel[data-theme="dark"] .bl-input { border-color: #405075; background: #101b34; color: #edf2ff; }
-      .bl-input:focus { outline: none; border-color: #6b86ff; box-shadow: 0 0 0 3px rgba(90, 122, 255, .18); }
+      #bl-floating-panel[data-theme="light"] .bl-input { border-color: #d4dcde; background: #fff; color: #18232d; }
+      #bl-floating-panel[data-theme="dark"] .bl-input { border-color: #465761; background: #11191f; color: #edf2f3; }
+      .bl-input:focus { outline: none; border-color: #d94872; box-shadow: 0 0 0 3px rgba(217, 72, 114, .16); }
 
       .bl-folder-toolbar { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
       .bl-folder-toolbar .bl-input { margin: 0; }
@@ -2214,24 +2598,24 @@ import {
         max-height: 230px;
         overflow: auto;
         border: 1px solid;
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 6px;
       }
-      #bl-floating-panel[data-theme="light"] .bl-folder-list { border-color: #d9e3f6; background: rgba(255, 255, 255, .94); }
-      #bl-floating-panel[data-theme="dark"] .bl-folder-list { border-color: #455984; background: rgba(12, 21, 41, .92); }
+      #bl-floating-panel[data-theme="light"] .bl-folder-list { border-color: #d7dfe1; background: #fff; }
+      #bl-floating-panel[data-theme="dark"] .bl-folder-list { border-color: #465761; background: #11191f; }
       .bl-folder-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px; border-radius: 8px; }
       .bl-folder-item.is-active {
-        outline: 2px solid rgba(93, 126, 255, .32);
+        outline: 2px solid rgba(217, 72, 114, .32);
         outline-offset: -1px;
       }
-      #bl-floating-panel[data-theme="light"] .bl-folder-item:hover { background: rgba(107, 134, 255, .1); }
-      #bl-floating-panel[data-theme="dark"] .bl-folder-item:hover { background: rgba(108, 139, 255, .16); }
+      #bl-floating-panel[data-theme="light"] .bl-folder-item:hover { background: rgba(217, 72, 114, .08); }
+      #bl-floating-panel[data-theme="dark"] .bl-folder-item:hover { background: rgba(243, 111, 152, .12); }
       .bl-folder-item input { margin-top: 2px; }
       .bl-folder-content { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
       .bl-folder-name { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.3; word-break: break-word; }
       .bl-folder-meta { margin: 0; font-size: 11px; }
-      #bl-floating-panel[data-theme="light"] .bl-folder-meta { color: #6a7a99; }
-      #bl-floating-panel[data-theme="dark"] .bl-folder-meta { color: #90a2c4; }
+      #bl-floating-panel[data-theme="light"] .bl-folder-meta { color: #63717a; }
+      #bl-floating-panel[data-theme="dark"] .bl-folder-meta { color: #9eabb2; }
       .bl-empty { font-size: 12px; text-align: center; padding: 16px 8px; }
       #bl-floating-panel[data-theme="light"] .bl-empty { color: #7c8aa6; }
       #bl-floating-panel[data-theme="dark"] .bl-empty { color: #94a3be; }
@@ -2244,9 +2628,9 @@ import {
       .bl-tag-suggestion {
         appearance: none;
         border-radius: 999px;
-        border: 1px solid rgba(108, 130, 186, .28);
-        background: rgba(232, 239, 255, .92);
-        color: #27406f;
+        border: 1px solid #bfe8e1;
+        background: #e8f7f4;
+        color: #17675d;
         padding: 6px 12px;
         font-size: 12px;
         font-weight: 700;
@@ -2256,21 +2640,71 @@ import {
       }
       .bl-tag-suggestion:hover {
         transform: translateY(-1px);
-        border-color: rgba(76, 102, 255, .42);
-        background: rgba(221, 232, 255, .98);
+        border-color: rgba(217, 72, 114, .42);
+        background: rgba(217, 72, 114, .08);
       }
       #bl-floating-panel[data-theme="dark"] .bl-tag-suggestion {
-        border-color: rgba(119, 145, 215, .32);
-        background: rgba(32, 45, 80, .96);
-        color: #dbe8ff;
+        border-color: #276159;
+        background: #173d39;
+        color: #a8eee5;
       }
       #bl-floating-panel[data-theme="dark"] .bl-tag-suggestion:hover {
-        border-color: rgba(142, 171, 255, .55);
-        background: rgba(40, 57, 98, .98);
+        border-color: rgba(243, 111, 152, .55);
+        background: rgba(243, 111, 152, .12);
       }
 
       .bl-footer { margin-top: 12px; display: flex; gap: 8px; }
       .bl-footer .bl-btn { flex: 1; }
+      .bl-save-feedback {
+        margin-top: 12px;
+        padding: 11px 12px;
+        border: 1px solid;
+        border-radius: 10px;
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 9px;
+        align-items: center;
+      }
+      .bl-save-feedback.is-entering { animation: bl-save-feedback-in .26s cubic-bezier(.2, .8, .2, 1); }
+      .bl-save-feedback-icon {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        background: #12a36d;
+      }
+      .bl-save-feedback-icon svg { width: 14px; height: 14px; }
+      .bl-save-feedback-copy { min-width: 0; }
+      .bl-save-feedback-title { margin: 0; font-size: 13px; font-weight: 750; line-height: 1.35; }
+      .bl-save-feedback-message { margin: 2px 0 0; font-size: 12px; line-height: 1.4; word-break: break-word; }
+      #bl-floating-panel[data-theme="light"] .bl-save-feedback {
+        color: #126344;
+        border-color: rgba(18, 163, 109, .3);
+        background: #edf9f3;
+      }
+      #bl-floating-panel[data-theme="dark"] .bl-save-feedback {
+        color: #9af0c9;
+        border-color: rgba(52, 211, 153, .36);
+        background: rgba(12, 66, 47, .5);
+      }
+      .bl-save-feedback[data-state="removed"] .bl-save-feedback-icon { background: #64748b; }
+      #bl-floating-panel[data-theme="light"] .bl-save-feedback[data-state="removed"] {
+        color: #475569;
+        border-color: #cbd5e1;
+        background: #f8fafc;
+      }
+      #bl-floating-panel[data-theme="dark"] .bl-save-feedback[data-state="removed"] {
+        color: #cbd5e1;
+        border-color: #475569;
+        background: rgba(30, 41, 59, .72);
+      }
+      @keyframes bl-save-feedback-in {
+        from { opacity: 0; transform: translateY(7px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
       .bl-credit { margin-top: 8px; font-size: 11px; text-align: right; }
       #bl-floating-panel[data-theme="light"] .bl-credit { color: #7283a3; }
       #bl-floating-panel[data-theme="dark"] .bl-credit { color: #95a5c4; }
@@ -2312,17 +2746,17 @@ import {
       }
       .Vue-Toastification__toast--success {
         color: #14673f;
-        background: linear-gradient(135deg, #effcf4 0%, #d7f7e4 100%);
+        background: #f5fbfa;
         border-color: #7bd9a6;
       }
       .Vue-Toastification__toast--error {
         color: #9f223a;
-        background: linear-gradient(135deg, #fff2f4 0%, #ffdfe5 100%);
+        background: #fff8f8;
         border-color: #ff9fb0;
       }
       .Vue-Toastification__toast--info {
         color: #1f3d84;
-        background: linear-gradient(135deg, #eff6ff 0%, #dceaff 100%);
+        background: #fff9fb;
         border-color: #96bbff;
       }
       .Vue-Toastification__toast.is-leaving {
@@ -2337,18 +2771,211 @@ import {
 
       #bl-floating-panel[data-theme="dark"] ~ .bl-toast-root .Vue-Toastification__toast--success {
         color: #a7f3d0;
-        background: linear-gradient(135deg, #153326 0%, #1c5b3d 100%);
+        background: #172722;
         border-color: #39c78a;
       }
       #bl-floating-panel[data-theme="dark"] ~ .bl-toast-root .Vue-Toastification__toast--error {
         color: #fecaca;
-        background: linear-gradient(135deg, #461322 0%, #8e1e3d 100%);
+        background: #2a1b22;
         border-color: #fb7185;
       }
       #bl-floating-panel[data-theme="dark"] ~ .bl-toast-root .Vue-Toastification__toast--info {
         color: #cfe3ff;
-        background: linear-gradient(135deg, #142544 0%, #234f98 100%);
+        background: #291b23;
         border-color: #60a5fa;
+      }
+
+      #bl-floating-panel {
+        width: min(560px, calc(100vw - 24px));
+        max-height: min(84vh, 760px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 0;
+        border-radius: 12px;
+      }
+      #bl-floating-panel[data-theme="light"] {
+        border-color: #d4dee0;
+        background: #f7f9f9;
+      }
+      #bl-floating-panel[data-theme="dark"] {
+        border-color: #36454e;
+        background: #11191f;
+      }
+      .bl-header {
+        flex: 0 0 auto;
+        align-items: center;
+        padding: 13px 16px 12px;
+        border-bottom: 1px solid;
+      }
+      #bl-floating-panel[data-theme="light"] .bl-header { border-color: #d7dfe1; }
+      #bl-floating-panel[data-theme="dark"] .bl-header { border-color: #2d3b43; }
+      .bl-title-row { gap: 9px; }
+      .bl-brand-mark,
+      .bl-brand-mark svg { width: 30px; height: 30px; }
+      .bl-title { font-size: 17px; letter-spacing: -.01em; }
+      .bl-icon-btn {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 7px;
+        font-size: 21px;
+        font-weight: 450;
+        line-height: 1;
+      }
+      .bl-panel-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+      }
+      .bl-video-card {
+        margin: 0;
+        grid-template-columns: 96px minmax(0, 1fr);
+        gap: 11px;
+        padding: 13px 16px;
+        border: 0;
+        border-bottom: 1px solid;
+        border-radius: 0;
+      }
+      #bl-floating-panel[data-theme="light"] .bl-video-card {
+        border-color: #d7dfe1;
+        background: #eef5f4;
+      }
+      #bl-floating-panel[data-theme="dark"] .bl-video-card {
+        border-color: #2d3b43;
+        background: #172229;
+      }
+      .bl-video-cover { width: 96px; height: 54px; border-radius: 6px; }
+      .bl-video-title { font-size: 13px; line-height: 1.38; }
+      .bl-video-meta { margin-top: 4px; font-size: 11px; }
+      .bl-card {
+        margin: 0;
+        padding: 14px 16px;
+        border: 0;
+        border-bottom: 1px solid;
+        border-radius: 0;
+        background: transparent;
+      }
+      #bl-floating-panel[data-theme="light"] .bl-card { border-color: #d7dfe1; background: transparent; }
+      #bl-floating-panel[data-theme="dark"] .bl-card { border-color: #2d3b43; background: transparent; }
+      .bl-card-head { margin-bottom: 9px; }
+      .bl-label { font-size: 12px; font-weight: 750; }
+      .bl-btn { min-height: 32px; padding: 7px 10px; border-radius: 7px; font-size: 11.5px; }
+      .bl-btn-primary { box-shadow: 0 8px 18px -12px rgba(217, 72, 114, .9); }
+      .bl-btn-secondary { background: #e8f7f4; }
+      #bl-floating-panel[data-theme="dark"] .bl-btn-secondary { background: #173d39; }
+      .bl-input {
+        min-height: 36px;
+        padding: 8px 10px;
+        border-radius: 7px;
+        font-size: 12px;
+      }
+      .bl-input:focus { border-color: #4ccbbb; box-shadow: 0 0 0 3px rgba(76, 203, 187, .14); }
+      .bl-folder-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-bottom: 8px; }
+      .bl-folder-toolbar .bl-btn { white-space: nowrap; }
+      .bl-folder-actions { margin-bottom: 8px; }
+      .bl-folder-actions-left { gap: 6px; }
+      .bl-selected-count { color: #17675d; font-size: 11px; font-weight: 700; }
+      #bl-floating-panel[data-theme="dark"] .bl-selected-count { color: #a8eee5; }
+      .bl-folder-list { max-height: 196px; padding: 4px; border-radius: 7px; }
+      .bl-folder-item { gap: 8px; padding: 7px 8px; border-radius: 6px; }
+      .bl-folder-item.is-active { outline: 1px solid rgba(217, 72, 114, .52); }
+      .bl-folder-name { font-size: 12px; }
+      .bl-folder-meta { font-size: 10.5px; }
+      .bl-empty { min-height: 76px; display: flex; align-items: center; justify-content: center; padding: 12px 8px; }
+      .bl-tag-suggestions { margin-top: 8px; gap: 6px; }
+      .bl-tag-suggestion { padding: 6px 10px; font-size: 11px; }
+      .bl-save-feedback { margin: 0; border-radius: 0; border-width: 0 0 1px; padding: 11px 16px; }
+      .bl-footer {
+        flex: 0 0 auto;
+        display: block;
+        margin: 0;
+        padding: 11px 16px 10px;
+        border-top: 0;
+      }
+      .bl-footer .bl-btn { width: 100%; min-height: 40px; }
+      .bl-credit { margin: 7px 0 0; font-size: 10px; text-align: center; }
+      #bl-floating-panel[data-theme="light"] .bl-credit { color: #829097; }
+      #bl-floating-panel[data-theme="dark"] .bl-credit { color: #718089; }
+
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast {
+        position: relative;
+        min-width: 280px;
+        max-width: 350px;
+        border-radius: 8px;
+        border: 1px solid #d4dee0;
+        border-left: 3px solid #4ccbbb;
+        padding: 10px 12px 10px 10px;
+        background: #ffffff;
+        color: #26343d;
+        box-shadow: 0 16px 34px -20px rgba(24, 35, 45, .7);
+      }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast::after {
+        content: "";
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: 2px;
+        background: #4ccbbb;
+        opacity: .38;
+        transform-origin: left;
+        animation: bl-toast-progress 3.2s linear forwards;
+      }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+        background: rgba(76, 203, 187, .14);
+        color: #219887;
+        font-size: 13px;
+        font-weight: 800;
+      }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast--error {
+        border-color: #f0c4ca;
+        border-left-color: #e05262;
+        background: #fff8f8;
+        color: #8e3040;
+      }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast--error::after { background: #e05262; }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast--error .Vue-Toastification__icon {
+        background: rgba(224, 82, 98, .13);
+        color: #d14355;
+      }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast--info {
+        border-left-color: #d94872;
+        background: #fff9fb;
+        color: #8f3354;
+      }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast--info::after { background: #d94872; }
+      #bl-floating-panel ~ .bl-toast-root .Vue-Toastification__toast--info .Vue-Toastification__icon {
+        background: rgba(217, 72, 114, .13);
+        color: #c63c66;
+      }
+      #bl-floating-panel[data-theme="dark"] ~ .bl-toast-root .Vue-Toastification__toast {
+        border-color: #40515a;
+        background: #1a242c;
+        color: #e7edef;
+        box-shadow: 0 16px 34px -18px rgba(0, 0, 0, .86);
+      }
+      #bl-floating-panel[data-theme="dark"] ~ .bl-toast-root .Vue-Toastification__toast--error {
+        border-color: #70404a;
+        background: #2a1b22;
+        color: #fecdd3;
+      }
+      #bl-floating-panel[data-theme="dark"] ~ .bl-toast-root .Vue-Toastification__toast--info {
+        border-color: #6b3b50;
+        background: #291b23;
+        color: #ffd4e0;
+      }
+      @keyframes bl-toast-progress {
+        from { transform: scaleX(1); }
+        to { transform: scaleX(0); }
       }
 
       #bl-create-folder-modal {
@@ -2363,31 +2990,31 @@ import {
         padding: 14px;
         box-sizing: border-box;
       }
-      .bl-modal-panel { width: min(560px, calc(100vw - 28px)); border-radius: 16px; border: 1px solid; padding: 14px; }
-      #bl-create-folder-modal[data-theme="light"] .bl-modal-panel { border-color: #d5dff3; background: #ffffff; color: #17213b; }
-      #bl-create-folder-modal[data-theme="dark"] .bl-modal-panel { border-color: #455984; background: #101b34; color: #e2e8f0; }
+      .bl-modal-panel { width: min(560px, calc(100vw - 28px)); border-radius: 8px; border: 1px solid; padding: 14px; }
+      #bl-create-folder-modal[data-theme="light"] .bl-modal-panel { border-color: #d7dfe1; background: #ffffff; color: #18232d; }
+      #bl-create-folder-modal[data-theme="dark"] .bl-modal-panel { border-color: #36454e; background: #1a242c; color: #e7edef; }
       .bl-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
       .bl-modal-title { margin: 0; font-size: 17px; font-weight: 700; }
       .bl-form-item { margin-bottom: 10px; }
       .bl-form-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
       .bl-form-label { font-size: 12px; font-weight: 600; }
       .bl-form-count { font-size: 12px; }
-      #bl-create-folder-modal[data-theme="light"] .bl-form-count { color: #6a7a99; }
-      #bl-create-folder-modal[data-theme="dark"] .bl-form-count { color: #94a4c3; }
+      #bl-create-folder-modal[data-theme="light"] .bl-form-count { color: #63717a; }
+      #bl-create-folder-modal[data-theme="dark"] .bl-form-count { color: #9eabb2; }
       .bl-textarea {
         width: 100%;
         box-sizing: border-box;
         border: 1px solid;
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 10px;
         min-height: 88px;
         font-size: 13px;
         resize: vertical;
       }
       #bl-create-folder-modal[data-theme="light"] .bl-input,
-      #bl-create-folder-modal[data-theme="light"] .bl-textarea { border-color: #d5def1; background: #fff; color: #15213e; }
+      #bl-create-folder-modal[data-theme="light"] .bl-textarea { border-color: #d4dcde; background: #fff; color: #18232d; }
       #bl-create-folder-modal[data-theme="dark"] .bl-input,
-      #bl-create-folder-modal[data-theme="dark"] .bl-textarea { border-color: #405075; background: #101b34; color: #edf2ff; }
+      #bl-create-folder-modal[data-theme="dark"] .bl-textarea { border-color: #465761; background: #11191f; color: #edf2f3; }
       .bl-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
       #bl-playback-overlay {
@@ -2397,20 +3024,20 @@ import {
         bottom: 16px;
         z-index: 1000000;
         width: min(420px, calc(100vw - 32px));
-        border-radius: 22px;
+        border-radius: 8px;
         border: 1px solid;
         padding: 14px;
         box-shadow: 0 24px 56px rgba(8, 14, 30, .24);
       }
       #bl-playback-overlay[data-theme="light"] {
-        border-color: rgba(208, 221, 246, .96);
-        background: linear-gradient(180deg, rgba(255, 255, 255, .99) 0%, rgba(244, 248, 255, .98) 100%);
-        color: #17213b;
+        border-color: #d7dfe1;
+        background: #fff;
+        color: #18232d;
       }
       #bl-playback-overlay[data-theme="dark"] {
-        border-color: rgba(82, 103, 154, .95);
-        background: linear-gradient(180deg, rgba(17, 27, 49, .98) 0%, rgba(10, 18, 35, .98) 100%);
-        color: #e2e8f0;
+        border-color: #36454e;
+        background: #1a242c;
+        color: #e7edef;
       }
       .bl-playback-header {
         display: flex;
@@ -2426,7 +3053,7 @@ import {
         margin: 0;
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: .02em;
+        letter-spacing: 0;
         text-transform: uppercase;
       }
       .bl-playback-title {
@@ -2440,10 +3067,10 @@ import {
         font-size: 12px;
       }
       #bl-playback-overlay[data-theme="light"] .bl-playback-meta {
-        color: #60708e;
+        color: #63717a;
       }
       #bl-playback-overlay[data-theme="dark"] .bl-playback-meta {
-        color: #94a3c0;
+        color: #9eabb2;
       }
       .bl-playback-actions {
         display: grid;
@@ -2472,17 +3099,17 @@ import {
       }
       .bl-playback-empty {
         padding: 14px 10px;
-        border-radius: 14px;
+        border-radius: 8px;
         font-size: 12px;
         text-align: center;
       }
       #bl-playback-overlay[data-theme="light"] .bl-playback-empty {
-        background: rgba(230, 238, 255, .72);
-        color: #5d6f92;
+        background: #eef2f3;
+        color: #63717a;
       }
       #bl-playback-overlay[data-theme="dark"] .bl-playback-empty {
-        background: rgba(28, 40, 68, .82);
-        color: #a7b5d1;
+        background: #202c34;
+        color: #aeb9be;
       }
       .bl-playback-list-item {
         width: 100%;
@@ -2491,21 +3118,21 @@ import {
         align-items: center;
         gap: 10px;
         padding: 8px;
-        border-radius: 16px;
+        border-radius: 8px;
         border: 1px solid;
         text-align: left;
         cursor: pointer;
         transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
       }
       #bl-playback-overlay[data-theme="light"] .bl-playback-list-item {
-        border-color: rgba(208, 220, 245, .95);
-        background: rgba(255, 255, 255, .82);
-        color: #17213b;
+        border-color: #d7dfe1;
+        background: #fff;
+        color: #18232d;
       }
       #bl-playback-overlay[data-theme="dark"] .bl-playback-list-item {
-        border-color: rgba(66, 84, 126, .95);
-        background: rgba(18, 27, 49, .9);
-        color: #e2e8f0;
+        border-color: #36454e;
+        background: #11191f;
+        color: #e7edef;
       }
       .bl-playback-list-item:hover:not(:disabled) {
         transform: translateY(-1px);
@@ -2516,20 +3143,20 @@ import {
       }
       #bl-playback-overlay[data-theme="light"] .bl-playback-list-item.is-active,
       #bl-playback-overlay[data-theme="light"] .bl-playback-list-item:disabled {
-        border-color: rgba(92, 124, 255, .65);
-        background: rgba(235, 241, 255, .92);
-        box-shadow: inset 0 0 0 1px rgba(92, 124, 255, .1);
+        border-color: rgba(217, 72, 114, .62);
+        background: rgba(217, 72, 114, .08);
+        box-shadow: inset 0 0 0 1px rgba(217, 72, 114, .08);
       }
       #bl-playback-overlay[data-theme="dark"] .bl-playback-list-item.is-active,
       #bl-playback-overlay[data-theme="dark"] .bl-playback-list-item:disabled {
-        border-color: rgba(128, 156, 255, .72);
-        background: rgba(34, 48, 84, .96);
-        box-shadow: inset 0 0 0 1px rgba(140, 166, 255, .18);
+        border-color: rgba(243, 111, 152, .7);
+        background: rgba(243, 111, 152, .12);
+        box-shadow: inset 0 0 0 1px rgba(243, 111, 152, .12);
       }
       .bl-playback-thumb {
         width: 60px;
         height: 40px;
-        border-radius: 12px;
+        border-radius: 6px;
         object-fit: cover;
         display: block;
       }
@@ -2550,7 +3177,7 @@ import {
         color: #64748b;
       }
       #bl-playback-overlay[data-theme="dark"] .bl-playback-list-meta {
-        color: #9fb0d0;
+        color: #9eabb2;
       }
       .bl-playback-list-index {
         min-width: 28px;
@@ -2563,12 +3190,12 @@ import {
         font-weight: 800;
       }
       #bl-playback-overlay[data-theme="light"] .bl-playback-list-index {
-        background: rgba(224, 232, 250, .9);
-        color: #35508d;
+        background: #e8f7f4;
+        color: #17675d;
       }
       #bl-playback-overlay[data-theme="dark"] .bl-playback-list-index {
-        background: rgba(43, 60, 96, .95);
-        color: #d7e3ff;
+        background: #173d39;
+        color: #a8eee5;
       }
       #bl-playback-overlay[data-collapsed="true"] .bl-playback-actions,
       #bl-playback-overlay[data-collapsed="true"] .bl-playback-list {
@@ -2576,11 +3203,35 @@ import {
       }
 
       @media (max-width: 680px) {
+        #bl-floating-panel {
+          width: calc(100vw - 16px);
+          max-height: calc(100dvh - 16px);
+        }
+        .bl-header,
+        .bl-video-card,
+        .bl-card,
+        .bl-footer {
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+        .bl-folder-toolbar {
+          grid-template-columns: minmax(0, 1fr);
+        }
         #bl-playback-overlay {
           left: 12px;
           right: 12px;
           bottom: 12px;
           width: auto;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #bl-collector-backdrop,
+        #bl-floating-panel,
+        #bl-floating-btn,
+        .bl-save-feedback,
+        .Vue-Toastification__toast {
+          animation: none !important;
+          transition-duration: .01ms !important;
         }
       }
     `;
@@ -2601,7 +3252,7 @@ import {
     });
 
     closeBtn?.addEventListener("click", closeCollectorModal);
-    saveBtn?.addEventListener("click", saveVideo);
+    saveBtn?.addEventListener("click", saveCollectorItem);
 
     folderSearchInput?.addEventListener("input", (event) => {
       renderFolders(event.target.value || "");
@@ -2678,17 +3329,23 @@ import {
       {
         id: "bl-floating-panel",
         className: "bl-hidden",
-        attrs: { "data-theme": "light" }
+        attrs: {
+          "data-theme": "light",
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-hidden": "true",
+          "aria-labelledby": "bl-collector-title"
+        }
       },
       [
         createEl("div", { className: "bl-header" }, [
           createEl("div", { className: "bl-title-wrap" }, [
-            createEl("h2", { className: "bl-title" }, [
+            createEl("h2", { id: "bl-collector-title", className: "bl-title" }, [
               createEl("span", { className: "bl-title-row" }, [
                 createEl(
                   "span",
                   { className: "bl-brand-mark", attrs: { "aria-hidden": "true" } },
-                  [createBrandMarkSvg("white")]
+                  [createBrandMarkSvg()]
                 ),
                 createEl("span", { text: t("title.collector") })
               ])
@@ -2696,11 +3353,16 @@ import {
           ]),
           createEl("button", {
             id: "bl-close-btn",
-            className: "bl-btn bl-btn-outline",
-            attrs: { type: "button" },
-            text: t("button.close")
+            className: "bl-btn bl-btn-outline bl-icon-btn",
+            attrs: {
+              type: "button",
+              title: t("button.close"),
+              "aria-label": t("button.close")
+            },
+            text: "×"
           })
         ]),
+        createEl("div", { className: "bl-panel-scroll" }, [
         createEl("section", { className: "bl-video-card" }, [
           createEl("img", {
             id: "bl-video-cover",
@@ -2717,11 +3379,6 @@ import {
               id: "bl-video-meta",
               className: "bl-video-meta",
               text: "-"
-            }),
-            createEl("p", {
-              id: "bl-panel-existing-folders-summary",
-              className: "bl-existing-folders-summary bl-hidden",
-              text: ""
             })
           ])
         ]),
@@ -2729,7 +3386,12 @@ import {
           createEl("div", { className: "bl-card-head" }, [
             createEl("span", {
               className: "bl-label",
-              text: t("section.folders")
+              text: t(articleMode ? "section.articleFolders" : "section.folders")
+            }),
+            createEl("span", {
+              id: "bl-selected-count",
+              className: "bl-selected-count",
+              text: t("status.selectedCount", { count: 0 })
             })
           ]),
           createEl("div", { className: "bl-folder-toolbar" }, [
@@ -2742,7 +3404,7 @@ import {
               id: "bl-folder-create-open",
               className: "bl-btn bl-btn-secondary",
               attrs: { type: "button" },
-              text: t("button.newFolder")
+              text: t(articleMode ? "button.newArticleFolder" : "button.newFolder")
             })
           ]),
           createEl("div", { className: "bl-folder-actions" }, [
@@ -2760,15 +3422,10 @@ import {
                 text: t("button.clear")
               })
             ]),
-            createEl("span", {
-              id: "bl-selected-count",
-              className: "bl-selected-count",
-              text: t("status.selectedCount", { count: 0 })
-            })
           ]),
           createEl("div", { id: "bl-folder-list", className: "bl-folder-list" })
         ]),
-        createEl("section", { className: "bl-card" }, [
+        createEl("section", { id: "bl-custom-tags-section", className: "bl-card" }, [
           createEl("div", { className: "bl-card-head" }, [
             createEl("span", {
               className: "bl-label",
@@ -2785,15 +3442,39 @@ import {
             className: "bl-tag-suggestions bl-hidden"
           })
         ]),
+        createEl(
+          "div",
+          {
+            id: "bl-save-feedback",
+            className: "bl-save-feedback bl-hidden",
+            attrs: { role: "status", "aria-live": "polite", "data-state": "saved" }
+          },
+          [
+            createEl("span", { className: "bl-save-feedback-icon" }, [createCheckSvg()]),
+            createEl("div", { className: "bl-save-feedback-copy" }, [
+              createEl("p", {
+                id: "bl-save-feedback-title",
+                className: "bl-save-feedback-title",
+                text: t("status.favoriteSavedTitle")
+              }),
+              createEl("p", {
+                id: "bl-save-feedback-message",
+                className: "bl-save-feedback-message",
+                text: ""
+              })
+            ])
+          ]
+        ),
+        ]),
         createEl("div", { className: "bl-footer" }, [
           createEl("button", {
             id: "bl-save-btn",
             className: "bl-btn bl-btn-primary",
             attrs: { type: "button" },
             text: t("button.save")
-          })
-        ]),
-        createEl("p", { className: "bl-credit", text: t("footer.credit") })
+          }),
+          createEl("p", { className: "bl-credit", text: t("footer.credit") })
+        ])
       ]
     );
 
@@ -2809,7 +3490,7 @@ import {
           createEl("div", { className: "bl-modal-header" }, [
             createEl("h3", {
               className: "bl-modal-title",
-              text: t("modal.createFolder")
+              text: t(articleMode ? "modal.createArticleFolder" : "modal.createFolder")
             }),
             createEl("button", {
               id: "bl-modal-folder-close",
@@ -2951,6 +3632,10 @@ import {
         id: "bl-floating-btn",
         attrs: {
           "data-theme": "light",
+          "data-favorite-state": "loading",
+          "aria-controls": "bl-floating-panel",
+          "aria-expanded": "false",
+          "aria-pressed": "false",
           title: t("title.collector"),
           "aria-label": t("title.collector")
         }
@@ -2972,9 +3657,9 @@ import {
     document.body.appendChild(root);
 
     folderListEl = panel.querySelector("#bl-folder-list");
-    existingFoldersSummaryEl = panel.querySelector("#bl-panel-existing-folders-summary");
     folderSearchInput = panel.querySelector("#bl-folder-search");
     customTagsInput = panel.querySelector("#bl-custom-tags");
+    customTagsSection = panel.querySelector("#bl-custom-tags-section");
     customTagSuggestionsEl = panel.querySelector("#bl-custom-tag-suggestions");
     saveBtn = panel.querySelector("#bl-save-btn");
     closeBtn = panel.querySelector("#bl-close-btn");
@@ -2985,6 +3670,9 @@ import {
     videoTitleEl = panel.querySelector("#bl-video-title");
     videoMetaEl = panel.querySelector("#bl-video-meta");
     videoCoverEl = panel.querySelector("#bl-video-cover");
+    saveFeedbackEl = panel.querySelector("#bl-save-feedback");
+    saveFeedbackTitleEl = panel.querySelector("#bl-save-feedback-title");
+    saveFeedbackMessageEl = panel.querySelector("#bl-save-feedback-message");
 
     folderNameCountEl = modal.querySelector("#bl-folder-name-count");
     folderDescCountEl = modal.querySelector("#bl-folder-desc-count");
@@ -3012,10 +3700,10 @@ import {
     renderVideo(null);
     renderFolders("");
     renderCustomTagSuggestions();
-    renderExistingFolderSummary(existingFoldersSummaryEl);
     renderPlaybackQueueList([], -1);
     syncPlaybackOverlayState();
     syncCreateFolderCounter();
+    void refreshFloatingFavoriteStateFromPage(true);
   }
 
   function setupThemeSync() {
@@ -3074,15 +3762,538 @@ import {
     }
   }
 
+  const COMMENT_COMPONENT_SELECTOR = [
+    "bili-comments",
+    "bili-comments-header-renderer",
+    "bili-comment-thread-renderer",
+    "bili-comment-thread",
+    "bili-comment-renderer",
+    "bili-comment-reply-renderer",
+    "bili-comment-replies-renderer",
+    "bili-comment-action-buttons-renderer",
+    "bili-comment-user-info",
+    "bili-comment-user-info-renderer",
+    "bili-comment-pictures-renderer",
+    "bili-rich-text",
+    "bili-avatar"
+  ].join(",");
+  const COMMENT_CANDIDATE_SELECTOR = [
+    ".root-reply-container",
+    ".reply-item",
+    ".reply-item[data-rpid]",
+    ".reply-item[data-id]",
+    ".sub-reply-item",
+    ".sub-reply-container",
+    ".reply-wrap",
+    ".root-reply",
+    ".sub-reply",
+    "[class*='root-reply-container']",
+    "[class*='reply-item']",
+    "[class*='reply-wrap']",
+    "bili-comment-renderer",
+    "bili-comment-reply-renderer"
+  ].join(",");
+
+  function getComposedParent(element) {
+    if (element?.parentElement) return element.parentElement;
+    const rootNode = element?.getRootNode?.();
+    return rootNode?.host || null;
+  }
+
+  function collectElementSearchRoots(element) {
+    const roots = [element];
+    const queue = [element];
+    const seen = new Set(roots);
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (current?.shadowRoot && !seen.has(current.shadowRoot)) {
+        seen.add(current.shadowRoot);
+        roots.push(current.shadowRoot);
+        queue.push(current.shadowRoot);
+      }
+      for (const child of current?.querySelectorAll?.(COMMENT_COMPONENT_SELECTOR) || []) {
+        if (child.shadowRoot && !seen.has(child.shadowRoot)) {
+          seen.add(child.shadowRoot);
+          roots.push(child.shadowRoot);
+          queue.push(child.shadowRoot);
+        }
+      }
+    }
+    return roots;
+  }
+
+  function queryCommentElement(element, selectors) {
+    const roots = collectElementSearchRoots(element);
+    for (const selector of selectors) {
+      for (const rootNode of roots) {
+        const found = rootNode.querySelector?.(selector);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function readCommentId(element) {
+    let current = element;
+    for (let depth = 0; current && depth < 8; depth += 1) {
+      const propertyCandidates = [
+        current.rpid,
+        current.replyId,
+        current.data?.rpid,
+        current.data?.rpid_str,
+        current.reply?.rpid,
+        current.reply?.rpid_str,
+        current.__data?.rpid,
+        current.__data?.rpid_str
+      ];
+      for (const candidate of propertyCandidates) {
+        const match = String(candidate ?? "").match(/^(\d{3,32})$/);
+        if (match) return match[1];
+      }
+      for (const attribute of ["data-rpid", "rpid", "data-reply-id", "data-id", "id"]) {
+        const value = current.getAttribute?.(attribute) || "";
+        const match = String(value).match(/^\D*(\d{3,32})\D*$/);
+        if (match) return match[1];
+      }
+      const directLink = queryCommentElement(current, [
+        "a[href*='#reply']",
+        "a[href*='comment_secondary_id']",
+        "a[href*='comment_root_id']"
+      ]);
+      const href = directLink?.href || directLink?.getAttribute?.("href") || "";
+      const secondaryMatch = href.match(/[?&]comment_secondary_id=(\d{3,32})/);
+      if (secondaryMatch) return secondaryMatch[1];
+      const hashMatch = href.match(/#reply(\d{3,32})/);
+      if (hashMatch) return hashMatch[1];
+      const rootMatch = href.match(/[?&]comment_root_id=(\d{3,32})/);
+      if (rootMatch) return rootMatch[1];
+      current = getComposedParent(current);
+    }
+    return "";
+  }
+
+  function readRootCommentId(element, fallbackRpid) {
+    let current = element;
+    for (let depth = 0; current && depth < 10; depth += 1) {
+      for (const candidate of [
+        current.rootRpid,
+        current.rootId,
+        current.data?.root,
+        current.data?.root_str,
+        current.reply?.root,
+        current.reply?.root_str,
+        current.__data?.root,
+        current.__data?.root_str
+      ]) {
+        const match = String(candidate ?? "").match(/^(\d{3,32})$/);
+        if (match) return match[1];
+      }
+      if (
+        current.matches?.("bili-comment-thread") ||
+        (current.matches?.(".reply-item") && !current.matches?.(".sub-reply-item"))
+      ) {
+        const id = readCommentId(current);
+        if (id) return id;
+      }
+      current = getComposedParent(current);
+    }
+    return fallbackRpid;
+  }
+
+  function commentElementText(element, selectors) {
+    return readCommentElementText(queryCommentElement(element, selectors));
+  }
+
+  function readCommentElementText(element) {
+    if (!element) return "";
+    const roots = collectElementSearchRoots(element);
+    for (const root of roots) {
+      const lightText = root.textContent?.trim() || "";
+      if (lightText && root === element) return lightText;
+      const shadowContent = root.querySelector?.(
+        "#contents,#content,.contents,.content,[part='content']"
+      );
+      const nestedText = shadowContent?.textContent?.trim() || "";
+      if (nestedText) return nestedText;
+      if (root !== element && lightText) return lightText;
+    }
+    return "";
+  }
+
+  function readCommentImageUrl(image) {
+    const source =
+      image?.currentSrc ||
+      image?.src ||
+      image?.getAttribute?.("data-src") ||
+      image?.getAttribute?.("data-original") ||
+      String(image?.getAttribute?.("srcset") || "").split(/[\s,]+/)[0] ||
+      "";
+    return ensureAbsoluteUrl(source, "");
+  }
+
+  function collectCommentImages(...elements) {
+    const urls = [];
+    for (const element of elements.filter(Boolean)) {
+      for (const rootNode of collectElementSearchRoots(element)) {
+        for (const image of rootNode.querySelectorAll?.("img") || []) {
+          const url = readCommentImageUrl(image);
+          if (
+            !url ||
+            /\/bfs\/(?:emote|face|garb)\//i.test(url) ||
+            /(?:avatar|user-face|userface)/i.test(url)
+          ) {
+            continue;
+          }
+          urls.push(url);
+        }
+        for (const styled of rootNode.querySelectorAll?.("[style*='background-image']") || []) {
+          const styleValue = styled.style?.backgroundImage || "";
+          const match = styleValue.match(/url\(["']?([^"')]+)["']?\)/i);
+          const url = ensureAbsoluteUrl(match?.[1] || "", "");
+          if (url && !/\/bfs\/(?:emote|face|garb)\//i.test(url)) {
+            urls.push(url);
+          }
+        }
+      }
+    }
+    return [...new Set(urls)];
+  }
+
+  function buildFavoriteCommentFromElement(element) {
+    const contentElement = queryCommentElement(element, [
+      ".reply-content",
+      ".sub-reply-content",
+      "[class*='reply-content']",
+      "bili-rich-text",
+      "[part='content']",
+      "#content",
+      ".content"
+    ]);
+    const content = readCommentElementText(contentElement);
+    const pictureElement = queryCommentElement(element, [
+      "bili-comment-pictures-renderer",
+      ".reply-pictures",
+      ".comment-pictures",
+      "[class*='reply-picture']",
+      "[class*='comment-picture']"
+    ]);
+    const contentImageUrls = collectCommentImages(contentElement, pictureElement);
+    if (!content && contentImageUrls.length === 0) return null;
+
+    const authorLink = queryCommentElement(element, [
+      "a.user-name[href*='space.bilibili.com']",
+      "a[href*='space.bilibili.com']"
+    ]);
+    const authorName =
+      commentElementText(element, [
+        ".user-name",
+        ".sub-user-name",
+        "[class*='user-name']",
+        "[part='user-name']"
+      ]) || readCommentElementText(authorLink);
+    const authorSpaceUrl = ensureAbsoluteUrl(authorLink?.href || "", "");
+    const authorMid = authorSpaceUrl.match(/space\.bilibili\.com\/(\d+)/)?.[1] || "";
+    const avatarElement = queryCommentElement(element, [
+      "img.avatar",
+      "img[class*='avatar']",
+      "img[class*='face']"
+    ]);
+    const timeElement = queryCommentElement(element, [
+      "time",
+      ".reply-time",
+      ".sub-reply-time",
+      "[class*='reply-time']",
+      "[class*='pubdate']",
+      "[class*='time']"
+    ]);
+    const publishedAtText = timeElement?.textContent?.trim() || "";
+    const publishedAtRaw =
+      timeElement?.getAttribute?.("datetime") ||
+      timeElement?.getAttribute?.("data-time") ||
+      timeElement?.getAttribute?.("title") ||
+      publishedAtText;
+    const likeText = commentElementText(element, [
+      "[class*='like'] [class*='count']",
+      "[class*='like-count']",
+      ".like"
+    ]);
+    const rpid = readCommentId(element);
+    const rootRpid = readRootCommentId(element, rpid);
+    const pageSource = articleMode
+      ? currentArticle || pickArticlePayload()
+      : currentVideo || pickBasePayload();
+
+    try {
+      return normalizeFavoriteComment({
+        rpid,
+        rootRpid,
+        bvid: articleMode ? "" : pageSource?.bvid || "",
+        videoTitle:
+          pageSource?.title ||
+          document.title.replace(/_bilibili$/i, "").trim(),
+        videoUrl:
+          (articleMode ? pageSource?.sourceUrl : pageSource?.bvidUrl) ||
+          location.href,
+        content,
+        contentImageUrls,
+        authorName,
+        authorMid,
+        authorAvatarUrl: ensureAbsoluteUrl(
+          avatarElement?.currentSrc || avatarElement?.src || "",
+          ""
+        ),
+        authorSpaceUrl,
+        replyToName: commentElementText(contentElement, [
+          ".at",
+          "[class*='reply-to']"
+        ]).replace(/^@/, ""),
+        likeCount: parseBilibiliCount(likeText),
+        publishedAt: parseCommentPublishedAt(publishedAtRaw),
+        publishedAtText
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function renderCommentFavoriteButton(button) {
+    const saved = savedCommentKeys.has(button.dataset.commentSourceKey || "");
+    button.textContent = saved
+      ? `♥ ${t("button.savedComment")}`
+      : `♡ ${t("button.favoriteComment")}`;
+    button.title = saved
+      ? t("button.unfavoriteComment")
+      : t("button.favoriteComment");
+    button.setAttribute("aria-pressed", saved ? "true" : "false");
+    button.style.color = saved ? "#fb7299" : "var(--text2, #61666d)";
+    button.style.borderColor = saved ? "rgba(251,114,153,.55)" : "rgba(128,128,128,.35)";
+    button.style.background = saved ? "rgba(251,114,153,.1)" : "var(--bg1, rgba(255,255,255,.72))";
+  }
+
+  function syncCommentFavoriteButtons(sourceKey) {
+    for (const button of [...commentFavoriteButtons]) {
+      if (!button.isConnected) {
+        commentFavoriteButtons.delete(button);
+        continue;
+      }
+      if (!sourceKey || button.dataset.commentSourceKey === sourceKey) {
+        renderCommentFavoriteButton(button);
+      }
+    }
+  }
+
+  async function toggleCommentFavorite(button, element) {
+    const comment = buildFavoriteCommentFromElement(element);
+    if (!comment) {
+      showToast(t("toast.commentReadFail"), "err");
+      return;
+    }
+    button.dataset.commentSourceKey = comment.sourceKey;
+    button.disabled = true;
+    try {
+      const result = await requestLocalApi("POST", "/comments/toggle", comment);
+      if (result?.saved) savedCommentKeys.add(comment.sourceKey);
+      else savedCommentKeys.delete(comment.sourceKey);
+      syncCommentFavoriteButtons(comment.sourceKey);
+    } catch (error) {
+      showToast(
+        `${t("toast.commentSaveFail")}: ${error instanceof Error ? error.message : t("error.unknown")}`,
+        "err"
+      );
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function resolveCommentFavoritePlacement(element) {
+    const actionRenderer = element.matches?.(
+      "bili-comment-action-buttons-renderer"
+    )
+      ? element
+      : queryCommentElement(element, ["bili-comment-action-buttons-renderer"]);
+    const actionRoot = actionRenderer?.shadowRoot;
+    if (actionRoot) {
+      const replyAction = actionRoot.querySelector("#reply");
+      const moreAction = actionRoot.querySelector("#more");
+      const mountTarget = moreAction?.parentNode || replyAction?.parentNode || actionRoot;
+      const insertBefore =
+        moreAction?.parentNode === mountTarget
+          ? moreAction
+          : replyAction?.parentNode === mountTarget
+            ? replyAction.nextSibling
+            : null;
+      return { mountTarget, insertBefore, embedded: true };
+    }
+
+    const actionContainer = queryCommentElement(element, [
+      ".reply-info",
+      ".sub-reply-info",
+      ".reply-operation",
+      ".reply-actions",
+      "[class*='reply-info']",
+      "[class*='reply-operation']",
+      "[class*='reply-action']",
+      "[class*='operation']",
+      "[class*='actions']",
+      "[part='footer']",
+      ".footer",
+      "[class*='footer']",
+      "[class*='action']"
+    ]);
+    const fallbackContainer = actionContainer || queryCommentElement(element, [
+      ".reply-content-container",
+      ".content-warp",
+      ".root-reply",
+      ".sub-reply-content",
+      "[class*='reply-content-container']",
+      "[part='content']"
+    ]) || element.shadowRoot || element;
+    const mountTarget = fallbackContainer.matches?.("button,a")
+      ? fallbackContainer.parentNode
+      : fallbackContainer;
+    return { mountTarget, insertBefore: null, embedded: Boolean(actionContainer) };
+  }
+
+  function placeCommentFavoriteButton(button, placement) {
+    const { mountTarget, insertBefore } = placement;
+    if (!mountTarget) return false;
+    if (
+      button.parentNode !== mountTarget ||
+      (insertBefore && button.nextSibling !== insertBefore)
+    ) {
+      mountTarget.insertBefore(button, insertBefore || null);
+    }
+    button.style.marginTop = placement.embedded ? "0" : "8px";
+    return true;
+  }
+
+  function mountCommentFavoriteButton(element) {
+    if (!element) return;
+
+    const placement = resolveCommentFavoritePlacement(element);
+    const mountedButton = element.__bilishelfCommentFavoriteButton;
+    if (mountedButton?.isConnected) {
+      placeCommentFavoriteButton(mountedButton, placement);
+      return;
+    }
+    if (mountedButton) {
+      commentFavoriteButtons.delete(mountedButton);
+      element.__bilishelfCommentFavoriteButton = null;
+    }
+    const existingButton = queryCommentElement(element, [
+      "[data-bilishelf-comment-favorite='true']"
+    ]);
+    if (existingButton) {
+      element.__bilishelfCommentFavoriteButton = existingButton;
+      commentFavoriteButtons.add(existingButton);
+      placeCommentFavoriteButton(existingButton, placement);
+      renderCommentFavoriteButton(existingButton);
+      return;
+    }
+    const comment = buildFavoriteCommentFromElement(element);
+    if (!placement.mountTarget) return;
+
+    const button = createEl("button", {
+      className: "bl-comment-favorite",
+      attrs: {
+        type: "button",
+        "data-bilishelf-comment-favorite": "true",
+        "data-comment-source-key": comment?.sourceKey || ""
+      }
+    });
+    button.style.cssText = [
+      "display:inline-flex",
+      "align-items:center",
+      "justify-content:center",
+      "min-height:24px",
+      "margin-left:8px",
+      "margin-top:0",
+      "padding:2px 8px",
+      "border:1px solid rgba(128,128,128,.3)",
+      "border-radius:6px",
+      "font:500 12px/1.4 system-ui,sans-serif",
+      "letter-spacing:0",
+      "white-space:nowrap",
+      "box-shadow:0 1px 3px rgba(0,0,0,.08)",
+      "cursor:pointer",
+      "transition:color .16s ease,border-color .16s ease,background .16s ease"
+    ].join(";");
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void toggleCommentFavorite(button, element);
+    });
+    element.__bilishelfCommentFavoriteButton = button;
+    commentFavoriteButtons.add(button);
+    placeCommentFavoriteButton(button, placement);
+    renderCommentFavoriteButton(button);
+  }
+
+  function collectOpenCommentRoots() {
+    const roots = [document];
+    const queue = [document];
+    const seen = new Set(roots);
+    while (queue.length > 0) {
+      const rootNode = queue.shift();
+      for (const element of rootNode.querySelectorAll?.(COMMENT_COMPONENT_SELECTOR) || []) {
+        if (!element.shadowRoot || seen.has(element.shadowRoot)) continue;
+        seen.add(element.shadowRoot);
+        roots.push(element.shadowRoot);
+        queue.push(element.shadowRoot);
+      }
+    }
+    return roots;
+  }
+
+  function scanCommentFavoriteButtons() {
+    for (const rootNode of collectOpenCommentRoots()) {
+      if (rootNode.host?.matches?.("bili-comment-renderer,bili-comment-reply-renderer")) {
+        mountCommentFavoriteButton(rootNode.host);
+      }
+      for (const element of rootNode.querySelectorAll?.(COMMENT_CANDIDATE_SELECTOR) || []) {
+        mountCommentFavoriteButton(element);
+      }
+    }
+    syncCommentFavoriteButtons();
+  }
+
+  async function startCommentFavoriteWatch() {
+    try {
+      const result = await requestLocalApi("GET", "/comments/keys");
+      savedCommentKeys = new Set(
+        (Array.isArray(result?.items) ? result.items : [])
+          .map((item) => String(item || ""))
+          .filter(Boolean)
+      );
+    } catch {
+      savedCommentKeys = new Set();
+    }
+    scanCommentFavoriteButtons();
+    if (commentScanTimer) window.clearInterval(commentScanTimer);
+    commentScanTimer = window.setInterval(
+      scanCommentFavoriteButtons,
+      COMMENT_SCAN_INTERVAL_MS
+    );
+  }
+
   async function bootstrap() {
     activeLocale = await resolveLocale();
     if (!isActionSyncPageUrl(location.href)) return;
+    articleMode = isArticleUiUrl(location.href);
     bindNativeFavoriteActionListener();
     void fetchBidirectionalSettings(true);
+    if (articleMode) {
+      injectUi();
+      setupThemeSync();
+      await loadArticleFavorite();
+      void startCommentFavoriteWatch();
+      return;
+    }
     if (!isCollectorUiUrl(location.href)) return;
     activeQuickFavoriteShortcut = await resolveQuickFavoriteShortcutPreference();
     injectUi();
     setupThemeSync();
+    void startCommentFavoriteWatch();
   }
 
   void bootstrap();

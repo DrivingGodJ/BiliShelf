@@ -64,7 +64,7 @@ const nextRunLabel = computed(() => {
 
 <template>
   <section
-    class="border-y bg-background/70 px-3 py-3 sm:px-4"
+    class="panel-surface rounded-2xl border bg-card/80 px-3 py-3 shadow-sm sm:px-4"
     aria-live="polite"
     aria-atomic="false"
   >
@@ -163,7 +163,7 @@ const nextRunLabel = computed(() => {
     </div>
 
     <div
-      class="mt-3 grid grid-cols-2 divide-x divide-y overflow-hidden rounded-md border sm:grid-cols-5 sm:divide-y-0"
+      class="mt-3 grid grid-cols-2 divide-x divide-y overflow-hidden rounded-xl border bg-background/45 sm:grid-cols-5 sm:divide-y-0"
     >
       <div class="px-3 py-2">
         <p class="text-[11px] text-muted-foreground">{{ t("sync.tag.succeeded") }}</p>

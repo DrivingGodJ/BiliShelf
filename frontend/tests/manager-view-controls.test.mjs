@@ -32,34 +32,52 @@ test("folder entries use compact explorer rows and retain edit and delete action
   assert.doesNotMatch(source, /line-clamp-2 text-xs text-muted-foreground/);
 });
 
-test("keyword search exposes global and current-folder scopes without reading backup text", async () => {
+test("keyword search follows the selected view without a redundant scope switch", async () => {
   const [store, searchBar, query] = await Promise.all([
     readSource("stores", "library.ts"),
     readSource("components", "SearchBar.vue"),
     readSource("lib", "manager-query.ts"),
   ]);
 
-  assert.match(store, /export type SearchScope = "all" \| "folder";/);
-  assert.match(store, /const searchScope = ref<SearchScope>\("all"\);/);
-  assert.match(store, /searchScope\.value === "all"/);
-  assert.match(searchBar, /value="all"/);
-  assert.match(searchBar, /value="folder"/);
-  assert.match(query, /query\.scope = "folder"/);
+  assert.match(store, /folderId: selectedFolderId\.value \?\? undefined/);
+  assert.doesNotMatch(store, /SearchScope|searchScope/);
+  assert.doesNotMatch(searchBar, /searchScope|currentFolderAvailable|TabsTrigger/);
+  assert.match(query, /if \(state\.selectedFolderId !== null\) query\.folderId/);
+  assert.doesNotMatch(query, /query\.scope|searchScope/);
   assert.doesNotMatch(store, /FileReader|backup/i);
 });
 
+test("selected folder description is shown above its video results", async () => {
+  const panel = await readSource("components", "panels", "ManagerPanel.vue");
+
+  assert.match(panel, /v-if="activeFolder"/);
+  assert.match(panel, /\{\{ activeFolder\.name \}\}/);
+  assert.match(panel, /v-if="activeFolder\.description"/);
+  assert.match(panel, /\{\{ activeFolder\.description \}\}/);
+});
+
 test("video card width is adjustable, persisted, and drives an auto-fill grid", async () => {
-  const [uiStore, panel, grid] = await Promise.all([
+  const [uiStore, panel, settings, grid] = await Promise.all([
     readSource("stores", "app-ui.ts"),
     readSource("components", "panels", "ManagerPanel.vue"),
+    readSource("components", "dialogs", "AiSettingsDialog.vue"),
     readSource("components", "VideoGrid.vue"),
   ]);
 
   assert.match(uiStore, /bili-like-video-card-width/);
+  assert.match(uiStore, /bili-like-comment-card-width/);
+  assert.match(uiStore, /bili-like-article-card-width/);
   assert.match(uiStore, /value === null \|\| value === undefined/);
   assert.match(uiStore, /function setVideoCardWidth/);
-  assert.match(panel, /type="range"/);
-  assert.match(panel, /update:videoCardWidth/);
+  assert.match(uiStore, /function setCommentCardWidth/);
+  assert.match(uiStore, /function setArticleCardWidth/);
+  assert.doesNotMatch(panel, /type="range"|update:videoCardWidth/);
+  assert.match(settings, /value="cards"/);
+  assert.match(settings, /v-model="localVideoCardWidth"/);
+  assert.match(settings, /type="number"/);
+  assert.match(settings, /emit\("setVideoCardWidth", normalized\)/);
+  assert.match(settings, /emit\("setCommentCardWidth", Number\(normalized\)\)/);
+  assert.match(settings, /emit\("setArticleCardWidth", Number\(normalized\)\)/);
   assert.match(grid, /--video-card-width/);
   assert.match(grid, /repeat\(auto-fill, minmax\(min\(100%, var\(--video-card-width\)\), 1fr\)\)/);
 });

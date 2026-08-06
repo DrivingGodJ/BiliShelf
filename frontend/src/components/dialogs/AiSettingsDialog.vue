@@ -2,7 +2,13 @@
 import { computed, ref, watch } from "vue";
 import {
   Bot,
+  Languages,
+  LayoutGrid,
+  Moon,
   RefreshCcw,
+  RadioTower,
+  Settings,
+  Sun,
   TestTubeDiagonal,
   Unplug,
 } from "lucide-vue-next";
@@ -19,11 +25,12 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchAiSettingsModels } from "@/lib/api";
+import type { BidirectionalSyncSettings } from "@/lib/api";
 import {
   buildAiSettingsPayload,
   mergeAiModelOptions,
@@ -31,12 +38,29 @@ import {
   type AiSettingsProviderId,
 } from "@/lib/ai-settings-form.js";
 import type { AiSettings, AiSettingsModelOption } from "@/types";
+import {
+  VIDEO_CARD_WIDTH_MAX,
+  VIDEO_CARD_WIDTH_MIN,
+  type Locale,
+} from "@/stores/app-ui";
+
+type SettingsSection = "ai" | "listener" | "language" | "theme" | "cards";
 
 const props = defineProps<{
   open: boolean;
   t: (key: string, vars?: Record<string, string | number>) => string;
   loading: boolean;
   settings: AiSettings | null;
+  section?: SettingsSection;
+  listenerLoading: boolean;
+  listenerSettings: BidirectionalSyncSettings | null;
+  showAi: boolean;
+  showListener: boolean;
+  locale: Locale;
+  isDark: boolean;
+  videoCardWidth: number;
+  commentCardWidth: number;
+  articleCardWidth: number;
 }>();
 
 const emit = defineEmits<{
@@ -62,6 +86,14 @@ const emit = defineEmits<{
       enabled: boolean;
     },
   ];
+  "update:section": [value: SettingsSection];
+  saveListener: [payload: { biliToLocalEnabled: boolean }];
+  reloadListener: [];
+  setLocale: [value: Locale];
+  setTheme: [value: "light" | "dark"];
+  setVideoCardWidth: [value: number];
+  setCommentCardWidth: [value: number];
+  setArticleCardWidth: [value: number];
 }>();
 
 const OFFICIAL_PROVIDER_IDS = new Set<AiSettingsProviderId>([
@@ -84,6 +116,11 @@ const modelSource = ref<"builtin" | "remote">("builtin");
 const modelLoading = ref(false);
 const modelError = ref("");
 const hydrating = ref(false);
+const activeSection = ref<SettingsSection>(props.section ?? "ai");
+const localBiliToLocalEnabled = ref(false);
+const localVideoCardWidth = ref(String(props.videoCardWidth));
+const localCommentCardWidth = ref(String(props.commentCardWidth));
+const localArticleCardWidth = ref(String(props.articleCardWidth));
 let modelRequestToken = 0;
 
 const providerOptions = computed(() => [
@@ -227,10 +264,107 @@ function handleTest() {
   emit("test", buildPayload());
 }
 
+function updateSection(value: string | number) {
+  const next = String(value) as SettingsSection;
+  activeSection.value = next;
+  emit("update:section", next);
+}
+
+function saveListenerSettings() {
+  if (props.listenerLoading) return;
+  emit("saveListener", {
+    biliToLocalEnabled: localBiliToLocalEnabled.value,
+  });
+}
+
+function commitVideoCardWidth() {
+  const parsed = Number.parseInt(localVideoCardWidth.value.trim(), 10);
+  if (!Number.isFinite(parsed)) {
+    localVideoCardWidth.value = String(props.videoCardWidth);
+    return;
+  }
+  const normalized = Math.min(
+    VIDEO_CARD_WIDTH_MAX,
+    Math.max(VIDEO_CARD_WIDTH_MIN, parsed),
+  );
+  localVideoCardWidth.value = String(normalized);
+  emit("setVideoCardWidth", normalized);
+}
+
+function normalizeLocalCardWidth(value: string, fallback: number) {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed)) return String(fallback);
+  return String(
+    Math.min(VIDEO_CARD_WIDTH_MAX, Math.max(VIDEO_CARD_WIDTH_MIN, parsed)),
+  );
+}
+
+function commitCommentCardWidth() {
+  const normalized = normalizeLocalCardWidth(
+    localCommentCardWidth.value,
+    props.commentCardWidth,
+  );
+  localCommentCardWidth.value = normalized;
+  emit("setCommentCardWidth", Number(normalized));
+}
+
+function commitArticleCardWidth() {
+  const normalized = normalizeLocalCardWidth(
+    localArticleCardWidth.value,
+    props.articleCardWidth,
+  );
+  localArticleCardWidth.value = normalized;
+  emit("setArticleCardWidth", Number(normalized));
+}
+
 watch(
   () => [props.open, props.settings] as const,
-  () => {
+  ([open]) => {
+    if (!open || !props.showAi) return;
     void resetFormFromSettings();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [props.open, props.section] as const,
+  ([open, section]) => {
+    if (!open) return;
+    activeSection.value = section ?? (props.showAi ? "ai" : "listener");
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [props.open, props.listenerSettings] as const,
+  () => {
+    localBiliToLocalEnabled.value = Boolean(
+      props.listenerSettings?.biliToLocalEnabled,
+    );
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.videoCardWidth,
+  (value) => {
+    localVideoCardWidth.value = String(value);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.commentCardWidth,
+  (value) => {
+    localCommentCardWidth.value = String(value);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.articleCardWidth,
+  (value) => {
+    localArticleCardWidth.value = String(value);
   },
   { immediate: true },
 );
@@ -260,160 +394,252 @@ watch(
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="max-w-2xl">
+    <DialogContent
+      class="top-[6dvh] max-h-[88dvh] max-w-4xl translate-y-0 overflow-y-auto"
+    >
       <DialogHeader>
         <DialogTitle class="flex items-center gap-2">
           <span
             class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary"
           >
-            <Bot class="h-4.5 w-4.5" />
+            <Settings class="h-4.5 w-4.5" />
           </span>
-          {{ t("ai.settings.title") }}
+          {{ t("settings.title") }}
         </DialogTitle>
       </DialogHeader>
 
-      <section class="space-y-3">
-        <label class="panel-surface flex items-start gap-3 rounded-md border p-3">
-          <Checkbox
-            :model-value="localEnabled"
-            :disabled="loading"
-            class="mt-0.5"
-            @update:model-value="localEnabled = $event === true"
-          />
-          <div class="min-w-0">
-            <p class="text-sm font-medium">{{ t("ai.settings.enableTitle") }}</p>
-            <p class="text-xs text-muted-foreground">
-              {{ t("ai.settings.enableDesc") }}
+      <Tabs :model-value="activeSection" @update:model-value="updateSection">
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-5">
+          <TabsTrigger v-if="showAi" value="ai" class="gap-1.5 py-2.5">
+            <Bot class="h-3.5 w-3.5" />
+            {{ t("settings.ai") }}
+          </TabsTrigger>
+          <TabsTrigger v-if="showListener" value="listener" class="gap-1.5 py-2.5">
+            <RadioTower class="h-3.5 w-3.5" />
+            {{ t("settings.listener") }}
+          </TabsTrigger>
+          <TabsTrigger value="language" class="gap-1.5 py-2.5">
+            <Languages class="h-3.5 w-3.5" />
+            {{ t("settings.language") }}
+          </TabsTrigger>
+          <TabsTrigger value="theme" class="gap-1.5 py-2.5">
+            <Moon class="h-3.5 w-3.5" />
+            {{ t("settings.theme") }}
+          </TabsTrigger>
+          <TabsTrigger value="cards" class="gap-1.5 py-2.5">
+            <LayoutGrid class="h-3.5 w-3.5" />
+            {{ t("settings.cardSize") }}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent v-if="showAi" value="ai" class="mt-4 space-y-4">
+          <label class="panel-surface flex items-start gap-3 rounded-lg border p-3.5">
+            <Checkbox
+              :model-value="localEnabled"
+              :disabled="loading"
+              class="mt-0.5"
+              @update:model-value="localEnabled = $event === true"
+            />
+            <div class="min-w-0">
+              <p class="text-sm font-medium">{{ t("ai.settings.enableTitle") }}</p>
+              <p class="text-xs text-muted-foreground">{{ t("ai.settings.enableDesc") }}</p>
+            </div>
+          </label>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label class="space-y-1.5">
+              <span class="text-xs text-muted-foreground">{{ t("ai.settings.provider") }}</span>
+              <Select v-model="localProviderId" :disabled="loading || modelLoading">
+                <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="provider in providerOptions" :key="provider.value" :value="provider.value">
+                    {{ provider.label }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+
+            <label v-if="showCustomProviderName" class="space-y-1.5">
+              <span class="text-xs text-muted-foreground">{{ t("ai.settings.customProviderName") }}</span>
+              <Input v-model="localCustomProviderName" :disabled="loading" :placeholder="t('ai.settings.customProviderNamePlaceholder')" />
+            </label>
+
+            <label class="space-y-1.5" :class="{ 'sm:col-span-2': !showCustomProviderName }">
+              <span class="text-xs text-muted-foreground">{{ t("ai.settings.baseUrl") }}</span>
+              <Input v-model="localBaseUrl" :disabled="loading || baseUrlReadonly" :placeholder="t('ai.settings.baseUrlPlaceholder')" />
+              <p v-if="baseUrlReadonly" class="text-[11px] text-muted-foreground">{{ t("ai.settings.baseUrlAuto") }}</p>
+            </label>
+
+            <label class="space-y-1.5 sm:col-span-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-xs text-muted-foreground">{{ t("ai.settings.model") }}</span>
+                <Button variant="outline" size="sm" :disabled="!canRefreshModels" @click="loadModelOptions(true)">
+                  <RefreshCcw class="h-3.5 w-3.5" />
+                  {{ t("ai.settings.refreshModels") }}
+                </Button>
+              </div>
+              <Select v-model="localModel" :disabled="loading || modelLoading || modelOptions.length === 0">
+                <SelectTrigger class="w-full"><SelectValue :placeholder="t('ai.settings.modelsEmpty')" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.label }}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p class="text-[11px] text-muted-foreground">{{ modelHintText }}</p>
+              <p v-if="modelError" class="text-[11px] text-amber-600 dark:text-amber-400">{{ modelError }}</p>
+            </label>
+
+            <label class="space-y-1.5 sm:col-span-2">
+              <span class="text-xs text-muted-foreground">{{ t("ai.settings.apiKey") }}</span>
+              <Input
+                v-model="localApiKey"
+                :disabled="loading"
+                type="password"
+                :placeholder="settings?.apiKeySet ? t('ai.settings.apiKeyPlaceholderKeep') : t('ai.settings.apiKeyPlaceholder')"
+              />
+            </label>
+          </div>
+
+          <div class="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+            <p>{{ t("ai.settings.statusTest", { time: statusTime }) }}</p>
+            <p v-if="settings?.lastError" class="mt-1 flex items-start gap-1 text-amber-600 dark:text-amber-400">
+              <Unplug class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{{ settings.lastError }}</span>
             </p>
           </div>
-        </label>
 
-        <div class="grid gap-3 sm:grid-cols-2">
-          <label class="space-y-1.5">
-            <span class="text-xs text-muted-foreground">{{ t("ai.settings.provider") }}</span>
-            <Select v-model="localProviderId" :disabled="loading || modelLoading">
-              <SelectTrigger class="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="provider in providerOptions"
-                  :key="provider.value"
-                  :value="provider.value"
-                >
-                  {{ provider.label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
-
-          <label v-if="showCustomProviderName" class="space-y-1.5">
-            <span class="text-xs text-muted-foreground">
-              {{ t("ai.settings.customProviderName") }}
-            </span>
-            <Input
-              v-model="localCustomProviderName"
-              :disabled="loading"
-              :placeholder="t('ai.settings.customProviderNamePlaceholder')"
-            />
-          </label>
-
-          <label class="space-y-1.5" :class="{ 'sm:col-span-2': !showCustomProviderName }">
-            <span class="text-xs text-muted-foreground">{{ t("ai.settings.baseUrl") }}</span>
-            <Input
-              v-model="localBaseUrl"
-              :disabled="loading || baseUrlReadonly"
-              :placeholder="t('ai.settings.baseUrlPlaceholder')"
-            />
-            <p v-if="baseUrlReadonly" class="text-[11px] text-muted-foreground">
-              {{ t("ai.settings.baseUrlAuto") }}
-            </p>
-          </label>
-
-          <label class="space-y-1.5 sm:col-span-2">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <span class="text-xs text-muted-foreground">{{ t("ai.settings.model") }}</span>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="!canRefreshModels"
-                @click="loadModelOptions(true)"
-              >
+          <div class="flex flex-wrap justify-between gap-2 border-t pt-4">
+            <div class="flex flex-wrap gap-2">
+              <Button variant="outline" :disabled="loading" @click="emit('reload')">
                 <RefreshCcw class="h-3.5 w-3.5" />
-                {{ t("ai.settings.refreshModels") }}
+                {{ t("ai.settings.reload") }}
+              </Button>
+              <Button variant="outline" :disabled="!canTest" @click="handleTest">
+                <TestTubeDiagonal class="h-3.5 w-3.5" />
+                {{ t("ai.settings.test") }}
               </Button>
             </div>
+            <Button :disabled="!canSave" @click="handleSave">{{ t("settings.saveAi") }}</Button>
+          </div>
+        </TabsContent>
 
-            <Select v-model="localModel" :disabled="loading || modelLoading || modelOptions.length === 0">
-              <SelectTrigger class="w-full">
-                <SelectValue :placeholder="t('ai.settings.modelsEmpty')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="model in modelOptions"
-                  :key="model.id"
-                  :value="model.id"
-                >
-                  {{ model.label }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-
-            <p class="text-[11px] text-muted-foreground">
-              {{ modelHintText }}
-            </p>
-            <p v-if="modelError" class="text-[11px] text-amber-600 dark:text-amber-400">
-              {{ modelError }}
-            </p>
-          </label>
-
-          <label class="space-y-1.5 sm:col-span-2">
-            <span class="text-xs text-muted-foreground">{{ t("ai.settings.apiKey") }}</span>
-            <Input
-              v-model="localApiKey"
-              :disabled="loading"
-              type="password"
-              :placeholder="
-                settings?.apiKeySet
-                  ? t('ai.settings.apiKeyPlaceholderKeep')
-                  : t('ai.settings.apiKeyPlaceholder')
-              "
+        <TabsContent v-if="showListener" value="listener" class="mt-4 space-y-4">
+          <label class="panel-surface flex items-start gap-3 rounded-lg border p-4">
+            <Checkbox
+              :model-value="localBiliToLocalEnabled"
+              :disabled="listenerLoading"
+              class="mt-0.5"
+              @update:model-value="localBiliToLocalEnabled = $event === true"
             />
+            <div class="min-w-0">
+              <p class="text-sm font-medium">{{ t("sync.settings.biliToLocalTitle") }}</p>
+              <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ t("sync.settings.biliToLocalDesc") }}</p>
+            </div>
           </label>
-        </div>
+          <div class="flex flex-wrap justify-end gap-2 border-t pt-4">
+            <Button variant="outline" :disabled="listenerLoading" @click="emit('reloadListener')">
+              <RefreshCcw class="h-3.5 w-3.5" />
+              {{ t("sync.settings.reload") }}
+            </Button>
+            <Button :disabled="listenerLoading" @click="saveListenerSettings">{{ t("settings.saveListener") }}</Button>
+          </div>
+        </TabsContent>
 
-        <div class="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-          <p>{{ t("ai.settings.statusTest", { time: statusTime }) }}</p>
-          <p
-            v-if="settings?.lastError"
-            class="mt-1 flex items-start gap-1 text-amber-600 dark:text-amber-400"
-          >
-            <Unplug class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>{{ settings.lastError }}</span>
-          </p>
-        </div>
-      </section>
+        <TabsContent value="language" class="mt-4">
+          <section class="panel-surface space-y-3 rounded-lg border p-4">
+            <p class="text-sm font-medium">{{ t("settings.languageTitle") }}</p>
+            <div class="grid gap-2 sm:grid-cols-2">
+              <Button :variant="locale === 'zh-CN' ? 'default' : 'outline'" class="justify-start" @click="emit('setLocale', 'zh-CN')">
+                <Languages class="h-4 w-4" /> 简体中文
+              </Button>
+              <Button :variant="locale === 'en-US' ? 'default' : 'outline'" class="justify-start" @click="emit('setLocale', 'en-US')">
+                <Languages class="h-4 w-4" /> English
+              </Button>
+            </div>
+          </section>
+        </TabsContent>
 
-      <DialogFooter class="flex flex-wrap justify-between gap-2">
-        <div class="flex flex-wrap gap-2">
-          <Button variant="outline" :disabled="loading" @click="emit('reload')">
-            <RefreshCcw class="h-3.5 w-3.5" />
-            {{ t("ai.settings.reload") }}
-          </Button>
-          <Button variant="outline" :disabled="!canTest" @click="handleTest">
-            <TestTubeDiagonal class="h-3.5 w-3.5" />
-            {{ t("ai.settings.test") }}
-          </Button>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <Button variant="outline" :disabled="loading" @click="emit('update:open', false)">
-            {{ t("common.cancel") }}
-          </Button>
-          <Button :disabled="!canSave" @click="handleSave">
-            {{ t("common.confirm") }}
-          </Button>
-        </div>
-      </DialogFooter>
+        <TabsContent value="theme" class="mt-4">
+          <section class="panel-surface space-y-3 rounded-lg border p-4">
+            <p class="text-sm font-medium">{{ t("settings.themeTitle") }}</p>
+            <div class="grid gap-2 sm:grid-cols-2">
+              <Button :variant="!isDark ? 'default' : 'outline'" class="justify-start" @click="emit('setTheme', 'light')">
+                <Sun class="h-4 w-4" /> {{ t("settings.light") }}
+              </Button>
+              <Button :variant="isDark ? 'default' : 'outline'" class="justify-start" @click="emit('setTheme', 'dark')">
+                <Moon class="h-4 w-4" /> {{ t("settings.dark") }}
+              </Button>
+            </div>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="cards" class="mt-4">
+          <section class="panel-surface space-y-4 rounded-lg border p-4">
+            <div>
+              <p class="text-sm font-medium">{{ t("settings.cardSizeTitle") }}</p>
+              <p class="mt-1 text-xs text-muted-foreground">
+                {{ t("settings.cardSizeDescription") }}
+              </p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-3">
+              <label class="space-y-1.5">
+                <span class="text-xs text-muted-foreground">{{ t("video.cardSize") }}</span>
+                <div class="flex items-center gap-2">
+                  <Input
+                    v-model="localVideoCardWidth"
+                    type="number"
+                    inputmode="numeric"
+                    :min="VIDEO_CARD_WIDTH_MIN"
+                    :max="VIDEO_CARD_WIDTH_MAX"
+                    step="1"
+                    class="tabular-nums"
+                    @keydown.enter.prevent="commitVideoCardWidth"
+                    @blur="commitVideoCardWidth"
+                  />
+                  <span class="shrink-0 text-sm text-muted-foreground">px</span>
+                </div>
+                <Button class="w-full" size="sm" @click="commitVideoCardWidth">{{ t("common.apply") }}</Button>
+              </label>
+              <label class="space-y-1.5">
+                <span class="text-xs text-muted-foreground">{{ t("comments.cardSize") }}</span>
+                <div class="flex items-center gap-2">
+                  <Input
+                    v-model="localCommentCardWidth"
+                    type="number"
+                    inputmode="numeric"
+                    :min="VIDEO_CARD_WIDTH_MIN"
+                    :max="VIDEO_CARD_WIDTH_MAX"
+                    step="1"
+                    class="tabular-nums"
+                    @keydown.enter.prevent="commitCommentCardWidth"
+                    @blur="commitCommentCardWidth"
+                  />
+                  <span class="shrink-0 text-sm text-muted-foreground">px</span>
+                </div>
+                <Button class="w-full" size="sm" @click="commitCommentCardWidth">{{ t("common.apply") }}</Button>
+              </label>
+              <label class="space-y-1.5">
+                <span class="text-xs text-muted-foreground">{{ t("articles.cardSize") }}</span>
+                <div class="flex items-center gap-2">
+                  <Input
+                    v-model="localArticleCardWidth"
+                    type="number"
+                    inputmode="numeric"
+                    :min="VIDEO_CARD_WIDTH_MIN"
+                    :max="VIDEO_CARD_WIDTH_MAX"
+                    step="1"
+                    class="tabular-nums"
+                    @keydown.enter.prevent="commitArticleCardWidth"
+                    @blur="commitArticleCardWidth"
+                  />
+                  <span class="shrink-0 text-sm text-muted-foreground">px</span>
+                </div>
+                <Button class="w-full" size="sm" @click="commitArticleCardWidth">{{ t("common.apply") }}</Button>
+              </label>
+            </div>
+            <p class="text-[11px] text-muted-foreground">{{ t("settings.cardSizeHint", { min: VIDEO_CARD_WIDTH_MIN, max: VIDEO_CARD_WIDTH_MAX }) }}</p>
+          </section>
+        </TabsContent>
+      </Tabs>
     </DialogContent>
   </Dialog>
 </template>

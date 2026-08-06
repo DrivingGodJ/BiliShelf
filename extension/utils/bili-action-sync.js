@@ -28,15 +28,32 @@ export function isCollectorUiUrl(rawUrl) {
   );
 }
 
+export function isArticleUiUrl(rawUrl) {
+  const parsed = safeParseUrl(rawUrl);
+  if (!parsed) return false;
+  const hostname = parsed.hostname.toLowerCase();
+  return (
+    (hostname === "www.bilibili.com" || hostname === "bilibili.com") &&
+    /^\/opus\/\d+/i.test(parsed.pathname || "")
+  );
+}
+
+export function extractOpusId(rawUrl) {
+  const parsed = safeParseUrl(rawUrl);
+  if (!parsed) return "";
+  return parsed.pathname.match(/^\/opus\/(\d+)/i)?.[1] || "";
+}
+
 export function isActionSyncPageUrl(rawUrl) {
   const parsed = safeParseUrl(rawUrl);
   if (!parsed) return false;
   const hostname = parsed.hostname.toLowerCase();
   const path = parsed.pathname || "";
-  if (hostname === "www.bilibili.com") {
+  if (hostname === "www.bilibili.com" || hostname === "bilibili.com") {
     if (/^\/video\/BV[0-9A-Za-z]+/i.test(path)) return true;
     if (/^\/list\/watchlater/i.test(path)) return true;
     if (/^\/list\/ml/i.test(path)) return true;
+    if (/^\/opus\/\d+/i.test(path)) return true;
   }
   if (hostname === "space.bilibili.com") {
     if (/^\/\d+\/favlist/i.test(path)) return true;

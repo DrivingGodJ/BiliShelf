@@ -12,13 +12,14 @@ if (!fs.existsSync(managerAssetsDir)) {
 
 const targets = fs
   .readdirSync(managerAssetsDir)
-  .filter((file) => file.startsWith("index-") && file.endsWith(".js"));
+  .filter((file) => file.endsWith(".js"));
 
 if (targets.length === 0) {
   throw new Error("No manager bundle found to patch.");
 }
 
-const functionPattern = /insertStaticContent\([^)]*\)\{[\s\S]*?\}\},It="/;
+const functionPattern =
+  /insertStaticContent\([^)]*\)\{[\s\S]*?\}\},([A-Za-z_$][\w$]*)="/;
 
 const replacement =
   "insertStaticContent(e,t,n,s,r,o){" +
@@ -36,18 +37,26 @@ const replacement =
   "t.insertBefore(l,n)" +
   "}" +
   "return[i?i.nextSibling:t.firstChild,n?n.previousSibling:t.lastChild]" +
-  "}},It=\"";
+  "}}";
 
+const patchedTargets = [];
 for (const file of targets) {
   const fullPath = path.join(managerAssetsDir, file);
   const code = fs.readFileSync(fullPath, "utf8");
+  const match = code.match(functionPattern);
 
-  if (!functionPattern.test(code)) {
-    throw new Error(`insertStaticContent not found in ${file}`);
-  }
+  if (!match) continue;
 
-  const patched = code.replace(functionPattern, replacement);
+  const patched = code.replace(
+    functionPattern,
+    `${replacement},${match[1]}="`,
+  );
   fs.writeFileSync(fullPath, patched);
+  patchedTargets.push(file);
 }
 
-console.info("[patch-manager-innerhtml] Patched manager bundle(s):", targets);
+if (patchedTargets.length === 0) {
+  throw new Error("insertStaticContent not found in any manager JavaScript bundle.");
+}
+
+console.info("[patch-manager-innerhtml] Patched manager bundle(s):", patchedTargets);

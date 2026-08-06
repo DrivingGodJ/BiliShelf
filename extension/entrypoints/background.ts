@@ -55,7 +55,30 @@ import {
   findPlaybackQueueIndex,
   normalizePlaybackSession,
 } from "../shared/folder-playback-session.js";
-import { categorizeFolderVideo } from "../shared/ai-category-runtime.js";
+import { categorizeFolderVideo, requestAiJson } from "../shared/ai-category-runtime.js";
+import { normalizeFavoriteComment } from "../shared/comment-favorite.js";
+import type { NormalizedFavoriteComment } from "../shared/comment-favorite.js";
+import {
+  normalizeFavoriteArticle,
+  normalizeStoredFavoriteArticle,
+} from "../shared/article-favorite.js";
+import type { FavoriteArticleRecord as SharedFavoriteArticleRecord } from "../shared/article-favorite.js";
+import {
+  REVIEW_FOLDER_KEY,
+  applyAiOrganizerPlan,
+  buildAiOrganizerClassificationPrompt,
+  buildAiOrganizerTaxonomyPrompt,
+  normalizeAiOrganizerAssignments,
+  normalizeAiOrganizerConfig,
+  normalizeAiOrganizerTaxonomy,
+  resolveAiOrganizerFolderNames,
+  undoAiOrganizerPlan,
+} from "../shared/ai-organizer.js";
+import type {
+  AiOrganizerAssignment,
+  AiOrganizerConfig,
+  AiOrganizerTaxonomyItem,
+} from "../shared/ai-organizer.js";
 import type { FavoritesSyncThrottleState } from "../shared/favorites-sync-throttle.js";
 import type {
   AiMeta as SharedAiMeta,
@@ -74,6 +97,9 @@ type FolderRecord = {
   deletedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  origin?: "ai";
+  organizerId?: string;
+  taxonomyKey?: string;
 };
 
 type VideoRecord = {
@@ -98,6 +124,18 @@ type FolderItemRecord = {
   folderId: number;
   videoId: number;
   addedAt: number;
+  origin?: "ai";
+  organizerId?: string;
+};
+
+type ArticleFolderRecord = {
+  id: number;
+  name: string;
+  description: string | null;
+  sortOrder: number;
+  deletedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
 };
 
 type TagRecord = {
@@ -115,6 +153,18 @@ type VideoTagRecord = {
 };
 
 type FollowedUpRecord = StoredFollowedUpRecord;
+
+type FavoriteCommentRecord = NormalizedFavoriteComment & {
+  id: number;
+  savedAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+type FavoriteArticleRecord = SharedFavoriteArticleRecord & {
+  id: number;
+  deletedAt: number | null;
+};
 
 type TagEnrichmentPhase =
   | "idle"
@@ -207,20 +257,92 @@ type FolderAiAnalysisRecord = SharedFolderAiAnalysisRecord;
 type VideoAiAnalysisRecord = SharedVideoAiAnalysisRecord;
 type AiSettingsResponse = ReturnType<typeof maskApiKeyStateForResponse>;
 
+type AiOrganizerStage =
+  | "planning"
+  | "classifying"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "completed"
+  | "undone";
+
+type AiOrganizerApplySummary = {
+  foldersCreated: number;
+  folderLinksAdded: number;
+  folderLinksRemoved: number;
+  lowConfidence: number;
+};
+
+type AiOrganizerUndoRecord = {
+  runId: string;
+  previousFolders: FolderRecord[];
+  previousItems: FolderItemRecord[];
+  createdFolders: FolderRecord[];
+  createdFolderIds: number[];
+  createdItemIds: number[];
+  appliedAt: number;
+};
+
+type AiOrganizerTaskRecord = {
+  version: 1;
+  id: string;
+  stage: AiOrganizerStage;
+  paused: boolean;
+  config: AiOrganizerConfig;
+  sourceHash: string;
+  sourceVideoIds: number[];
+  sourceFolderName: string | null;
+  total: number;
+  skippedInvalid: number;
+  previousAiRelationCount: number;
+  cursor: number;
+  taxonomy: AiOrganizerTaxonomyItem[];
+  reviewFolderName: string;
+  assignments: AiOrganizerAssignment[];
+  invalidResults: number;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  retryAttempt: number;
+  nextRunAt: number | null;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+  appliedAt: number | null;
+  undoneAt: number | null;
+  lastError: string | null;
+  snapshotKey: string;
+  applySummary: AiOrganizerApplySummary | null;
+  undo: AiOrganizerUndoRecord | null;
+};
+
+type AiOrganizerSnapshotRecord = {
+  version: 1;
+  runId: string;
+  createdAt: number;
+  state: LocalState;
+};
+
 type LocalState = {
   counters: {
     folder: number;
+    articleFolder: number;
     video: number;
     folderItem: number;
     tag: number;
     videoTag: number;
+    comment: number;
+    article: number;
   };
   folders: FolderRecord[];
+  articleFolders: ArticleFolderRecord[];
   videos: VideoRecord[];
   folderItems: FolderItemRecord[];
   tags: TagRecord[];
   videoTags: VideoTagRecord[];
   followedUps: FollowedUpRecord[];
+  comments: FavoriteCommentRecord[];
+  articles: FavoriteArticleRecord[];
   syncMeta: SyncMeta;
   ai: AiState;
 };
@@ -323,12 +445,24 @@ const BLOCKED_SYSTEM_TAGS = new Set(["uncategorized", "未分类"]);
 const DEFAULT_COVER = "https://i0.hdslb.com/bfs/archive/placeholder.jpg";
 const PAGE_FETCH_MESSAGE_TYPE = "BILISHELF_PAGE_FETCH_JSON";
 const TAG_ENRICH_ALARM = "bilishelf-tag-enrich";
+const AI_ORGANIZER_ALARM = "bilishelf-ai-organizer";
 const STAGE3_RECONCILE_ALARM = "bilishelf-stage3-reconcile";
 const FAVORITES_SYNC_RETRY_ALARM = "bilishelf-favorites-sync-retry";
+const BACKUP_REMINDER_ALARM = "bilishelf-backup-reminder";
+const BACKUP_REMINDER_NOTIFICATION_ID = "bilishelf-backup-reminder";
+const BACKUP_REMINDER_STORAGE_KEY = "bilishelf-backup-reminder-v1";
+const BACKUP_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+const BACKUP_REMINDER_CHECK_INTERVAL_MINUTES = 60;
 const TAG_ENRICH_BATCH_SIZE = 2;
 const TAG_ENRICH_BATCH_DELAY_MIN_MS = 20_000;
 const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 10_000;
 const TAG_ENRICH_RESTORE_DELAY_MS = 5_000;
+const AI_ORGANIZER_TASK_KEY = "ai-organizer-task-v1";
+const AI_ORGANIZER_SNAPSHOT_PREFIX = "ai-organizer-snapshot-v1:";
+const AI_ORGANIZER_BATCH_DELAY_MS = 1_500;
+const AI_ORGANIZER_MAX_RETRY_ATTEMPTS = 3;
+const AI_ORGANIZER_REQUEST_TIMEOUT_MS = 90_000;
+const AI_ORGANIZER_WATCHDOG_GRACE_MS = 2_000;
 const STAGE3_RECONCILE_DEFAULT_INTERVAL_MINUTES = 30;
 const STAGE3_RECONCILE_RETRY_DELAY_MINUTES = 5;
 const STAGE3_RECONCILE_RISK_DELAY_MINUTES = 20;
@@ -673,17 +807,23 @@ const defaultStage3ReconcileMeta = (): Stage3ReconcileMeta => ({
 const defaultState = (): LocalState => ({
   counters: {
     folder: 1,
+    articleFolder: 1,
     video: 1,
     folderItem: 1,
     tag: 1,
-    videoTag: 1
+    videoTag: 1,
+    comment: 1,
+    article: 1
   },
   folders: [],
+  articleFolders: [],
   videos: [],
   folderItems: [],
   tags: [],
   videoTags: [],
   followedUps: [],
+  comments: [],
+  articles: [],
   syncMeta: {
     tagEnrichment: defaultTagEnrichmentMeta(),
     bidirectionalSync: defaultBidirectionalSyncMeta(),
@@ -1210,6 +1350,12 @@ let followingUpImportStatus: FollowingUpImportStatus =
 let stage3ReconcileTask: Promise<void> | null = null;
 let folderAiCategoryTask: Promise<unknown> | null = null;
 let folderAiCategoryFolderId: number | null = null;
+let aiOrganizerTask: Promise<void> | null = null;
+let aiOrganizerRequestAbortController: AbortController | null = null;
+let aiOrganizerStartPending = false;
+let aiOrganizerApplyPending = false;
+let aiOrganizerQueue: Promise<void> = Promise.resolve();
+let cachedAiOrganizerTask: AiOrganizerTaskRecord | null | undefined;
 
 function now() {
   return Date.now();
@@ -1289,6 +1435,111 @@ function openDatabase() {
   return dbPromise;
 }
 
+function cloneStoredValue<T>(value: T): T {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function readStoredValue<T>(key: string): Promise<T | null> {
+  const db = await openDatabase();
+  return new Promise<T | null>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const request = tx.objectStore(STORE_NAME).get(key);
+    request.onsuccess = () => {
+      const record = request.result as { key: string; value: T } | undefined;
+      resolve(record?.value ?? null);
+    };
+    request.onerror = () => reject(request.error || new Error(`Read ${key} failed`));
+  });
+}
+
+async function writeStoredValues(records: Array<{ key: string; value: unknown }>) {
+  const db = await openDatabase();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    for (const record of records) store.put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB write failed"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB write was aborted"));
+  });
+}
+
+async function deleteStoredValue(key: string) {
+  const db = await openDatabase();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error(`Delete ${key} failed`));
+    tx.onabort = () => reject(tx.error || new Error(`Delete ${key} was aborted`));
+  });
+}
+
+async function writeStateAndStoredValue(
+  state: LocalState,
+  key: string,
+  value: unknown,
+) {
+  const db = await openDatabase();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.put({ key: STATE_KEY, value: state });
+    store.put({ key, value });
+    tx.oncomplete = () => {
+      cachedState = state;
+      stateRevision += 1;
+      cachedIndexes = null;
+      videoQueryResultCache.clear();
+      resolve();
+    };
+    tx.onerror = () => reject(tx.error || new Error("Library transaction failed"));
+    tx.onabort = () => reject(tx.error || new Error("Library transaction was aborted"));
+  });
+}
+
+function normalizeStoredFavoriteComment(
+  raw: unknown,
+  fallbackId: number,
+): FavoriteCommentRecord | null {
+  try {
+    const source = (raw ?? {}) as Partial<FavoriteCommentRecord>;
+    const timestamp = now();
+    const normalized = normalizeFavoriteComment(source, timestamp);
+    const savedAt = Math.max(0, toInt(source.savedAt, timestamp));
+    return {
+      ...normalized,
+      id: Math.max(1, toInt(source.id, fallbackId)),
+      savedAt,
+      updatedAt: Math.max(savedAt, toInt(source.updatedAt, savedAt)),
+      deletedAt: toIntOrNull(source.deletedAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStoredArticleFolder(
+  raw: unknown,
+  fallbackId: number,
+): ArticleFolderRecord | null {
+  const source = (raw ?? {}) as Partial<ArticleFolderRecord>;
+  const name = normalizeText(source.name);
+  if (!name) return null;
+  const id = Math.max(1, toInt(source.id, fallbackId));
+  const createdAt = Math.max(0, toInt(source.createdAt, now()));
+  return {
+    id,
+    name,
+    description: normalizeText(source.description) || null,
+    sortOrder: Math.max(1, toInt(source.sortOrder, fallbackId)),
+    deletedAt: toIntOrNull(source.deletedAt),
+    createdAt,
+    updatedAt: Math.max(createdAt, toInt(source.updatedAt, createdAt)),
+  };
+}
+
 async function readState() {
   if (cachedState) return cachedState;
   const db = await openDatabase();
@@ -1308,13 +1559,85 @@ async function readState() {
 
       const raw = record.value as Partial<LocalState>;
       const base = defaultState();
+      const comments = (raw.comments ?? [])
+        .map((comment, index) => normalizeStoredFavoriteComment(comment, index + 1))
+        .filter((comment): comment is FavoriteCommentRecord => Boolean(comment));
+      const nextCommentId = comments.reduce(
+        (maximum, comment) => Math.max(maximum, comment.id + 1),
+        1,
+      );
+      const hasStoredArticleFolders = Object.prototype.hasOwnProperty.call(
+        raw,
+        "articleFolders",
+      );
+      let articleFolders = (raw.articleFolders ?? [])
+        .map((folder, index) => normalizeStoredArticleFolder(folder, index + 1))
+        .filter((folder): folder is ArticleFolderRecord => Boolean(folder));
+      if (!hasStoredArticleFolders) {
+        const legacyFolderIds = new Set(
+          (raw.articles ?? []).flatMap((article) =>
+            Array.isArray(article.folderIds)
+              ? article.folderIds.map((id) => toInt(id)).filter((id) => id > 0)
+              : [],
+          ),
+        );
+        articleFolders = (raw.folders ?? [])
+          .filter((folder) => legacyFolderIds.has(toInt(folder.id)))
+          .map((folder, index) =>
+            normalizeStoredArticleFolder(
+              {
+                id: toInt(folder.id),
+                name: folder.name,
+                description: folder.description,
+                sortOrder: index + 1,
+                deletedAt: null,
+                createdAt: folder.createdAt,
+                updatedAt: folder.updatedAt,
+              },
+              index + 1,
+            ),
+          )
+          .filter((folder): folder is ArticleFolderRecord => Boolean(folder));
+      }
+      const articleFolderIds = new Set(
+        articleFolders.filter((folder) => folder.deletedAt === null).map((folder) => folder.id),
+      );
+      const articles = (raw.articles ?? [])
+        .map((article, index) => {
+          const normalizedArticle = normalizeStoredFavoriteArticle(article, index + 1, now());
+          return normalizedArticle
+            ? {
+                ...normalizedArticle,
+                deletedAt: toIntOrNull((article as Partial<FavoriteArticleRecord>).deletedAt),
+              }
+            : null;
+        })
+        .map((article) =>
+          article
+            ? {
+                ...article,
+                folderIds: article.folderIds.filter((id) => articleFolderIds.has(id)),
+              }
+            : article,
+        )
+        .filter((article): article is FavoriteArticleRecord => Boolean(article));
+      const nextArticleId = articles.reduce(
+        (maximum, article) => Math.max(maximum, article.id + 1),
+        1,
+      );
       const normalized: LocalState = {
         counters: {
           folder: raw.counters?.folder ?? base.counters.folder,
+          articleFolder: Math.max(
+            raw.counters?.articleFolder ?? 1,
+            articleFolders.reduce((maximum, folder) => Math.max(maximum, folder.id + 1), 1),
+          ),
           video: raw.counters?.video ?? base.counters.video,
           folderItem: raw.counters?.folderItem ?? base.counters.folderItem,
           tag: raw.counters?.tag ?? base.counters.tag,
-          videoTag: raw.counters?.videoTag ?? base.counters.videoTag
+          videoTag: raw.counters?.videoTag ?? base.counters.videoTag,
+          comment: Math.max(raw.counters?.comment ?? 1, nextCommentId),
+          article: Math.max(raw.counters?.article ?? 1, nextArticleId)
         },
         folders: (raw.folders ?? []).map((folder) => ({
           ...folder,
@@ -1323,6 +1646,7 @@ async function readState() {
               ? null
               : toInt(folder.remoteMediaId)
         })),
+        articleFolders,
         videos: (raw.videos ?? []).map((video) => ({
           ...video,
           partition: normalizeVideoPartition((video as Partial<VideoRecord>).partition),
@@ -1355,6 +1679,8 @@ async function readState() {
             toInt((item as Partial<FollowedUpRecord>).updatedAt, 0)
           ),
         })).filter((item) => item.uid > 0 && item.name),
+        comments,
+        articles,
         syncMeta: {
           tagEnrichment: normalizeTagEnrichmentMeta(raw.syncMeta?.tagEnrichment),
           bidirectionalSync: {
@@ -1420,16 +1746,17 @@ async function writeState(state: LocalState) {
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
-    const request = store.put({ key: STATE_KEY, value: state });
+    store.put({ key: STATE_KEY, value: state });
 
-    request.onsuccess = () => {
+    tx.oncomplete = () => {
       cachedState = state;
       stateRevision += 1;
       cachedIndexes = null;
       videoQueryResultCache.clear();
       resolve();
     };
-    request.onerror = () => reject(request.error || new Error("Write state failed"));
+    tx.onerror = () => reject(tx.error || new Error("Write state failed"));
+    tx.onabort = () => reject(tx.error || new Error("Write state was aborted"));
   });
 }
 
@@ -1678,6 +2005,12 @@ function buildLocalStateIndexes(state: LocalState): LocalStateIndexes {
     sortedDeletedVideoIds,
     sortedActiveVideoIdsByFolderId
   };
+}
+
+function activeArticleFolders(state: LocalState) {
+  return (state.articleFolders ?? [])
+    .filter((folder) => folder.deletedAt === null)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
 }
 
 function getLocalStateIndexes(state: LocalState) {
@@ -2267,6 +2600,22 @@ function isRetryableStatus(status: number) {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function listActiveArticleFoldersWithCounts(state: LocalState) {
+  const activeIds = new Set(activeArticleFolders(state).map((folder) => folder.id));
+  const countByFolderId = new Map<number, number>();
+  for (const article of state.articles ?? []) {
+    if (article.deletedAt != null) continue;
+    for (const folderId of article.folderIds ?? []) {
+      if (!activeIds.has(folderId)) continue;
+      countByFolderId.set(folderId, (countByFolderId.get(folderId) ?? 0) + 1);
+    }
+  }
+  return activeArticleFolders(state).map((folder) => ({
+    ...folder,
+    itemCount: countByFolderId.get(folder.id) ?? 0,
+  }));
+}
+
 function parseRetryAfterMs(value: unknown, referenceTime = now()) {
   const text = normalizeText(value);
   if (!text) return null;
@@ -2336,6 +2685,17 @@ type ImportVideoRow = {
   customTags: string[];
   systemTags: string[];
 };
+
+type ImportCommentRow = NormalizedFavoriteComment & {
+  savedAt: number;
+  updatedAt: number;
+};
+
+type ImportArticleRow = SharedFavoriteArticleRecord & {
+  folderNames: string[];
+};
+
+type ImportFollowedUpRow = NormalizedFollowedUpRecord;
 
 function uniqueTextList(items: unknown[]) {
   const seen = new Set<string>();
@@ -2412,7 +2772,11 @@ function parseCsvRows(content: string) {
 export function parseImportRows(format: "json" | "csv", content: string) {
   const nowTs = now();
   const rows: ImportVideoRow[] = [];
+  const comments: ImportCommentRow[] = [];
+  const articles: ImportArticleRow[] = [];
+  const followedUps: ImportFollowedUpRow[] = [];
   let skipped = 0;
+  let commentsSkipped = 0;
 
   const pushRow = (row: Partial<ImportVideoRow>) => {
     const bvid = normalizeText(row.bvid);
@@ -2444,12 +2808,24 @@ export function parseImportRows(format: "json" | "csv", content: string) {
     const parsed = JSON.parse(content) as Record<string, unknown>;
     const jsonVideos = Array.isArray(parsed?.videos) ? parsed.videos as Array<Record<string, unknown>> : [];
     const jsonFolders = Array.isArray(parsed?.folders) ? parsed.folders as Array<Record<string, unknown>> : [];
+    const jsonArticleFolders = Array.isArray(parsed?.articleFolders)
+      ? parsed.articleFolders as Array<Record<string, unknown>>
+      : [];
     const jsonFolderItems = Array.isArray(parsed?.folderItems)
       ? parsed.folderItems as Array<Record<string, unknown>>
       : [];
     const jsonTags = Array.isArray(parsed?.tags) ? parsed.tags as Array<Record<string, unknown>> : [];
     const jsonVideoTags = Array.isArray(parsed?.videoTags)
       ? parsed.videoTags as Array<Record<string, unknown>>
+      : [];
+    const jsonComments = Array.isArray(parsed?.comments)
+      ? parsed.comments as Array<Record<string, unknown>>
+      : [];
+    const jsonArticles = Array.isArray(parsed?.articles)
+      ? parsed.articles as Array<Record<string, unknown>>
+      : [];
+    const jsonFollowedUps = Array.isArray(parsed?.followedUps)
+      ? parsed.followedUps as Array<Record<string, unknown>>
       : [];
 
     const folderNameById = new Map<number, string>();
@@ -2458,6 +2834,59 @@ export function parseImportRows(format: "json" | "csv", content: string) {
       const name = normalizeText(folder.name);
       if (Number.isFinite(id) && id > 0 && name) {
         folderNameById.set(Math.trunc(id), name);
+      }
+    }
+    const articleFolderNameById = new Map<number, string>();
+    for (const folder of jsonArticleFolders) {
+      const id = Number(folder.id);
+      const name = normalizeText(folder.name);
+      if (Number.isFinite(id) && id > 0 && name) {
+        articleFolderNameById.set(Math.trunc(id), name);
+      }
+    }
+
+    for (const followedUp of jsonFollowedUps) {
+      const normalized = normalizeFollowedUpRecord(followedUp);
+      if (normalized) followedUps.push(normalized);
+    }
+
+    for (const comment of jsonComments) {
+      try {
+        const normalized = normalizeFavoriteComment(comment, nowTs);
+        const savedAt = parseTimestampInput(
+          comment.savedAt ?? comment.savedAtText,
+        ) ?? nowTs;
+        comments.push({
+          ...normalized,
+          savedAt,
+          updatedAt:
+            parseTimestampInput(comment.updatedAt ?? comment.updatedAtText) ??
+            savedAt,
+        });
+      } catch {
+        commentsSkipped += 1;
+      }
+    }
+
+    for (const article of jsonArticles) {
+      try {
+        const normalized = normalizeFavoriteArticle(article, nowTs);
+        const explicitFolderNames = Array.isArray(article.folders)
+          ? uniqueTextList(article.folders)
+          : [];
+        const folderNames = explicitFolderNames.length > 0
+          ? explicitFolderNames
+          : normalized.folderIds
+              .map(
+                (folderId) =>
+                  articleFolderNameById.get(folderId) ||
+                  folderNameById.get(folderId) ||
+                  "",
+              )
+              .filter(Boolean);
+        articles.push({ ...normalized, folderNames });
+      } catch {
+        // Ignore malformed article rows while preserving the rest of the backup.
       }
     }
 
@@ -2536,11 +2965,11 @@ export function parseImportRows(format: "json" | "csv", content: string) {
         systemTags: systemTagsByVideoId.get(key) ?? []
       });
     }
-    return { rows, skipped };
+    return { rows, skipped, comments, commentsSkipped, articles, followedUps };
   }
 
   const csvRows = parseCsvRows(content);
-  if (csvRows.length === 0) return { rows, skipped };
+  if (csvRows.length === 0) return { rows, skipped, comments, commentsSkipped, articles, followedUps };
   const [header, ...bodyRows] = csvRows;
   const indexByName = new Map<string, number>();
   header.forEach((name, idx) => indexByName.set(normalizeText(name), idx));
@@ -2573,7 +3002,7 @@ export function parseImportRows(format: "json" | "csv", content: string) {
       systemTags: parsePipeList(pick(row, "systemTags"))
     });
   }
-  return { rows, skipped };
+  return { rows, skipped, comments, commentsSkipped, articles, followedUps };
 }
 
 class BiliRequestError extends Error {
@@ -3543,6 +3972,1062 @@ async function runFolderAiCategoriesInState(state: LocalState, folderId: number)
     state,
     applyFolderCategoryAttempt(previousAnalysis, folderRecord)
   );
+}
+
+function normalizeAiOrganizerTask(raw: unknown): AiOrganizerTaskRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Partial<AiOrganizerTaskRecord>;
+  const id = normalizeText(source.id);
+  if (!id) return null;
+  const validStages = new Set<AiOrganizerStage>([
+    "planning",
+    "classifying",
+    "ready",
+    "failed",
+    "cancelled",
+    "completed",
+    "undone",
+  ]);
+  const stage = validStages.has(source.stage as AiOrganizerStage)
+    ? (source.stage as AiOrganizerStage)
+    : "failed";
+  const timestamp = now();
+  return {
+    version: 1,
+    id,
+    stage,
+    paused: Boolean(source.paused),
+    config: normalizeAiOrganizerConfig(source.config),
+    sourceHash: normalizeText(source.sourceHash),
+    sourceVideoIds: Array.isArray(source.sourceVideoIds)
+      ? source.sourceVideoIds.map((item) => toInt(item)).filter((item) => item > 0)
+      : [],
+    sourceFolderName: normalizeText(source.sourceFolderName) || null,
+    total: Math.max(0, toInt(source.total)),
+    skippedInvalid: Math.max(0, toInt(source.skippedInvalid)),
+    previousAiRelationCount: Math.max(
+      0,
+      toInt(source.previousAiRelationCount),
+    ),
+    cursor: Math.max(0, toInt(source.cursor)),
+    taxonomy: Array.isArray(source.taxonomy) ? source.taxonomy : [],
+    reviewFolderName: normalizeText(source.reviewFolderName) || "待确认",
+    assignments: Array.isArray(source.assignments) ? source.assignments : [],
+    invalidResults: Math.max(0, toInt(source.invalidResults)),
+    provider: normalizeText(source.provider),
+    model: normalizeText(source.model),
+    baseUrl: normalizeText(source.baseUrl),
+    retryAttempt: Math.max(0, toInt(source.retryAttempt)),
+    nextRunAt: toIntOrNull(source.nextRunAt),
+    startedAt: Math.max(0, toInt(source.startedAt, timestamp)),
+    updatedAt: Math.max(0, toInt(source.updatedAt, timestamp)),
+    finishedAt: toIntOrNull(source.finishedAt),
+    appliedAt: toIntOrNull(source.appliedAt),
+    undoneAt: toIntOrNull(source.undoneAt),
+    lastError: normalizeText(source.lastError) || null,
+    snapshotKey:
+      normalizeText(source.snapshotKey) || `${AI_ORGANIZER_SNAPSHOT_PREFIX}${id}`,
+    applySummary: source.applySummary ?? null,
+    undo: source.undo ?? null,
+  };
+}
+
+async function readAiOrganizerTask() {
+  if (cachedAiOrganizerTask !== undefined) {
+    return cachedAiOrganizerTask
+      ? cloneStoredValue(cachedAiOrganizerTask)
+      : null;
+  }
+  cachedAiOrganizerTask = normalizeAiOrganizerTask(
+    await readStoredValue<AiOrganizerTaskRecord>(AI_ORGANIZER_TASK_KEY),
+  );
+  return cachedAiOrganizerTask
+    ? cloneStoredValue(cachedAiOrganizerTask)
+    : null;
+}
+
+function withAiOrganizerQueue<T>(work: () => Promise<T>) {
+  const task = aiOrganizerQueue.then(work);
+  aiOrganizerQueue = task.then(
+    () => undefined,
+    () => undefined,
+  );
+  return task;
+}
+
+async function updateAiOrganizerTask(
+  runId: string,
+  mutate: (task: AiOrganizerTaskRecord) => AiOrganizerTaskRecord,
+) {
+  return withAiOrganizerQueue(async () => {
+    const current = await readAiOrganizerTask();
+    if (!current || current.id !== runId) return null;
+    const next = normalizeAiOrganizerTask(mutate(cloneStoredValue(current)));
+    if (!next) throw new Error("AI organizer task became invalid");
+    await writeStoredValues([{ key: AI_ORGANIZER_TASK_KEY, value: next }]);
+    cachedAiOrganizerTask = next;
+    return cloneStoredValue(next);
+  });
+}
+
+function clearAiOrganizerAlarm() {
+  if (chrome.alarms?.clear) chrome.alarms.clear(AI_ORGANIZER_ALARM);
+}
+
+function scheduleAiOrganizerAlarm(task: AiOrganizerTaskRecord | null) {
+  if (!chrome.alarms?.create || !task) return;
+  if (
+    task.paused ||
+    (task.stage !== "planning" && task.stage !== "classifying")
+  ) {
+    clearAiOrganizerAlarm();
+    return;
+  }
+  const when = Math.max(now() + 1_000, task.nextRunAt ?? now() + 1_000);
+  chrome.alarms.create(AI_ORGANIZER_ALARM, { when });
+}
+
+function scheduleAiOrganizerRequestWatchdog() {
+  if (!chrome.alarms?.create) return;
+  chrome.alarms.create(AI_ORGANIZER_ALARM, {
+    when: now() + AI_ORGANIZER_REQUEST_TIMEOUT_MS + AI_ORGANIZER_WATCHDOG_GRACE_MS,
+  });
+}
+
+function waitMs(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function buildAiOrganizerHashPayload(state: LocalState, sourceVideoIds: number[]) {
+  const sourceIds = new Set(sourceVideoIds);
+  const aiFolderIds = new Set(
+    state.folders
+      .filter((folder) => folder.origin === "ai")
+      .map((folder) => folder.id),
+  );
+  return JSON.stringify({
+    sourceVideoIds,
+    videos: state.videos
+      .filter((video) => sourceIds.has(video.id))
+      .map((video) => [video.id, video.bvid, video.deletedAt]),
+    aiFolders: state.folders
+      .filter((folder) => aiFolderIds.has(folder.id))
+      .map((folder) => [
+        folder.id,
+        folder.name,
+        folder.deletedAt,
+        folder.organizerId,
+        folder.taxonomyKey,
+      ]),
+    aiFolderItems: state.folderItems
+      .filter(
+        (item) =>
+          sourceIds.has(item.videoId) &&
+          (item.origin === "ai" || aiFolderIds.has(item.folderId)),
+      )
+      .map((item) => [
+        item.id,
+        item.folderId,
+        item.videoId,
+        item.origin,
+        item.organizerId,
+      ]),
+  });
+}
+
+async function computeAiOrganizerSourceHash(
+  state: LocalState,
+  sourceVideoIds: number[],
+) {
+  const payload = buildAiOrganizerHashPayload(state, sourceVideoIds);
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(payload),
+    );
+    return Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+  }
+  let hash = 2166136261;
+  for (let index = 0; index < payload.length; index += 1) {
+    hash ^= payload.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function buildAiOrganizerSourceSelection(state: LocalState, config: AiOrganizerConfig) {
+  const activeVideos = state.videos.filter(
+    (video) => video.deletedAt === null,
+  );
+  const scopedIds =
+    config.scope === "folder" && config.folderId
+      ? new Set(
+          state.folderItems
+            .filter((item) => item.folderId === config.folderId)
+            .map((item) => item.videoId),
+        )
+      : null;
+  const scopedVideos = scopedIds
+    ? activeVideos.filter((video) => scopedIds.has(video.id))
+    : activeVideos;
+  const sourceVideoIds = scopedVideos
+    .filter((video) => !video.isInvalid)
+    .map((video) => video.id)
+    .sort((left, right) => left - right);
+  const sourceVideoIdSet = new Set(sourceVideoIds);
+  const sourceFolder =
+    config.scope === "folder"
+      ? state.folders.find(
+          (folder) => folder.id === config.folderId && folder.deletedAt === null,
+        ) ?? null
+      : null;
+  if (config.scope === "folder" && !sourceFolder) {
+    throw new Error("Selected folder no longer exists");
+  }
+  if (sourceVideoIds.length === 0) {
+    throw new Error("No valid videos are available for AI organization");
+  }
+  return {
+    sourceVideoIds,
+    sourceFolderName: sourceFolder?.name ?? null,
+    skippedInvalid: scopedVideos.length - sourceVideoIds.length,
+    previousAiRelationCount: state.folderItems.filter(
+      (item) => item.origin === "ai" && sourceVideoIdSet.has(item.videoId),
+    ).length,
+  };
+}
+
+function buildAiOrganizerVideoContext(
+  state: LocalState,
+  sourceVideoIds: number[],
+  startIndex = 0,
+  limit = sourceVideoIds.length,
+) {
+  const videoById = new Map(state.videos.map((video) => [video.id, video]));
+  const folderById = new Map(
+    state.folders
+      .filter((folder) => folder.deletedAt === null)
+      .map((folder) => [folder.id, folder]),
+  );
+  const tagById = new Map(
+    state.tags
+      .filter((tag) => tag.archivedAt === null)
+      .map((tag) => [tag.id, tag]),
+  );
+  const folderNamesByVideoId = new Map<number, string[]>();
+  for (const item of state.folderItems) {
+    const folder = folderById.get(item.folderId);
+    if (!folder) continue;
+    const bucket = folderNamesByVideoId.get(item.videoId) ?? [];
+    if (!bucket.includes(folder.name)) bucket.push(folder.name);
+    folderNamesByVideoId.set(item.videoId, bucket);
+  }
+  const tagsByVideoId = new Map<number, string[]>();
+  for (const item of state.videoTags) {
+    const tag = tagById.get(item.tagId);
+    if (!tag) continue;
+    const bucket = tagsByVideoId.get(item.videoId) ?? [];
+    if (!bucket.includes(tag.name)) bucket.push(tag.name);
+    tagsByVideoId.set(item.videoId, bucket);
+  }
+
+  return sourceVideoIds.slice(startIndex, startIndex + limit).map((videoId, offset) => {
+    const video = videoById.get(videoId);
+    if (!video) throw new Error(`Snapshot video ${videoId} is missing`);
+    return {
+      itemKey: `item-${String(startIndex + offset + 1).padStart(6, "0")}`,
+      videoId,
+      title: video.title,
+      uploader: video.uploader,
+      description: video.description,
+      partition: video.partition,
+      tags: tagsByVideoId.get(videoId) ?? [],
+      currentFolders: folderNamesByVideoId.get(videoId) ?? [],
+    };
+  });
+}
+
+function buildAiOrganizerTaxonomyInput(
+  state: LocalState,
+  task: AiOrganizerTaskRecord,
+) {
+  const allItems = buildAiOrganizerVideoContext(
+    state,
+    task.sourceVideoIds,
+    0,
+    task.sourceVideoIds.length,
+  );
+  const sampleCount = Math.min(120, allItems.length);
+  const samples = Array.from({ length: sampleCount }, (_, index) => {
+    const sourceIndex = Math.min(
+      allItems.length - 1,
+      Math.floor((index * allItems.length) / sampleCount),
+    );
+    const item = allItems[sourceIndex];
+    return {
+      title: item.title,
+      uploader: item.uploader,
+      description: normalizeText(item.description).slice(0, 280),
+      partition: item.partition,
+      tags: item.tags.slice(0, 12),
+      currentFolders: item.currentFolders.slice(0, 8),
+    };
+  });
+  const partitionCounts: Record<string, number> = {};
+  const tagCounts: Record<string, number> = {};
+  for (const item of allItems) {
+    const partition = normalizeText(item.partition) || "未知";
+    partitionCounts[partition] = (partitionCounts[partition] ?? 0) + 1;
+    for (const tag of item.tags) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+  }
+  const existingFolders = listActiveFoldersWithCounts(state).map((folder) => ({
+    name: folder.name,
+    description: folder.description,
+    itemCount: folder.itemCount,
+  }));
+  return {
+    config: task.config,
+    totalVideos: task.total,
+    existingFolders,
+    partitionCounts,
+    tagCounts: Object.fromEntries(
+      Object.entries(tagCounts)
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 80),
+    ),
+    samples,
+  };
+}
+
+async function readAiOrganizerSnapshot(task: AiOrganizerTaskRecord) {
+  const snapshot = await readStoredValue<AiOrganizerSnapshotRecord>(task.snapshotKey);
+  if (!snapshot || snapshot.runId !== task.id || !snapshot.state) {
+    throw new Error("AI organizer source snapshot is missing");
+  }
+  return snapshot;
+}
+
+async function requestAiOrganizerJson(
+  aiMeta: AiMeta,
+  prompt: string,
+  options: { maxTokens: number; temperature: number },
+) {
+  const controller = new AbortController();
+  let timedOut = false;
+  aiOrganizerRequestAbortController = controller;
+  scheduleAiOrganizerRequestWatchdog();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, AI_ORGANIZER_REQUEST_TIMEOUT_MS);
+  try {
+    return await requestAiJson(aiMeta, prompt, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error("AI provider request timed out after 90 seconds");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (aiOrganizerRequestAbortController === controller) {
+      aiOrganizerRequestAbortController = null;
+    }
+  }
+}
+
+function buildAiOrganizerStatus(task: AiOrganizerTaskRecord | null) {
+  if (!task) {
+    return {
+      phase: "idle",
+      running: false,
+      paused: false,
+      total: 0,
+      processed: 0,
+      progress: 0,
+      taxonomy: [],
+      lowConfidence: 0,
+      invalidResults: 0,
+      canApply: false,
+      canUndo: false,
+      lastError: null,
+    };
+  }
+  const waiting =
+    !task.paused &&
+    (task.stage === "planning" || task.stage === "classifying") &&
+    Boolean(task.lastError && task.nextRunAt && task.nextRunAt > now());
+  const phase = task.paused
+    ? "paused"
+    : waiting
+      ? "waiting"
+      : task.stage;
+  const counts = new Map<string, number>();
+  let lowConfidence = 0;
+  for (const assignment of task.assignments) {
+    const key = assignment.lowConfidence ? REVIEW_FOLDER_KEY : assignment.folderKey;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (assignment.lowConfidence) lowConfidence += 1;
+  }
+  const taxonomy = task.taxonomy.map((folder) => ({
+    ...folder,
+    count: counts.get(folder.key) ?? 0,
+  }));
+  if (lowConfidence > 0) {
+    taxonomy.push({
+      key: REVIEW_FOLDER_KEY,
+      name: task.reviewFolderName,
+      description: "AI 置信度不足或返回不完整的视频",
+      include: "",
+      exclude: "",
+      count: lowConfidence,
+    });
+  }
+  return {
+    id: task.id,
+    phase,
+    stage: task.stage,
+    running:
+      !task.paused &&
+      (task.stage === "planning" || task.stage === "classifying"),
+    paused: task.paused,
+    config: task.config,
+    sourceFolderName: task.sourceFolderName,
+    total: task.total,
+    processed: task.assignments.length,
+    progress:
+      task.total > 0
+        ? Math.min(100, Math.round((task.assignments.length / task.total) * 100))
+        : 0,
+    skippedInvalid: task.skippedInvalid,
+    estimatedFolderLinksAdded: task.total,
+    estimatedFolderLinksRemoved: task.previousAiRelationCount,
+    taxonomy,
+    lowConfidence,
+    invalidResults: task.invalidResults,
+    provider: task.provider,
+    model: task.model,
+    retryAttempt: task.retryAttempt,
+    nextRunAt: task.nextRunAt,
+    startedAt: task.startedAt,
+    updatedAt: task.updatedAt,
+    finishedAt: task.finishedAt,
+    appliedAt: task.appliedAt,
+    undoneAt: task.undoneAt,
+    canApply: task.stage === "ready" && !task.paused,
+    canUndo: task.stage === "completed" && Boolean(task.undo) && !task.undoneAt,
+    lastError: task.lastError,
+    applySummary: task.applySummary,
+  };
+}
+
+async function processAiOrganizerPlanning(task: AiOrganizerTaskRecord) {
+  const snapshot = await readAiOrganizerSnapshot(task);
+  const liveState = await readState();
+  const aiMeta = ensureAiMeta(liveState);
+  if (!aiMeta.enabled) throw new Error("AI organization is disabled in settings");
+  validateAiSettings(aiMeta);
+  if (
+    aiMeta.provider !== task.provider ||
+    aiMeta.model !== task.model ||
+    aiMeta.baseUrl !== task.baseUrl
+  ) {
+    throw new Error("AI provider or model changed. Restore the original setting or start a new task");
+  }
+  const prompt = buildAiOrganizerTaxonomyPrompt(
+    buildAiOrganizerTaxonomyInput(snapshot.state, task),
+  );
+  const payload = await requestAiOrganizerJson(aiMeta, prompt, {
+    maxTokens: 4096,
+    temperature: 0.15,
+  });
+  const normalizedTaxonomy = normalizeAiOrganizerTaxonomy(
+    payload,
+    task.config.folderCount,
+  );
+  const resolvedNames = resolveAiOrganizerFolderNames(
+    normalizedTaxonomy,
+    snapshot.state.folders,
+    task.config.locale === "en-US" ? "Needs review" : "待确认",
+  );
+  return updateAiOrganizerTask(task.id, (current) => {
+    if (current.stage !== "planning" || current.paused) return current;
+    return {
+      ...current,
+      stage: "classifying",
+      taxonomy: resolvedNames.taxonomy,
+      reviewFolderName: resolvedNames.reviewFolderName,
+      retryAttempt: 0,
+      nextRunAt: now() + AI_ORGANIZER_BATCH_DELAY_MS,
+      updatedAt: now(),
+      lastError: null,
+    };
+  });
+}
+
+async function processAiOrganizerBatch(task: AiOrganizerTaskRecord) {
+  if (task.cursor >= task.sourceVideoIds.length) {
+    return updateAiOrganizerTask(task.id, (current) => ({
+      ...current,
+      stage: "ready",
+      nextRunAt: null,
+      finishedAt: now(),
+      updatedAt: now(),
+      lastError: null,
+    }));
+  }
+  const snapshot = await readAiOrganizerSnapshot(task);
+  const liveState = await readState();
+  const aiMeta = ensureAiMeta(liveState);
+  if (!aiMeta.enabled) throw new Error("AI organization is disabled in settings");
+  validateAiSettings(aiMeta);
+  if (
+    aiMeta.provider !== task.provider ||
+    aiMeta.model !== task.model ||
+    aiMeta.baseUrl !== task.baseUrl
+  ) {
+    throw new Error("AI provider or model changed. Restore the original setting or start a new task");
+  }
+  const batch = buildAiOrganizerVideoContext(
+    snapshot.state,
+    task.sourceVideoIds,
+    task.cursor,
+    task.config.batchSize,
+  );
+  const prompt = buildAiOrganizerClassificationPrompt({
+    taxonomy: task.taxonomy,
+    items: batch,
+    instructions: task.config.instructions,
+  });
+  const payload = await requestAiOrganizerJson(aiMeta, prompt, {
+    maxTokens: 4096,
+    temperature: 0.1,
+  });
+  const normalized = normalizeAiOrganizerAssignments(
+    payload,
+    batch.map((item) => ({ itemKey: item.itemKey, videoId: item.videoId })),
+    task.taxonomy,
+    task.config.confidenceThreshold,
+  );
+  return updateAiOrganizerTask(task.id, (current) => {
+    if (
+      current.stage !== "classifying" ||
+      current.cursor !== task.cursor ||
+      current.paused
+    ) {
+      return current;
+    }
+    const assignments = [...current.assignments, ...normalized.assignments];
+    const cursor = Math.min(current.total, current.cursor + batch.length);
+    const completed = cursor >= current.total;
+    return {
+      ...current,
+      stage: completed ? "ready" : "classifying",
+      cursor,
+      assignments,
+      invalidResults: current.invalidResults + normalized.invalid,
+      retryAttempt: 0,
+      nextRunAt: completed ? null : now() + AI_ORGANIZER_BATCH_DELAY_MS,
+      finishedAt: completed ? now() : null,
+      updatedAt: now(),
+      lastError: null,
+    };
+  });
+}
+
+async function handleAiOrganizerStepFailure(
+  task: AiOrganizerTaskRecord,
+  error: unknown,
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  const updated = await updateAiOrganizerTask(task.id, (current) => {
+    if (current.paused) return current;
+    if (current.stage !== "planning" && current.stage !== "classifying") {
+      return current;
+    }
+    const retryAttempt = current.retryAttempt + 1;
+    const exhausted = retryAttempt >= AI_ORGANIZER_MAX_RETRY_ATTEMPTS;
+    return {
+      ...current,
+      stage: exhausted ? "failed" : current.stage,
+      retryAttempt,
+      nextRunAt: exhausted
+        ? null
+        : now() + Math.min(60_000, 5_000 * 2 ** (retryAttempt - 1)),
+      finishedAt: exhausted ? now() : current.finishedAt,
+      updatedAt: now(),
+      lastError: message,
+    };
+  });
+  scheduleAiOrganizerAlarm(updated);
+}
+
+function triggerAiOrganizerWorker() {
+  if (aiOrganizerTask) return aiOrganizerTask;
+  aiOrganizerTask = (async () => {
+    while (true) {
+      const task = await readAiOrganizerTask();
+      if (
+        !task ||
+        task.paused ||
+        (task.stage !== "planning" && task.stage !== "classifying")
+      ) {
+        scheduleAiOrganizerAlarm(task);
+        return;
+      }
+      const wait = Math.max(0, (task.nextRunAt ?? 0) - now());
+      if (wait > 2_000) {
+        scheduleAiOrganizerAlarm(task);
+        return;
+      }
+      if (wait > 0) await waitMs(wait);
+      const latestTask = await readAiOrganizerTask();
+      if (
+        !latestTask ||
+        latestTask.id !== task.id ||
+        latestTask.paused ||
+        (latestTask.stage !== "planning" && latestTask.stage !== "classifying")
+      ) {
+        scheduleAiOrganizerAlarm(latestTask);
+        return;
+      }
+      try {
+        const updated =
+          latestTask.stage === "planning"
+            ? await processAiOrganizerPlanning(latestTask)
+            : await processAiOrganizerBatch(latestTask);
+        if (!updated || updated.paused) return;
+        scheduleAiOrganizerAlarm(updated);
+      } catch (error) {
+        await handleAiOrganizerStepFailure(latestTask, error);
+        return;
+      }
+    }
+  })().finally(() => {
+    aiOrganizerTask = null;
+  });
+  return aiOrganizerTask;
+}
+
+async function startAiOrganizerTask(rawConfig: unknown) {
+  if (aiOrganizerStartPending) throw new Error("AI organization is already starting");
+  if (aiOrganizerApplyPending) throw new Error("AI organization is busy");
+  aiOrganizerStartPending = true;
+  try {
+    const existing = await readAiOrganizerTask();
+    if (
+      existing &&
+      (existing.stage === "planning" || existing.stage === "classifying")
+    ) {
+      throw new Error("AI organization is already running");
+    }
+    if (
+      existing &&
+      (existing.stage === "ready" ||
+        (existing.stage === "completed" && existing.undo && !existing.undoneAt)) &&
+      !(rawConfig as { replaceExisting?: unknown })?.replaceExisting
+    ) {
+      throw new Error(
+        "The current AI plan or undo record must be explicitly replaced",
+      );
+    }
+    const config = normalizeAiOrganizerConfig(rawConfig);
+    const prepared = await withState(async (state) => {
+      const aiMeta = ensureAiMeta(state);
+      if (!aiMeta.enabled) throw new Error("Enable AI organization in AI settings first");
+      validateAiSettings(aiMeta);
+      const selection = buildAiOrganizerSourceSelection(state, config);
+      const sourceHash = await computeAiOrganizerSourceHash(
+        state,
+        selection.sourceVideoIds,
+      );
+      return {
+        snapshotState: cloneStoredValue(state),
+        sourceHash,
+        selection,
+        provider: aiMeta.provider,
+        model: aiMeta.model,
+        baseUrl: aiMeta.baseUrl,
+      };
+    }, false);
+    prepared.snapshotState.ai.apiKey = "";
+    prepared.snapshotState.syncMeta.webdav.password = "";
+    const estimatedBytes = JSON.stringify(prepared.snapshotState).length * 2;
+    if (navigator.storage?.estimate) {
+      const estimate = await navigator.storage.estimate();
+      const available = Math.max(0, (estimate.quota ?? 0) - (estimate.usage ?? 0));
+      if (estimate.quota && available < estimatedBytes * 2) {
+        throw new Error("Not enough browser storage is available for a safe AI rollback snapshot");
+      }
+    }
+    const timestamp = now();
+    const id = `ai-${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
+    const snapshotKey = `${AI_ORGANIZER_SNAPSHOT_PREFIX}${id}`;
+    const task: AiOrganizerTaskRecord = {
+      version: 1,
+      id,
+      stage: "planning",
+      paused: false,
+      config,
+      sourceHash: prepared.sourceHash,
+      sourceVideoIds: prepared.selection.sourceVideoIds,
+      sourceFolderName: prepared.selection.sourceFolderName,
+      total: prepared.selection.sourceVideoIds.length,
+      skippedInvalid: prepared.selection.skippedInvalid,
+      previousAiRelationCount: prepared.selection.previousAiRelationCount,
+      cursor: 0,
+      taxonomy: [],
+      reviewFolderName: "待确认",
+      assignments: [],
+      invalidResults: 0,
+      provider: prepared.provider,
+      model: prepared.model,
+      baseUrl: prepared.baseUrl,
+      retryAttempt: 0,
+      nextRunAt: timestamp,
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      finishedAt: null,
+      appliedAt: null,
+      undoneAt: null,
+      lastError: null,
+      snapshotKey,
+      applySummary: null,
+      undo: null,
+    };
+    const snapshot: AiOrganizerSnapshotRecord = {
+      version: 1,
+      runId: id,
+      createdAt: timestamp,
+      state: prepared.snapshotState,
+    };
+    await writeStoredValues([
+      { key: snapshotKey, value: snapshot },
+      { key: AI_ORGANIZER_TASK_KEY, value: task },
+    ]);
+    cachedAiOrganizerTask = undefined;
+    const [persistedSnapshot, persistedTask] = await Promise.all([
+      readStoredValue<AiOrganizerSnapshotRecord>(snapshotKey),
+      readStoredValue<AiOrganizerTaskRecord>(AI_ORGANIZER_TASK_KEY).then(
+        normalizeAiOrganizerTask,
+      ),
+    ]);
+    if (
+      persistedSnapshot?.runId !== id ||
+      !persistedSnapshot.state ||
+      persistedTask?.id !== id ||
+      persistedTask.snapshotKey !== snapshotKey
+    ) {
+      throw new Error("AI organizer snapshot could not be verified after saving");
+    }
+    cachedAiOrganizerTask = persistedTask;
+    if (existing?.snapshotKey && existing.snapshotKey !== snapshotKey) {
+      await deleteStoredValue(existing.snapshotKey).catch((error) => {
+        console.warn("[ai-organizer] old snapshot cleanup failed:", error);
+      });
+    }
+    scheduleAiOrganizerAlarm(task);
+    void triggerAiOrganizerWorker();
+    return task;
+  } finally {
+    aiOrganizerStartPending = false;
+  }
+}
+
+function aiSettingsTestSignature(meta: AiMeta) {
+  return JSON.stringify([
+    meta.provider,
+    meta.baseUrl,
+    meta.model,
+    meta.apiKey,
+  ]);
+}
+
+async function testAiSettingsOutsideStateQueue(body: Record<string, unknown>) {
+  const prepared = await withState((state) => {
+    const meta = ensureAiMeta(state);
+    applyAiSettingsPatch(meta, body);
+    meta.updatedAt = now();
+    try {
+      validateAiSettings(meta);
+      return {
+        valid: true as const,
+        requestMeta: {
+          provider: meta.provider,
+          baseUrl: meta.baseUrl,
+          model: meta.model,
+          apiKey: meta.apiKey,
+        },
+        signature: aiSettingsTestSignature(meta),
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "AI settings test failed";
+      meta.lastTestAt = now();
+      meta.lastTestOk = false;
+      meta.lastError = message;
+      return {
+        valid: false as const,
+        error: message,
+        settings: getAiSettings(meta),
+      };
+    }
+  }, true);
+  if (!prepared.valid) return fail(400, prepared.error);
+
+  try {
+    const result = await requestAiJson(
+      prepared.requestMeta,
+      'Return JSON only with schema: {"ok":true}.',
+      { maxTokens: 128, temperature: 0 },
+    );
+    if (result?.ok !== true) {
+      throw new Error("AI test response did not match the expected JSON schema");
+    }
+    const settings = await withState((state) => {
+      const meta = ensureAiMeta(state);
+      if (aiSettingsTestSignature(meta) !== prepared.signature) {
+        throw new Error("AI settings changed while the connection test was running");
+      }
+      meta.lastTestAt = now();
+      meta.lastTestOk = true;
+      meta.lastError = null;
+      return getAiSettings(meta);
+    }, true);
+    return ok(settings);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "AI settings test failed";
+    await withState((state) => {
+      const meta = ensureAiMeta(state);
+      if (aiSettingsTestSignature(meta) === prepared.signature) {
+        meta.lastTestAt = now();
+        meta.lastTestOk = false;
+        meta.lastError = message;
+      }
+    }, true);
+    return fail(message.includes("changed while") ? 409 : 400, message);
+  }
+}
+
+async function pauseAiOrganizerTask() {
+  const task = await readAiOrganizerTask();
+  if (!task) return null;
+  const updated = await updateAiOrganizerTask(task.id, (current) => ({
+    ...current,
+    paused:
+      current.stage === "planning" || current.stage === "classifying"
+        ? true
+        : current.paused,
+    nextRunAt: null,
+    updatedAt: now(),
+  }));
+  aiOrganizerRequestAbortController?.abort();
+  clearAiOrganizerAlarm();
+  return updated;
+}
+
+async function resumeAiOrganizerTask() {
+  const task = await readAiOrganizerTask();
+  if (!task) throw new Error("No AI organization task is available");
+  const updated = await updateAiOrganizerTask(task.id, (current) => {
+    const resumableStage = current.taxonomy.length > 0 ? "classifying" : "planning";
+    if (
+      current.stage !== "planning" &&
+      current.stage !== "classifying" &&
+      current.stage !== "failed"
+    ) {
+      return current;
+    }
+    return {
+      ...current,
+      stage: current.stage === "failed" ? resumableStage : current.stage,
+      paused: false,
+      retryAttempt: 0,
+      nextRunAt: now(),
+      finishedAt: null,
+      updatedAt: now(),
+      lastError: null,
+    };
+  });
+  scheduleAiOrganizerAlarm(updated);
+  void triggerAiOrganizerWorker();
+  return updated;
+}
+
+async function cancelAiOrganizerTask() {
+  const task = await readAiOrganizerTask();
+  if (!task) return null;
+  const updated = await updateAiOrganizerTask(task.id, (current) => ({
+    ...current,
+    stage:
+      current.stage === "planning" || current.stage === "classifying"
+        ? "cancelled"
+        : current.stage,
+    paused: false,
+    nextRunAt: null,
+    finishedAt:
+      current.stage === "planning" || current.stage === "classifying"
+        ? now()
+        : current.finishedAt,
+    updatedAt: now(),
+  }));
+  aiOrganizerRequestAbortController?.abort();
+  clearAiOrganizerAlarm();
+  return updated;
+}
+
+async function applyReadyAiOrganizerTask() {
+  if (aiOrganizerApplyPending) throw new Error("AI organization is already being applied");
+  if (aiOrganizerStartPending) throw new Error("AI organization is already starting");
+  aiOrganizerApplyPending = true;
+  try {
+    await aiOrganizerQueue;
+    return await withState(async (state) => {
+      const task = await readAiOrganizerTask();
+      if (!task || task.stage !== "ready" || task.paused) {
+        throw new Error("AI organization plan is not ready to apply");
+      }
+      const currentSelection = buildAiOrganizerSourceSelection(state, task.config);
+      if (
+        currentSelection.sourceVideoIds.length !== task.sourceVideoIds.length ||
+        currentSelection.sourceVideoIds.some(
+          (videoId, index) => videoId !== task.sourceVideoIds[index],
+        )
+      ) {
+        throw new Error(
+          "Library scope changed after AI organization started. Start a new analysis to include the latest videos",
+        );
+      }
+      const currentHash = await computeAiOrganizerSourceHash(
+        state,
+        task.sourceVideoIds,
+      );
+      if (currentHash !== task.sourceHash) {
+        throw new Error(
+          "Library changed after AI organization started. Start a new analysis to avoid overwriting newer data",
+        );
+      }
+      const applied = applyAiOrganizerPlan(
+        state,
+        {
+          runId: task.id,
+          sourceVideoIds: task.sourceVideoIds,
+          taxonomy: task.taxonomy,
+          assignments: task.assignments,
+          confidenceThreshold: task.config.confidenceThreshold,
+          reviewFolderName: task.reviewFolderName,
+        },
+        now(),
+      );
+      const timestamp = now();
+      const nextTask: AiOrganizerTaskRecord = {
+        ...task,
+        stage: "completed",
+        paused: false,
+        nextRunAt: null,
+        updatedAt: timestamp,
+        finishedAt: timestamp,
+        appliedAt: timestamp,
+        undoneAt: null,
+        lastError: null,
+        applySummary: applied.summary as AiOrganizerApplySummary,
+        undo: applied.undo as AiOrganizerUndoRecord,
+      };
+      await writeStateAndStoredValue(
+        applied.state as LocalState,
+        AI_ORGANIZER_TASK_KEY,
+        nextTask,
+      );
+      cachedAiOrganizerTask = nextTask;
+      return nextTask;
+    }, false);
+  } finally {
+    aiOrganizerApplyPending = false;
+  }
+}
+
+async function undoAppliedAiOrganizerTask() {
+  if (aiOrganizerApplyPending) throw new Error("AI organization is busy");
+  if (aiOrganizerStartPending) throw new Error("AI organization is already starting");
+  aiOrganizerApplyPending = true;
+  try {
+    await aiOrganizerQueue;
+    return await withState(async (state) => {
+      const task = await readAiOrganizerTask();
+      if (!task || task.stage !== "completed" || !task.undo || task.undoneAt) {
+        throw new Error("No applied AI organization is available to undo");
+      }
+      const undone = undoAiOrganizerPlan(state, task.undo, now());
+      const timestamp = now();
+      const nextTask: AiOrganizerTaskRecord = {
+        ...task,
+        stage: "undone",
+        updatedAt: timestamp,
+        undoneAt: timestamp,
+        lastError: null,
+      };
+      await writeStateAndStoredValue(
+        undone.state as LocalState,
+        AI_ORGANIZER_TASK_KEY,
+        nextTask,
+      );
+      cachedAiOrganizerTask = nextTask;
+      return nextTask;
+    }, false);
+  } finally {
+    aiOrganizerApplyPending = false;
+  }
+}
+
+async function listAiOrganizerPreview(params: URLSearchParams) {
+  const task = await readAiOrganizerTask();
+  if (!task) return paginate([], params.get("page"), params.get("pageSize"));
+  const snapshot = await readAiOrganizerSnapshot(task);
+  const videoById = new Map(snapshot.state.videos.map((video) => [video.id, video]));
+  const folderById = new Map(snapshot.state.folders.map((folder) => [folder.id, folder]));
+  const currentFoldersByVideoId = new Map<number, string[]>();
+  for (const item of snapshot.state.folderItems) {
+    const folder = folderById.get(item.folderId);
+    if (!folder || folder.deletedAt !== null) continue;
+    const bucket = currentFoldersByVideoId.get(item.videoId) ?? [];
+    if (!bucket.includes(folder.name)) bucket.push(folder.name);
+    currentFoldersByVideoId.set(item.videoId, bucket);
+  }
+  const taxonomyByKey = new Map(task.taxonomy.map((folder) => [folder.key, folder]));
+  const lowOnly = params.get("lowConfidence") === "1";
+  const items = task.assignments
+    .filter((assignment) => !lowOnly || assignment.lowConfidence)
+    .map((assignment) => {
+      const video = videoById.get(assignment.videoId);
+      const suggested = taxonomyByKey.get(assignment.folderKey);
+      return {
+        videoId: assignment.videoId,
+        bvid: video?.bvid ?? "",
+        title: video?.title ?? `#${assignment.videoId}`,
+        uploader: video?.uploader ?? "",
+        currentFolders: currentFoldersByVideoId.get(assignment.videoId) ?? [],
+        suggestedFolderKey: assignment.folderKey,
+        suggestedFolderName: suggested?.name ?? task.reviewFolderName,
+        appliedFolderName: assignment.lowConfidence
+          ? task.reviewFolderName
+          : suggested?.name ?? task.reviewFolderName,
+        confidence: assignment.confidence,
+        lowConfidence: assignment.lowConfidence,
+        reason: assignment.reason,
+      };
+    })
+    .sort(
+      (left, right) =>
+        Number(right.lowConfidence) - Number(left.lowConfidence) ||
+        left.confidence - right.confidence ||
+        left.videoId - right.videoId,
+    );
+  return paginate(items, params.get("page"), params.get("pageSize"));
 }
 
 function normalizeWebDavBaseUrl(rawUrl: unknown) {
@@ -4520,6 +6005,34 @@ function ensureFavoritesSyncJobMeta(state: LocalState) {
     state.syncMeta.favoritesJob = defaultFavoritesSyncJobMeta();
   }
   return state.syncMeta.favoritesJob;
+}
+
+function ensureArticleFolderByNameForImport(state: LocalState, rawName: unknown) {
+  state.articleFolders ??= [];
+  const name = normalizeText(rawName);
+  if (!name) return null;
+  const timestamp = now();
+  const existing = (state.articleFolders ?? []).find(
+    (folder) => normalizeKey(folder.name) === normalizeKey(name),
+  );
+  if (existing) {
+    existing.deletedAt = null;
+    existing.updatedAt = timestamp;
+    return { folder: existing, created: false };
+  }
+
+  const created: ArticleFolderRecord = {
+    id: Math.max(1, toInt(state.counters.articleFolder, 1)),
+    name,
+    description: "Imported",
+    sortOrder: activeArticleFolders(state).length + 1,
+    deletedAt: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  state.counters.articleFolder = created.id + 1;
+  state.articleFolders.push(created);
+  return { folder: created, created: true };
 }
 
 function applyFavoritesSyncFailurePolicy(
@@ -5693,6 +7206,49 @@ function buildExportPayload(state: LocalState) {
   const exportVideoTags = state.videoTags.filter(
     (edge) => exportVideoIds.has(edge.videoId) && exportTagIds.has(edge.tagId)
   );
+  const exportComments = (state.comments ?? [])
+    .filter((comment) => comment.deletedAt == null)
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id);
+  const activeExportArticles = (state.articles ?? []).filter(
+    (article) => article.deletedAt == null,
+  );
+  const legacyArticleFolderIds = new Set(
+    activeExportArticles.flatMap((article) => article.folderIds ?? []),
+  );
+  const exportArticleFolders =
+    (state.articleFolders ?? []).length > 0
+      ? activeArticleFolders(state)
+      : state.folders
+          .filter((folder) => folder.deletedAt === null && legacyArticleFolderIds.has(folder.id))
+          .map((folder, index) => ({
+            id: folder.id,
+            name: folder.name,
+            description: folder.description,
+            sortOrder: index + 1,
+            deletedAt: null,
+            createdAt: folder.createdAt,
+            updatedAt: folder.updatedAt,
+          }));
+  const exportArticleFolderById = new Map(
+    exportArticleFolders.map((folder) => [folder.id, folder]),
+  );
+  const exportArticles = activeExportArticles
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id)
+    .map((article) => {
+      const folderIds = (article.folderIds ?? []).filter((folderId) =>
+        exportArticleFolderById.has(folderId),
+      );
+      return {
+        ...article,
+        folderIds,
+        folders: folderIds
+          .map((folderId) => exportArticleFolderById.get(folderId)?.name ?? "")
+          .filter(Boolean),
+      };
+    });
+  const exportFollowedUps = [...(state.followedUps ?? [])].sort(
+    (left, right) => left.sortOrder - right.sortOrder || left.uid - right.uid,
+  );
   const {
     folderNamesByVideo,
     folderCountByVideo,
@@ -5718,6 +7274,10 @@ function buildExportPayload(state: LocalState) {
     exportFolderItems,
     exportTags,
     exportVideoTags,
+    exportComments,
+    exportArticleFolders,
+    exportArticles,
+    exportFollowedUps,
     folderNamesByVideo,
     folderCountByVideo,
     latestAddedAtByVideo,
@@ -5735,6 +7295,10 @@ export function buildJsonExportResult(state: LocalState) {
     exportFolderItems,
     exportTags,
     exportVideoTags,
+    exportComments,
+    exportArticleFolders,
+    exportArticles,
+    exportFollowedUps,
     latestAddedAtByVideo,
     folderCountByVideo,
     folderNamesByVideo,
@@ -5743,8 +7307,12 @@ export function buildJsonExportResult(state: LocalState) {
   } = buildExportPayload(state);
   const summary = {
     folders: exportFolders.length,
+    articleFolders: exportArticleFolders.length,
     videos: activeExportVideos.length,
-    tags: exportTags.length
+    tags: exportTags.length,
+    comments: exportComments.length,
+    articles: exportArticles.length,
+    followedUps: exportFollowedUps.length,
   };
 
   const exportVideos = activeExportVideos.map((video) => {
@@ -5778,10 +7346,14 @@ export function buildJsonExportResult(state: LocalState) {
         source: "bilishelf-extension-local"
       },
       folders: exportFolders,
+      articleFolders: exportArticleFolders,
       videos: exportVideos,
       folderItems: exportFolderItemsWithText,
       tags: exportTags,
-      videoTags: exportVideoTags
+      videoTags: exportVideoTags,
+      followedUps: exportFollowedUps,
+      comments: exportComments,
+      articles: exportArticles
     },
     null,
     2
@@ -5922,15 +7494,26 @@ export function saveVideoSelectionToState(
 function applyImportRowsToState(
   state: LocalState,
   rows: ImportVideoRow[],
-  skippedRows: number
+  skippedRows: number,
+  commentRows: ImportCommentRow[] = [],
+  skippedComments = 0,
+  articleRows: ImportArticleRow[] = [],
+  followedUpRows: ImportFollowedUpRow[] = [],
 ) {
+  state.articles ??= [];
+  state.followedUps ??= [];
   const summary = {
     videosUpserted: 0,
     folderLinksAdded: 0,
     tagsBound: 0,
     foldersCreated: 0,
     tagsCreated: 0,
-    rowsSkipped: skippedRows
+    rowsSkipped: skippedRows,
+    commentsUpserted: 0,
+    commentsSkipped: skippedComments,
+    articlesUpserted: 0,
+    articlesSkipped: 0,
+    followedUpsUpserted: 0,
   };
 
   for (const row of rows) {
@@ -6025,6 +7608,71 @@ function applyImportRowsToState(
     }
   }
 
+  for (const row of commentRows) {
+    const existing = state.comments.find(
+      (comment) => comment.sourceKey === row.sourceKey,
+    );
+    if (existing) {
+      const id = existing.id;
+      const savedAt = Math.min(existing.savedAt, row.savedAt);
+      Object.assign(existing, row, {
+        id,
+        savedAt,
+        updatedAt: Math.max(existing.updatedAt, row.updatedAt),
+        deletedAt: null,
+      });
+    } else {
+      state.comments.push({
+        ...row,
+        id: state.counters.comment++,
+        deletedAt: null,
+      });
+    }
+    summary.commentsUpserted += 1;
+  }
+
+  for (const row of articleRows) {
+    try {
+      const normalized = normalizeFavoriteArticle(row, now());
+      const folderIds: number[] = [];
+      for (const folderName of uniqueTextList(row.folderNames ?? [])) {
+        const ensured = ensureArticleFolderByNameForImport(state, folderName);
+        if (!ensured) continue;
+        if (ensured.created) summary.foldersCreated += 1;
+        folderIds.push(ensured.folder.id);
+      }
+      normalized.folderIds = folderIds;
+      const existing = state.articles.find(
+        (article) => article.sourceKey === normalized.sourceKey,
+      );
+      if (existing) {
+        const id = existing.id;
+        const savedAt = Math.min(existing.savedAt, normalized.savedAt);
+        Object.assign(existing, normalized, {
+          id,
+          savedAt,
+          updatedAt: Math.max(existing.updatedAt, normalized.updatedAt),
+          deletedAt: null,
+        });
+      } else {
+        state.articles.push({
+          ...normalized,
+          id: state.counters.article++,
+          deletedAt: null,
+        });
+      }
+      summary.articlesUpserted += 1;
+    } catch {
+    summary.articlesSkipped += 1;
+    }
+  }
+
+  if (followedUpRows.length > 0) {
+    const merged = mergeFollowedUpRecords(state.followedUps, followedUpRows, now());
+    state.followedUps = merged.records;
+    summary.followedUpsUpserted = followedUpRows.length;
+  }
+
   return summary;
 }
 
@@ -6034,6 +7682,369 @@ function csvEscape(value: unknown) {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
+}
+
+function queryFavoriteComments(
+  state: LocalState,
+  params: URLSearchParams,
+) {
+  const keyword = normalizeText(params.get("q")).toLocaleLowerCase();
+  const items = state.comments
+    .filter((comment) => comment.deletedAt == null)
+    .filter((comment) => {
+      if (!keyword) return true;
+      return [
+        comment.content,
+        comment.authorName,
+        comment.replyToName,
+        comment.videoTitle,
+        comment.bvid,
+      ].some((value) => normalizeText(value).toLocaleLowerCase().includes(keyword));
+    })
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id);
+  return paginate(items, params.get("page"), params.get("pageSize"));
+}
+
+function queryFavoriteArticles(state: LocalState, params: URLSearchParams) {
+  state.articles ??= [];
+  const keyword = normalizeText(params.get("q")).toLocaleLowerCase();
+  const folderId = params.get("folderId") ? toInt(params.get("folderId")) : 0;
+  const items = state.articles
+    .filter((article) => article.deletedAt == null)
+    .filter((article) => {
+      if (folderId > 0 && !(article.folderIds ?? []).includes(folderId)) return false;
+      if (!keyword) return true;
+      return [
+        article.title,
+        article.summary,
+        article.content,
+        article.authorName,
+        article.opusId,
+      ].some((value) => normalizeText(value).toLocaleLowerCase().includes(keyword));
+    })
+    .sort((left, right) => right.savedAt - left.savedAt || right.id - left.id);
+  return paginate(items, params.get("page"), params.get("pageSize"));
+}
+
+function toggleFavoriteArticle(state: LocalState, raw: unknown) {
+  state.articles ??= [];
+  const normalized = normalizeFavoriteArticle(raw, now());
+  const existing = state.articles.find(
+    (article) => article.sourceKey === normalized.sourceKey,
+  );
+  if (existing && existing.deletedAt == null) {
+    moveFavoriteArticleToTrash(state, existing.id);
+    return { saved: false, article: existing };
+  }
+  if (existing) {
+    const timestamp = now();
+    Object.assign(existing, normalized, {
+      id: existing.id,
+      savedAt: existing.savedAt,
+      updatedAt: timestamp,
+      deletedAt: null,
+    });
+    return { saved: true, article: existing };
+  }
+  const timestamp = now();
+  const article: FavoriteArticleRecord = {
+    ...normalized,
+    id: state.counters.article++,
+    savedAt: timestamp,
+    updatedAt: timestamp,
+    deletedAt: null,
+  };
+  state.articles.push(article);
+  return { saved: true, article };
+}
+
+export function saveArticleSelectionToState(
+  state: LocalState,
+  raw: Record<string, unknown>,
+): ApiResult {
+  state.articles ??= [];
+  state.articleFolders ??= [];
+  const timestamp = now();
+  const normalized = normalizeFavoriteArticle(raw, timestamp);
+  const requestedIds = Array.isArray(raw.folderIds)
+    ? [...new Set(raw.folderIds.map((item) => toInt(item)).filter((id) => id > 0))]
+    : [];
+  const activeIds = new Set(activeArticleFolders(state).map((folder) => folder.id));
+  const folderIds = requestedIds.filter((id) => activeIds.has(id));
+  const existingIndex = state.articles.findIndex(
+    (article) => article.sourceKey === normalized.sourceKey,
+  );
+  const existing = existingIndex >= 0 ? state.articles[existingIndex] : null;
+  if ((!existing || existing.deletedAt != null) && folderIds.length === 0) {
+    return fail(400, "At least one article folder is required");
+  }
+
+  const previousIds = new Set(existing?.folderIds ?? []);
+  const addedFolderIds = folderIds.filter((id) => !previousIds.has(id));
+  const existingFolderIds = folderIds.filter((id) => previousIds.has(id));
+  const nextIds = new Set(folderIds);
+  const removedFolderIds = [...previousIds].filter((id) => !nextIds.has(id));
+
+  if (existing && existing.deletedAt == null && folderIds.length === 0) {
+    moveFavoriteArticleToTrash(state, existing.id, timestamp);
+    return ok({
+      saved: false,
+      deleted: true,
+      article: existing,
+      addedFolderIds,
+      existingFolderIds,
+      removedFolderIds,
+      finalFolderIds: [],
+      finalFolders: [],
+    });
+  }
+
+  const article: FavoriteArticleRecord = existing
+    ? Object.assign(existing, normalized, {
+        id: existing.id,
+        folderIds,
+        savedAt: existing.savedAt,
+        updatedAt: timestamp,
+        deletedAt: null,
+      })
+    : {
+        ...normalized,
+        id: state.counters.article++,
+        folderIds,
+        savedAt: timestamp,
+        updatedAt: timestamp,
+        deletedAt: null,
+      };
+  if (!existing) state.articles.push(article);
+
+  const folderById = new Map(
+    activeArticleFolders(state).map((folder) => [folder.id, folder]),
+  );
+  const finalFolders = folderIds
+    .map((id) => folderById.get(id))
+    .filter((folder): folder is ArticleFolderRecord => Boolean(folder))
+    .map((folder) => ({ id: folder.id, name: folder.name }));
+  return ok(
+    {
+      saved: true,
+      deleted: false,
+      created: !existing,
+      article,
+      addedFolderIds,
+      existingFolderIds,
+      removedFolderIds,
+      finalFolderIds: folderIds,
+      finalFolders,
+    },
+    existing ? 200 : 201,
+  );
+}
+
+export function moveFavoriteCommentToTrash(
+  state: LocalState,
+  commentId: number,
+  timestamp = now(),
+) {
+  const comment = state.comments.find(
+    (item) => item.id === commentId && item.deletedAt == null,
+  );
+  if (!comment) return false;
+  comment.deletedAt = timestamp;
+  comment.updatedAt = timestamp;
+  return true;
+}
+
+export function restoreFavoriteCommentFromTrash(
+  state: LocalState,
+  commentId: number,
+  timestamp = now(),
+) {
+  const comment = state.comments.find(
+    (item) => item.id === commentId && item.deletedAt != null,
+  );
+  if (!comment) return false;
+  comment.deletedAt = null;
+  comment.updatedAt = timestamp;
+  return true;
+}
+
+export function purgeFavoriteCommentFromTrash(state: LocalState, commentId: number) {
+  const index = state.comments.findIndex(
+    (item) => item.id === commentId && item.deletedAt != null,
+  );
+  if (index < 0) return false;
+  state.comments.splice(index, 1);
+  return true;
+}
+
+export function moveFavoriteArticleToTrash(
+  state: LocalState,
+  articleId: number,
+  timestamp = now(),
+) {
+  const article = state.articles.find(
+    (item) => item.id === articleId && item.deletedAt == null,
+  );
+  if (!article) return false;
+  article.deletedAt = timestamp;
+  article.updatedAt = timestamp;
+  return true;
+}
+
+export function restoreFavoriteArticleFromTrash(
+  state: LocalState,
+  articleId: number,
+  timestamp = now(),
+) {
+  const article = state.articles.find(
+    (item) => item.id === articleId && item.deletedAt != null,
+  );
+  if (!article) return false;
+  article.deletedAt = null;
+  article.updatedAt = timestamp;
+  return true;
+}
+
+export function purgeFavoriteArticleFromTrash(state: LocalState, articleId: number) {
+  const index = state.articles.findIndex(
+    (item) => item.id === articleId && item.deletedAt != null,
+  );
+  if (index < 0) return false;
+  state.articles.splice(index, 1);
+  return true;
+}
+
+function toggleFavoriteComment(state: LocalState, raw: unknown) {
+  const normalized = normalizeFavoriteComment(raw, now());
+  const existing = state.comments.find(
+    (comment) => comment.sourceKey === normalized.sourceKey,
+  );
+  if (existing && existing.deletedAt == null) {
+    moveFavoriteCommentToTrash(state, existing.id);
+    return { saved: false, comment: existing };
+  }
+  if (existing) {
+    const timestamp = now();
+    Object.assign(existing, normalized, {
+      id: existing.id,
+      savedAt: existing.savedAt,
+      updatedAt: timestamp,
+      deletedAt: null,
+    });
+    return { saved: true, comment: existing };
+  }
+  const timestamp = now();
+  const comment: FavoriteCommentRecord = {
+    ...normalized,
+    id: state.counters.comment++,
+    savedAt: timestamp,
+    updatedAt: timestamp,
+    deletedAt: null,
+  };
+  state.comments.push(comment);
+  return { saved: true, comment };
+}
+
+type BackupReminderRecord = {
+  lastBackupAt: number;
+  lastReminderDay: string;
+};
+
+function formatLocalCalendarDay(timestamp = now()) {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeBackupReminderRecord(value: unknown): BackupReminderRecord {
+  const raw = value && typeof value === "object"
+    ? value as Partial<BackupReminderRecord>
+    : {};
+  return {
+    lastBackupAt: Math.max(0, toInt(raw.lastBackupAt, 0)),
+    lastReminderDay: normalizeText(raw.lastReminderDay),
+  };
+}
+
+async function readBackupReminderRecord() {
+  const storage = chrome.storage?.local as StorageAreaLike | undefined;
+  if (!storage) return normalizeBackupReminderRecord(null);
+  const stored = await storage.get(BACKUP_REMINDER_STORAGE_KEY);
+  return normalizeBackupReminderRecord(stored[BACKUP_REMINDER_STORAGE_KEY]);
+}
+
+async function patchBackupReminderRecord(
+  patch: Partial<BackupReminderRecord>,
+) {
+  const storage = chrome.storage?.local as StorageAreaLike | undefined;
+  if (!storage) return normalizeBackupReminderRecord(patch);
+  const current = await readBackupReminderRecord();
+  const next = normalizeBackupReminderRecord({ ...current, ...patch });
+  await storage.set({ [BACKUP_REMINDER_STORAGE_KEY]: next });
+  return next;
+}
+
+export function shouldShowExtensionBackupReminder(options: {
+  hasData: boolean;
+  now: number;
+  lastBackupAt: number;
+  lastReminderDay: string;
+}) {
+  if (!options.hasData) return false;
+  if (options.lastReminderDay === formatLocalCalendarDay(options.now)) return false;
+  return (
+    options.lastBackupAt <= 0 ||
+    options.now - options.lastBackupAt >= BACKUP_REMINDER_INTERVAL_MS
+  );
+}
+
+async function scheduleBackupReminderAlarm() {
+  if (!chrome.alarms?.create) return;
+  if (chrome.alarms.get) {
+    const existing = await chrome.alarms.get(BACKUP_REMINDER_ALARM);
+    if (existing) return;
+  }
+  chrome.alarms.create(BACKUP_REMINDER_ALARM, {
+    delayInMinutes: 1,
+    periodInMinutes: BACKUP_REMINDER_CHECK_INTERVAL_MINUTES,
+  });
+}
+
+async function checkAndNotifyBackupReminder() {
+  const state = await readState();
+  const record = await readBackupReminderRecord();
+  const timestamp = now();
+  if (
+    !shouldShowExtensionBackupReminder({
+      hasData:
+        state.videos.some((video) => video.deletedAt === null) ||
+        state.comments.some((comment) => comment.deletedAt == null) ||
+        state.articles.some((article) => article.deletedAt == null),
+      now: timestamp,
+      lastBackupAt: record.lastBackupAt,
+      lastReminderDay: record.lastReminderDay,
+    })
+  ) {
+    return false;
+  }
+
+  await patchBackupReminderRecord({
+    lastReminderDay: formatLocalCalendarDay(timestamp),
+  });
+  chrome.notifications?.create?.(BACKUP_REMINDER_NOTIFICATION_ID, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/128.png"),
+    title: chrome.i18n?.getUILanguage?.().toLowerCase().startsWith("zh")
+      ? "BiliShelf 建议定期备份"
+      : "BiliShelf backup reminder",
+    message: chrome.i18n?.getUILanguage?.().toLowerCase().startsWith("zh")
+      ? "本地已有收藏数据，建议现在导出一次 JSON 完整备份。"
+      : "You have local saved data. Export a complete JSON backup now.",
+    priority: 1,
+  });
+  return true;
 }
 
 function handleReadOnlyApi(
@@ -6068,6 +8079,10 @@ function handleReadOnlyApi(
     return ok({ items: listActiveFoldersWithCounts(state) });
   }
 
+  if (path === "/article-folders") {
+    return ok({ items: listActiveArticleFoldersWithCounts(state) });
+  }
+
   if (path === "/trash/folders") {
     const items = state.folders
       .filter((folder) => folder.deletedAt !== null)
@@ -6077,6 +8092,24 @@ function handleReadOnlyApi(
         return { ...folder, itemCount };
       });
     return ok({ items });
+  }
+
+  if (path === "/trash/comments") {
+    const items = state.comments
+      .filter((comment) => comment.deletedAt != null)
+      .sort((left, right) =>
+        (right.deletedAt ?? 0) - (left.deletedAt ?? 0) || right.id - left.id
+      );
+    return ok(paginate(items, params.get("page"), params.get("pageSize")));
+  }
+
+  if (path === "/trash/articles") {
+    const items = state.articles
+      .filter((article) => article.deletedAt != null)
+      .sort((left, right) =>
+        (right.deletedAt ?? 0) - (left.deletedAt ?? 0) || right.id - left.id
+      );
+    return ok(paginate(items, params.get("page"), params.get("pageSize")));
   }
 
   if (path === "/videos") {
@@ -6100,6 +8133,38 @@ function handleReadOnlyApi(
       params.get("pageSize")
     );
     return ok(data);
+  }
+
+  if (path === "/comments/keys") {
+    return ok({
+      items: state.comments
+        .filter((comment) => comment.deletedAt == null)
+        .map((comment) => comment.sourceKey),
+    });
+  }
+
+  if (path === "/comments") {
+    return ok(queryFavoriteComments(state, params));
+  }
+
+  if (path === "/articles/keys") {
+    return ok({
+      items: state.articles
+        .filter((article) => article.deletedAt == null)
+        .map((article) => article.sourceKey),
+    });
+  }
+
+  if (path === "/articles/by-key") {
+    const sourceKey = normalizeText(params.get("sourceKey"));
+    const article = state.articles.find(
+      (item) => item.sourceKey === sourceKey && item.deletedAt == null,
+    );
+    return ok(article ?? null);
+  }
+
+  if (path === "/articles") {
+    return ok(queryFavoriteArticles(state, params));
   }
 
   if (path === "/videos/search") {
@@ -6170,6 +8235,118 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
   try {
     // Fast-path status endpoints must bypass withState queue, otherwise
     // long-running sync tasks block polling and trigger frontend timeouts.
+    if (method === "GET" && path === "/ai/organizer/status") {
+      return ok(buildAiOrganizerStatus(await readAiOrganizerTask()));
+    }
+
+    if (method === "POST" && path === "/ai/settings/test") {
+      return await testAiSettingsOutsideStateQueue(body);
+    }
+
+    if (method === "GET" && path === "/ai/organizer/preview") {
+      return ok(await listAiOrganizerPreview(params));
+    }
+
+    if (method === "PATCH" && path === "/ai/organizer/assignments") {
+      if (aiOrganizerStartPending || aiOrganizerApplyPending) {
+        return fail(423, "AI organization is busy");
+      }
+      const task = await readAiOrganizerTask();
+      if (!task || task.stage !== "ready") {
+        return fail(409, "AI organization plan is not ready to edit");
+      }
+      const videoId = toInt(body.videoId);
+      const folderKey = normalizeText(body.folderKey);
+      const allowedKeys = new Set(task.taxonomy.map((folder) => folder.key));
+      if (!task.sourceVideoIds.includes(videoId)) {
+        return fail(404, "Video is not part of the current AI organization plan");
+      }
+      if (folderKey !== REVIEW_FOLDER_KEY && !allowedKeys.has(folderKey)) {
+        return fail(400, "Target AI folder is invalid");
+      }
+      const updated = await updateAiOrganizerTask(task.id, (current) => ({
+        ...(current.stage === "ready"
+          ? {
+              ...current,
+              assignments: current.assignments.map((assignment) =>
+                assignment.videoId === videoId
+                  ? {
+                      ...assignment,
+                      folderKey,
+                      confidence: 1,
+                      lowConfidence: folderKey === REVIEW_FOLDER_KEY,
+                      reason: "User adjusted this classification",
+                    }
+                  : assignment,
+              ),
+              updatedAt: now(),
+            }
+          : current),
+      }));
+      return ok(buildAiOrganizerStatus(updated));
+    }
+
+    if (method === "GET" && path === "/ai/organizer/backup") {
+      const task = await readAiOrganizerTask();
+      if (!task) return fail(404, "No AI organizer snapshot is available");
+      const snapshot = await readAiOrganizerSnapshot(task);
+      return ok(buildJsonExportResult(snapshot.state));
+    }
+
+    if (method === "POST" && path === "/ai/organizer/start") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(423, "Favorites sync is running. Start AI organization after it finishes");
+      }
+      try {
+        const task = await startAiOrganizerTask(body);
+        return ok(buildAiOrganizerStatus(task), 202);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return fail(message.includes("already") ? 409 : 400, message);
+      }
+    }
+
+    if (method === "POST" && path === "/ai/organizer/pause") {
+      return ok(buildAiOrganizerStatus(await pauseAiOrganizerTask()));
+    }
+
+    if (method === "POST" && path === "/ai/organizer/resume") {
+      try {
+        return ok(buildAiOrganizerStatus(await resumeAiOrganizerTask()));
+      } catch (error) {
+        return fail(400, error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    if (method === "POST" && path === "/ai/organizer/cancel") {
+      return ok(buildAiOrganizerStatus(await cancelAiOrganizerTask()));
+    }
+
+    if (method === "POST" && path === "/ai/organizer/apply") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(423, "Favorites sync is running. Apply AI organization after it finishes");
+      }
+      try {
+        const task = await applyReadyAiOrganizerTask();
+        return ok(buildAiOrganizerStatus(task));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return fail(message.includes("changed") ? 409 : 400, message);
+      }
+    }
+
+    if (method === "POST" && path === "/ai/organizer/undo") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(423, "Favorites sync is running. Undo AI organization after it finishes");
+      }
+      try {
+        const task = await undoAppliedAiOrganizerTask();
+        return ok(buildAiOrganizerStatus(task));
+      } catch (error) {
+        return fail(400, error instanceof Error ? error.message : String(error));
+      }
+    }
+
     if (method === "GET" && path === "/sync/bilibili/invalid-video-recovery/status") {
       return ok(getInvalidVideoRecoveryStatus());
     }
@@ -6226,6 +8403,25 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         started,
         status: getFavoritesSyncStatus(snapshot)
       });
+    }
+
+    if (method === "POST" && path === "/backup/reminder/backup-completed") {
+      const timestamp = Math.max(1, toInt(body.timestamp, now()));
+      const current = await readBackupReminderRecord();
+      const record = await patchBackupReminderRecord({
+        lastBackupAt: body.migration
+          ? Math.max(current.lastBackupAt, timestamp)
+          : timestamp,
+        lastReminderDay: body.migration ? current.lastReminderDay : "",
+      });
+      return ok({ ok: true, ...record });
+    }
+
+    if (method === "POST" && path === "/backup/reminder/shown") {
+      const record = await patchBackupReminderRecord({
+        lastReminderDay: formatLocalCalendarDay(now()),
+      });
+      return ok({ ok: true, ...record });
     }
 
     if (method === "POST" && path.startsWith("/sync/bilibili/tag-enrichment/")) {
@@ -6434,26 +8630,6 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         return ok(getAiSettings(meta));
       }
 
-      if (method === "POST" && path === "/ai/settings/test") {
-        const meta = ensureAiMeta(state);
-        applyAiSettingsPatch(meta, body);
-        meta.updatedAt = now();
-        try {
-          validateAiSettings(meta);
-          meta.lastTestAt = now();
-          meta.lastTestOk = true;
-          meta.lastError = null;
-          return ok(getAiSettings(meta));
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "AI settings test failed";
-          meta.lastTestAt = now();
-          meta.lastTestOk = false;
-          meta.lastError = message;
-          return fail(400, message);
-        }
-      }
-
       if (method === "POST" && path === "/ai/settings/models") {
         const current = ensureAiMeta(state);
         const provider = normalizeAiProvider(body.provider ?? current.provider);
@@ -6606,6 +8782,10 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           meta.lastBackupAt = now();
           meta.lastBackupFile = latestFileName;
           meta.lastError = null;
+          await patchBackupReminderRecord({
+            lastBackupAt: meta.lastBackupAt,
+            lastReminderDay: "",
+          });
           return ok({
             ok: true,
             latestFileName,
@@ -6671,7 +8851,15 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
             throw new Error("Remote backup file is empty");
           }
           const parsed = parseImportRows("json", content);
-          const summary = applyImportRowsToState(state, parsed.rows, parsed.skipped);
+          const summary = applyImportRowsToState(
+            state,
+            parsed.rows,
+            parsed.skipped,
+            parsed.comments,
+            parsed.commentsSkipped,
+            parsed.articles,
+            parsed.followedUps,
+          );
           meta.lastRestoreAt = now();
           meta.lastError = null;
           return ok({
@@ -6788,7 +8976,15 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
 
         try {
           const parsed = parseImportRows(format as "json" | "csv", content);
-          const summary = applyImportRowsToState(state, parsed.rows, parsed.skipped);
+          const summary = applyImportRowsToState(
+            state,
+            parsed.rows,
+            parsed.skipped,
+            parsed.comments,
+            parsed.commentsSkipped,
+            parsed.articles,
+            parsed.followedUps,
+          );
 
           return ok({
             ok: true,
@@ -6806,7 +9002,11 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           stamp,
           exportFolders,
           exportVideos,
+          exportArticleFolders,
           exportTags,
+          exportComments,
+          exportArticles,
+          exportFollowedUps,
           folderNamesByVideo,
           folderCountByVideo,
           latestAddedAtByVideo,
@@ -6816,8 +9016,12 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           buildExportPayload(state);
         const summary = {
           folders: exportFolders.length,
+          articleFolders: format === "json" ? exportArticleFolders.length : 0,
           videos: exportVideos.length,
-          tags: exportTags.length
+          tags: exportTags.length,
+          comments: format === "json" ? exportComments.length : 0,
+          articles: format === "json" ? exportArticles.length : 0,
+          followedUps: format === "json" ? exportFollowedUps.length : 0,
         };
 
         if (format === "json") {
@@ -6877,6 +9081,111 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         return ok({ items });
       }
 
+      if (method === "POST" && path === "/comments/toggle") {
+        try {
+          return ok(toggleFavoriteComment(state, body));
+        } catch (error) {
+          return fail(
+            400,
+            error instanceof Error ? error.message : "Comment favorite failed",
+          );
+        }
+      }
+
+      if (method === "POST" && path === "/articles/toggle") {
+        try {
+          return ok(toggleFavoriteArticle(state, body));
+        } catch (error) {
+          return fail(
+            400,
+            error instanceof Error ? error.message : "Article favorite failed",
+          );
+        }
+      }
+
+      if (method === "POST" && path === "/articles") {
+        try {
+          return saveArticleSelectionToState(state, body);
+        } catch (error) {
+          return fail(
+            400,
+            error instanceof Error ? error.message : "Article favorite failed",
+          );
+        }
+      }
+
+      const articleFoldersMatch = path.match(/^\/articles\/(\d+)\/folders$/);
+      if (articleFoldersMatch && method === "PATCH") {
+        const articleId = toInt(articleFoldersMatch[1]);
+        const article = state.articles.find(
+          (row) => row.id === articleId && row.deletedAt == null,
+        );
+        if (!article) return fail(404, "Article favorite not found");
+        const requestedIds = Array.isArray(body.folderIds)
+          ? [...new Set(body.folderIds.map((item) => toInt(item)).filter((id) => id > 0))]
+          : [];
+        const activeFolderIds = new Set(
+          activeArticleFolders(state).map((folder) => folder.id),
+        );
+        article.folderIds = requestedIds.filter((folderId) => activeFolderIds.has(folderId));
+        article.updatedAt = now();
+        return ok(article);
+      }
+
+      const commentMatch = path.match(/^\/comments\/(\d+)$/);
+      if (commentMatch && method === "DELETE") {
+        const commentId = toInt(commentMatch[1]);
+        if (!moveFavoriteCommentToTrash(state, commentId)) {
+          return fail(404, "Comment favorite not found");
+        }
+        return ok({ ok: true });
+      }
+
+      const restoreCommentMatch = path.match(/^\/trash\/comments\/(\d+)\/restore$/);
+      if (restoreCommentMatch && method === "POST") {
+        const commentId = toInt(restoreCommentMatch[1]);
+        if (!restoreFavoriteCommentFromTrash(state, commentId)) {
+          return fail(404, "Comment favorite not found in trash");
+        }
+        return ok({ ok: true });
+      }
+
+      const purgeCommentMatch = path.match(/^\/trash\/comments\/(\d+)$/);
+      if (purgeCommentMatch && method === "DELETE") {
+        const commentId = toInt(purgeCommentMatch[1]);
+        if (!purgeFavoriteCommentFromTrash(state, commentId)) {
+          return fail(404, "Comment favorite not found in trash");
+        }
+        return ok(undefined, 204);
+      }
+
+      const articleMatch = path.match(/^\/articles\/(\d+)$/);
+      if (articleMatch && method === "DELETE") {
+        const articleId = toInt(articleMatch[1]);
+        if (!moveFavoriteArticleToTrash(state, articleId)) {
+          return fail(404, "Article favorite not found");
+        }
+        return ok({ ok: true });
+      }
+
+      const restoreArticleMatch = path.match(/^\/trash\/articles\/(\d+)\/restore$/);
+      if (restoreArticleMatch && method === "POST") {
+        const articleId = toInt(restoreArticleMatch[1]);
+        if (!restoreFavoriteArticleFromTrash(state, articleId)) {
+          return fail(404, "Article favorite not found in trash");
+        }
+        return ok({ ok: true });
+      }
+
+      const purgeArticleMatch = path.match(/^\/trash\/articles\/(\d+)$/);
+      if (purgeArticleMatch && method === "DELETE") {
+        const articleId = toInt(purgeArticleMatch[1]);
+        if (!purgeFavoriteArticleFromTrash(state, articleId)) {
+          return fail(404, "Article favorite not found in trash");
+        }
+        return ok(undefined, 204);
+      }
+
       if (method === "POST" && path === "/folders") {
         const name = normalizeText(body.name);
         if (!name) return fail(400, "Folder name is required");
@@ -6898,6 +9207,90 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         };
         state.folders.push(created);
         return ok(created, 201);
+      }
+
+      if (method === "POST" && path === "/article-folders") {
+        state.articleFolders ??= [];
+        const name = normalizeText(body.name);
+        if (!name) return fail(400, "Article folder name is required");
+        const hasConflict = activeArticleFolders(state).some(
+          (folder) => normalizeKey(folder.name) === normalizeKey(name),
+        );
+        if (hasConflict) return fail(409, "Article folder name already exists");
+        const timestamp = now();
+        const nextId = Math.max(1, toInt(state.counters.articleFolder, 1));
+        const created: ArticleFolderRecord = {
+          id: nextId,
+          name,
+          description: normalizeText(body.description) || null,
+          sortOrder: activeArticleFolders(state).length + 1,
+          deletedAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        state.counters.articleFolder = nextId + 1;
+        state.articleFolders.push(created);
+        return ok(created, 201);
+      }
+
+      const articleFolderMatch = path.match(/^\/article-folders\/(\d+)$/);
+      if (articleFolderMatch && method === "PATCH") {
+        state.articleFolders ??= [];
+        const folderId = toInt(articleFolderMatch[1]);
+        const folder = state.articleFolders.find((item) => item.id === folderId);
+        if (!folder || folder.deletedAt !== null) {
+          return fail(404, "Article folder not found");
+        }
+        const nextName = normalizeText(body.name);
+        if (nextName) {
+          const hasConflict = activeArticleFolders(state).some(
+            (item) =>
+              item.id !== folderId && normalizeKey(item.name) === normalizeKey(nextName),
+          );
+          if (hasConflict) return fail(409, "Article folder name already exists");
+          folder.name = nextName;
+        }
+        if (Object.prototype.hasOwnProperty.call(body, "description")) {
+          folder.description = normalizeText(body.description) || null;
+        }
+        folder.updatedAt = now();
+        return ok(folder);
+      }
+
+      if (articleFolderMatch && method === "DELETE") {
+        state.articleFolders ??= [];
+        const folderId = toInt(articleFolderMatch[1]);
+        const folder = state.articleFolders.find((item) => item.id === folderId);
+        if (!folder || folder.deletedAt !== null) {
+          return fail(404, "Article folder not found");
+        }
+        state.articleFolders = state.articleFolders.filter((item) => item.id !== folderId);
+        state.articles = state.articles.map((article) => ({
+          ...article,
+          folderIds: article.folderIds.filter((id) => id !== folderId),
+        }));
+        return ok({ ok: true });
+      }
+
+      if (method === "PATCH" && path === "/article-folders/order") {
+        state.articleFolders ??= [];
+        const requestedIds = Array.isArray(body.folderIds)
+          ? body.folderIds.map((item) => toInt(item))
+          : [];
+        if (requestedIds.length === 0) return fail(400, "folderIds is required");
+        const active = activeArticleFolders(state);
+        const activeIds = new Set(active.map((folder) => folder.id));
+        const ordered = requestedIds.filter(
+          (id, index) => activeIds.has(id) && requestedIds.indexOf(id) === index,
+        );
+        for (const folder of active) {
+          if (!ordered.includes(folder.id)) ordered.push(folder.id);
+        }
+        ordered.forEach((id, index) => {
+          const folder = state.articleFolders.find((item) => item.id === id);
+          if (folder) folder.sortOrder = index + 1;
+        });
+        return ok({ ok: true, orderedIds: ordered });
       }
 
       const folderMatch = path.match(/^\/folders\/(\d+)$/);
@@ -7559,15 +9952,48 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
 }
 
 export default defineBackground(() => {
+  void scheduleBackupReminderAlarm().catch((error) => {
+    console.warn("[backup-reminder] alarm setup failed:", error);
+  });
+  void checkAndNotifyBackupReminder().catch((error) => {
+    console.warn("[backup-reminder] initial check failed:", error);
+  });
   void readState()
     .then((state) => scheduleFavoritesSyncRetry(state.syncMeta.favoritesJob.active))
     .catch(() => undefined);
   void restoreTagEnrichmentTask().catch((error) => {
     console.warn("[tag-enrich] restore failed:", error);
   });
+  void readAiOrganizerTask()
+    .then((task) => {
+      if (
+        task &&
+        !task.paused &&
+        (task.stage === "planning" || task.stage === "classifying")
+      ) {
+        scheduleAiOrganizerAlarm(task);
+        void triggerAiOrganizerWorker();
+      }
+    })
+    .catch((error) => {
+      console.warn("[ai-organizer] restore failed:", error);
+    });
 
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === BACKUP_REMINDER_ALARM) {
+        void checkAndNotifyBackupReminder().catch((error) => {
+          console.warn("[backup-reminder] alarm failed:", error);
+        });
+        return;
+      }
+      if (alarm.name === AI_ORGANIZER_ALARM) {
+        clearAiOrganizerAlarm();
+        void triggerAiOrganizerWorker().catch((error) => {
+          console.warn("[ai-organizer] alarm failed:", error);
+        });
+        return;
+      }
       if (alarm.name === TAG_ENRICH_ALARM) {
         if (chrome.alarms?.clear) chrome.alarms.clear(TAG_ENRICH_ALARM);
         void (async () => {
@@ -7602,6 +10028,12 @@ export default defineBackground(() => {
       }
     });
   }
+
+  chrome.notifications?.onClicked?.addListener((notificationId) => {
+    if (notificationId !== BACKUP_REMINDER_NOTIFICATION_ID) return;
+    chrome.notifications?.clear?.(notificationId);
+    chrome.runtime.openOptionsPage?.();
+  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.type !== MESSAGE_TYPE) return false;

@@ -12,14 +12,15 @@ async function readContentSource() {
   return source.replace(/\r\n/g, "\n");
 }
 
-test("content script mounts a dedicated quick favorite layer with existing-folder summary", async () => {
+test("content script mounts one collector without a redundant saved-folder summary", async () => {
   const source = await readContentSource();
 
   assert.doesNotMatch(source, /id: "bl-quick-favorite-layer"/);
   assert.doesNotMatch(source, /id: "bl-quick-favorite-search"/);
   assert.doesNotMatch(source, /id: "bl-quick-favorite-list"/);
   assert.doesNotMatch(source, /id: "bl-quick-favorite-save"/);
-  assert.match(source, /id: "bl-panel-existing-folders-summary"/);
+  assert.doesNotMatch(source, /bl-panel-existing-folders-summary/);
+  assert.doesNotMatch(source, /renderExistingFolderSummary/);
 });
 
 test("collector shortcut opens the unified collector modal and wires remembered folder storage", async () => {
@@ -47,6 +48,32 @@ test("duplicate save feedback references existing folders instead of only generi
   assert.match(source, /buildQuickFavoriteToastMessage\(/);
 });
 
+test("collector keeps saved state semantic and uses only inline save feedback", async () => {
+  const source = await readContentSource();
+
+  assert.match(source, /function setFloatingFavoriteState\(saved\)/);
+  assert.match(source, /dataset\.favoriteState = saved \? "saved" : "idle"/);
+  assert.match(source, /id: "bl-save-feedback"/);
+  assert.match(source, /status\.favoriteAlreadySavedTitle/);
+  assert.match(source, /showSaveFeedback\(result, toastMessage, wasSaved\);/);
+  assert.doesNotMatch(source, /setStatus\(toastMessage, "ok"\)/);
+  assert.match(source, /refreshFloatingFavoriteStateFromPage\(true\)/);
+});
+
+test("collector panel keeps motion while saved bookmark styling stays unchanged", async () => {
+  const source = await readContentSource();
+
+  assert.match(source, /"aria-pressed": "false"/);
+  assert.match(source, /"aria-expanded": "false"/);
+  assert.doesNotMatch(source, /bl-floating-bookmark-fill/);
+  assert.doesNotMatch(source, /bl-floating-saved-dot/);
+  assert.doesNotMatch(source, /data-favorite-state="saved"/);
+  assert.doesNotMatch(source, /bl-favorite-confirm/);
+  assert.match(source, /@keyframes bl-panel-in/);
+  assert.match(source, /#bl-floating-panel\.is-closing/);
+  assert.match(source, /@media \(prefers-reduced-motion: reduce\)/);
+});
+
 test("collector source removes the redundant subtitle and empty saved-folder placeholder copy", async () => {
   const source = await readContentSource();
 
@@ -57,9 +84,9 @@ test("collector source removes the redundant subtitle and empty saved-folder pla
 test("collector modal restores remembered folders on open and saves them only after a successful save", async () => {
   const source = await readContentSource();
 
-  assert.match(source, /const rememberedFolderIds = await readRememberedCollectorFolderIds\(\);/);
-  assert.match(source, /const currentVideoFolderIds = currentVideoLocalFolders/);
-  assert.match(source, /selectedFolderIds = new Set\(\[\.\.\.currentVideoFolderIds, \.\.\.rememberedFolderIds\]\);/);
+  assert.match(source, /const rememberedFolderIds = articleMode \? \[\] : await readRememberedCollectorFolderIds\(\);/);
+  assert.match(source, /\.\.\.currentCollectorFolderIds\(\)/);
+  assert.match(source, /selectedFolderIds = new Set\(\[/);
   assert.match(source, /createRememberedCollectorFolderIdsRecord\(\[\.\.\.folderIds\]\)/);
   assert.match(
     source,
@@ -85,12 +112,12 @@ test("collector enter handling respects IME and create-folder modal guards befor
   assert.match(source, /if \(event\.isComposing\) return;/);
   assert.match(
     source,
-    /if \(event\.key === "Enter"\) \{\s*if \(modal && !modal\.classList\.contains\("bl-hidden"\)\) return;\s*event\.preventDefault\(\);\s*void saveVideo\(\);\s*\}/s,
+    /if \(event\.key === "Enter"\) \{\s*if \(modal && !modal\.classList\.contains\("bl-hidden"\)\) return;\s*event\.preventDefault\(\);\s*void saveCollectorItem\(\);\s*\}/s,
   );
   assert.doesNotMatch(source, /void saveQuickFavorite\(\)/);
 });
 
-test("content script normalizes invalidated extension errors and uses larger solid toasts", async () => {
+test("content script uses compact solid toasts and an independently scrolling collector body", async () => {
   const source = await readContentSource();
 
   assert.match(source, /toast\.extensionReloadRequired/);
@@ -102,8 +129,8 @@ test("content script normalizes invalidated extension errors and uses larger sol
     source,
     /\.Vue-Toastification__toast\s*\{[\s\S]*min-width:\s*280px;[\s\S]*font-size:\s*13px;/,
   );
-  assert.match(
-    source,
-    /\.Vue-Toastification__toast--error\s*\{[\s\S]*linear-gradient\(/,
-  );
+  assert.match(source, /className: "bl-panel-scroll"/);
+  assert.match(source, /\.bl-panel-scroll\s*\{[\s\S]*overflow-y:\s*auto;/);
+  assert.match(source, /border-left:\s*3px solid #4ccbbb;/);
+  assert.doesNotMatch(source, /linear-gradient\(/);
 });
