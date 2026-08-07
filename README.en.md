@@ -115,13 +115,7 @@ pnpm ext:zip:all
 
 ## Release Summary
 
-### v1.0.1
-
-- Added an About page with GitHub repository and browser store links in Settings
-- Added daily update checks and a one-time post-update reminder
-- Store installs prefer the current browser store; manual installs fall back to GitHub Releases
-
-### v0.1.26
+### v1.0
 
 Added:
 
@@ -130,6 +124,7 @@ Added:
 3. Article favorites
 4. Comment favorites on video, Watch Later, and article pages
 5. Scheduled backup reminders
+6. Check for updates
 
 Improved:
 
