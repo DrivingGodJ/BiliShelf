@@ -29,11 +29,9 @@ BiliShelf is mainly built to solve these common problems:
 
 - Local-first: data is stored locally in the browser by default
 - Folder management: create, rename, sort, describe, delete, and restore from trash
-- Custom card sizes: video, comment, and article card sizes can be adjusted independently
 - AI organization: generate a classification plan for a selected scope from natural-language requirements, review it before applying, and retain snapshots for undo
 - Article favorites: save content from Bilibili article pages and organize it with article folders that are separate from video folders
 - Comment favorites: save comments from video pages, Watch Later pages, and article pages, including comment images and original-comment links
-- Scheduled backup reminders: periodically remind users to export or back up local data based on the last backup time
 - Custom tags: manage tags and use existing tags for autocomplete / selection while favoriting
 - Search capabilities:
   - global keyword search
@@ -56,7 +54,7 @@ BiliShelf is mainly built to solve these common problems:
 - Invalid-video recovery: try to recover title, cover, and description for unavailable videos
 - Import / export: supports `JSON` / `CSV`
 - WebDAV backup: it is recommended to create the target directory in advance; supports configuration, connectivity testing, backup upload, download, and restore
-- Management-center experience: supports dark / light themes and CN / EN switching, independent scrolling for folders and content, and broader UI/UX improvements
+- Management-center experience: supports dark / light themes and CN / EN switching
 
 ## Installation
 
