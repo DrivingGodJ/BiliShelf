@@ -13,7 +13,7 @@
 - 把视频信息、收藏关系与标签保存在本地，解决站内收藏夹数量限制和检索体验问题，提供比 B 站原生收藏更灵活的整理、检索、同步与备份能力。
 - 请一定完整阅读所有说明。
 
-<img width="2499" height="1286" alt="1bf3fc89-8eec-4c0a-848c-e6304997591c" src="https://github.com/user-attachments/assets/6dcddadf-3348-4e1d-80ea-a6386aee08ca" />
+<img width="2241" height="1261" alt="18740ef2e2bfbce9b416600e767fd77b" src="https://github.com/user-attachments/assets/d7fc93a0-836a-4273-a204-ece600cca48c" />
 
 ## 项目定位
 
