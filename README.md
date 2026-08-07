@@ -208,6 +208,11 @@ bili-like/
 - 插件（`extension/`）：WXT（Chrome/Edge MV3 + Firefox MV2 构建）、Background + IndexedDB 本地数据层、Content/Popup（TS/JS）
 - 构建与工具链：pnpm、tsup、tsx、Vite、WXT
 
+## 感谢支持
+
+<img width="1080" height="1620" alt="3fe7edd8edbedf9cd0bd527376cf265e" src="https://github.com/user-attachments/assets/fe14c07b-8a25-4a8f-9872-7e2d8cb547a6" />
+<img width="1114" height="1517" alt="41e01d51624c86f8b998a15284a7ed48" src="https://github.com/user-attachments/assets/61db8e6c-4f8d-4259-8349-dbcb50a870a3" />
+
 ## License
 
 MIT © TLRK
