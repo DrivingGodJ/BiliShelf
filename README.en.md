@@ -213,6 +213,11 @@ bili-like/
 - Extension (`extension/`): WXT (Chrome / Edge MV3 + Firefox MV2 builds), Background + IndexedDB local data layer, Content / Popup (TS / JS)
 - Build and tooling: pnpm, tsup, tsx, Vite, WXT
 
+## Thank you for your support
+
+<img width="360" height="540" alt="3fe7edd8edbedf9cd0bd527376cf265e" src="https://github.com/user-attachments/assets/fe14c07b-8a25-4a8f-9872-7e2d8cb547a6" />
+<img width="371" height="505" alt="41e01d51624c86f8b998a15284a7ed48" src="https://github.com/user-attachments/assets/61db8e6c-4f8d-4259-8349-dbcb50a870a3" />
+
 ## License
 
 MIT © TLRK
