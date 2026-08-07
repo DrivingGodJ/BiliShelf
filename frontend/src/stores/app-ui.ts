@@ -15,6 +15,107 @@ const VIDEO_CARD_WIDTH_STORAGE_KEY = "bili-like-video-card-width";
 const COMMENT_CARD_WIDTH_STORAGE_KEY = "bili-like-comment-card-width";
 const ARTICLE_CARD_WIDTH_STORAGE_KEY = "bili-like-article-card-width";
 
+type ExtensionStorageRecord = Record<string, unknown>;
+type ExtensionStorageArea = {
+  get: (
+    keys: string[],
+    callback?: (items: ExtensionStorageRecord) => void,
+  ) => Promise<ExtensionStorageRecord> | void;
+  set: (
+    items: ExtensionStorageRecord,
+    callback?: () => void,
+  ) => Promise<void> | void;
+};
+
+function resolveExtensionStorageArea() {
+  const root = globalThis as {
+    browser?: { runtime?: { id?: string }; storage?: { local?: ExtensionStorageArea } };
+    chrome?: { runtime?: { id?: string }; storage?: { local?: ExtensionStorageArea } };
+  };
+  if (root.browser?.runtime?.id && root.browser.storage?.local) {
+    return { area: root.browser.storage.local, mode: "promise" as const };
+  }
+  if (root.chrome?.runtime?.id && root.chrome.storage?.local) {
+    return { area: root.chrome.storage.local, mode: "callback" as const };
+  }
+  return null;
+}
+
+async function readExtensionStorage(keys: string[]) {
+  const resolved = resolveExtensionStorageArea();
+  if (!resolved) return {};
+  if (resolved.mode === "promise") {
+    try {
+      return (await resolved.area.get(keys)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  return new Promise<ExtensionStorageRecord>((resolve) => {
+    let settled = false;
+    const finish = (value: ExtensionStorageRecord = {}) => {
+      if (settled) return;
+      settled = true;
+      resolve(value || {});
+    };
+    try {
+      const maybePromise = resolved.area.get(keys, (items) => finish(items));
+      if (maybePromise && typeof (maybePromise as Promise<ExtensionStorageRecord>).then === "function") {
+        (maybePromise as Promise<ExtensionStorageRecord>)
+          .then((items) => finish(items))
+          .catch(() => finish());
+      }
+    } catch {
+      finish();
+    }
+  });
+}
+
+function writeExtensionStorage(items: ExtensionStorageRecord) {
+  const resolved = resolveExtensionStorageArea();
+  if (!resolved) return Promise.resolve();
+  if (resolved.mode === "promise") {
+    try {
+      return Promise.resolve(resolved.area.set(items));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    try {
+      const maybePromise = resolved.area.set(items, finish);
+      if (maybePromise && typeof (maybePromise as Promise<void>).then === "function") {
+        (maybePromise as Promise<void>).then(finish).catch(finish);
+      }
+    } catch {
+      finish();
+    }
+  });
+}
+
+function readLocalStorageValue(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+  }
+}
+
 function normalizeCardWidth(value: unknown) {
   if (value === null || value === undefined || String(value).trim() === "") {
     return VIDEO_CARD_WIDTH_DEFAULT;
@@ -100,7 +201,8 @@ export const useAppUiStore = defineStore("app-ui", () => {
     const next = normalizeCardWidth(value);
     videoCardWidth.value = next;
     if (persist) {
-      window.localStorage.setItem(VIDEO_CARD_WIDTH_STORAGE_KEY, String(next));
+      writeLocalStorageValue(VIDEO_CARD_WIDTH_STORAGE_KEY, String(next));
+      void writeExtensionStorage({ [VIDEO_CARD_WIDTH_STORAGE_KEY]: next }).catch(() => {});
     }
   }
 
@@ -108,7 +210,8 @@ export const useAppUiStore = defineStore("app-ui", () => {
     const next = normalizeCardWidth(value);
     commentCardWidth.value = next;
     if (persist) {
-      window.localStorage.setItem(COMMENT_CARD_WIDTH_STORAGE_KEY, String(next));
+      writeLocalStorageValue(COMMENT_CARD_WIDTH_STORAGE_KEY, String(next));
+      void writeExtensionStorage({ [COMMENT_CARD_WIDTH_STORAGE_KEY]: next }).catch(() => {});
     }
   }
 
@@ -116,24 +219,32 @@ export const useAppUiStore = defineStore("app-ui", () => {
     const next = normalizeCardWidth(value);
     articleCardWidth.value = next;
     if (persist) {
-      window.localStorage.setItem(ARTICLE_CARD_WIDTH_STORAGE_KEY, String(next));
+      writeLocalStorageValue(ARTICLE_CARD_WIDTH_STORAGE_KEY, String(next));
+      void writeExtensionStorage({ [ARTICLE_CARD_WIDTH_STORAGE_KEY]: next }).catch(() => {});
     }
   }
 
-  function initFromStorage() {
+  async function initFromStorage() {
     if (initialized.value) return;
     setLocale(resolveInitialLocale(), false);
     applyTheme(resolveInitialTheme(), false);
-    const storedVideoCardWidth = window.localStorage.getItem(
+    const extensionValues = await readExtensionStorage([
       VIDEO_CARD_WIDTH_STORAGE_KEY,
-    );
+      COMMENT_CARD_WIDTH_STORAGE_KEY,
+      ARTICLE_CARD_WIDTH_STORAGE_KEY,
+    ]);
+    const storedVideoCardWidth =
+      extensionValues[VIDEO_CARD_WIDTH_STORAGE_KEY] ??
+      readLocalStorageValue(VIDEO_CARD_WIDTH_STORAGE_KEY);
     videoCardWidth.value = normalizeCardWidth(storedVideoCardWidth);
     commentCardWidth.value = normalizeCardWidth(
-      window.localStorage.getItem(COMMENT_CARD_WIDTH_STORAGE_KEY) ??
+      extensionValues[COMMENT_CARD_WIDTH_STORAGE_KEY] ??
+        readLocalStorageValue(COMMENT_CARD_WIDTH_STORAGE_KEY) ??
         storedVideoCardWidth,
     );
     articleCardWidth.value = normalizeCardWidth(
-      window.localStorage.getItem(ARTICLE_CARD_WIDTH_STORAGE_KEY) ??
+      extensionValues[ARTICLE_CARD_WIDTH_STORAGE_KEY] ??
+        readLocalStorageValue(ARTICLE_CARD_WIDTH_STORAGE_KEY) ??
         storedVideoCardWidth,
     );
     initialized.value = true;

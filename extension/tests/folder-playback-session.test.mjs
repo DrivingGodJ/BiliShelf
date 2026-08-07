@@ -6,6 +6,8 @@ import {
   buildFolderPlaybackSession,
   findPlaybackQueueIndex,
   getAdjacentPlaybackItems,
+  isMarkedFolderPlaybackUrl,
+  markFolderPlaybackUrl,
   normalizePlaybackSession,
 } from "../shared/folder-playback-session.js";
 
@@ -68,4 +70,17 @@ test("getAdjacentPlaybackItems() returns disabled edges at the first and last it
 
 test("normalizePlaybackSession(null) returns null", () => {
   assert.equal(normalizePlaybackSession(null), null);
+});
+
+test("playback URLs carry a marker that survives navigation", () => {
+  const marked = markFolderPlaybackUrl(
+    "https://www.bilibili.com/video/BV1gQgh6NEAb/",
+  );
+
+  assert.match(marked, /bilishelf_playback=1/);
+  assert.equal(isMarkedFolderPlaybackUrl(marked), true);
+  assert.equal(
+    isMarkedFolderPlaybackUrl("https://www.bilibili.com/video/BV1gQgh6NEAb/"),
+    false,
+  );
 });

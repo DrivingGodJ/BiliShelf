@@ -17,6 +17,8 @@ import {
 import {
   findPlaybackQueueIndex,
   getAdjacentPlaybackItems,
+  isMarkedFolderPlaybackUrl,
+  markFolderPlaybackUrl,
 } from "./shared/folder-playback-session.js";
 import {
   QUICK_FAVORITE_SHORTCUT_STORAGE_KEY,
@@ -1438,7 +1440,9 @@ import {
   function resolvePlaybackCursor() {
     const base = pickBasePayload();
     return {
-      bvid: normalizeBvidToken(base.bvid || currentVideo?.bvid || "")
+      bvid: normalizeBvidToken(
+        extractBvidFromAny(location.href) || base.bvid || currentVideo?.bvid || ""
+      )
     };
   }
 
@@ -1450,10 +1454,18 @@ import {
     return bvid ? `https://www.bilibili.com/video/${bvid}/` : "";
   }
 
-  function navigateToPlaybackItem(item) {
-    const url = resolvePlaybackItemUrl(item);
+  async function navigateToPlaybackItem(item) {
+    const url = markFolderPlaybackUrl(resolvePlaybackItemUrl(item));
     if (!url) return;
-    window.location.href = url;
+    try {
+      await requestLocalApi("PATCH", "/playback/session/current", {
+        videoId: Number(item?.videoId) || undefined,
+        bvid: normalizeBvidToken(item?.bvid || "") || undefined,
+      });
+    } catch (error) {
+      console.warn("[BiliShelf extension] playback cursor update failed", error);
+    }
+    window.location.assign(url);
   }
 
   function syncPlaybackOverlayState() {
@@ -1553,7 +1565,7 @@ import {
 
       row.disabled = isActive;
       row.addEventListener("click", () => {
-        navigateToPlaybackItem(item);
+        void navigateToPlaybackItem(item);
       });
       playbackListEl.appendChild(row);
     });
@@ -1571,7 +1583,16 @@ import {
       }
 
       const cursor = resolvePlaybackCursor();
-      const currentIndex = findPlaybackQueueIndex(session.queue, cursor);
+      let currentIndex = findPlaybackQueueIndex(session.queue, cursor);
+      if (
+        currentIndex < 0 &&
+        isMarkedFolderPlaybackUrl(location.href) &&
+        Number.isInteger(Number(session.currentIndex)) &&
+        Number(session.currentIndex) >= 0 &&
+        Number(session.currentIndex) < session.queue.length
+      ) {
+        currentIndex = Number(session.currentIndex);
+      }
       if (currentIndex < 0) {
         hidePlaybackOverlay();
         return;
@@ -1604,11 +1625,15 @@ import {
 
       if (playbackPrevBtn) {
         playbackPrevBtn.disabled = adjacent.previous.disabled;
-        playbackPrevBtn.onclick = () => navigateToPlaybackItem(adjacent.previous.item);
+        playbackPrevBtn.onclick = () => {
+          void navigateToPlaybackItem(adjacent.previous.item);
+        };
       }
       if (playbackNextBtn) {
         playbackNextBtn.disabled = adjacent.next.disabled;
-        playbackNextBtn.onclick = () => navigateToPlaybackItem(adjacent.next.item);
+        playbackNextBtn.onclick = () => {
+          void navigateToPlaybackItem(adjacent.next.item);
+        };
       }
       if (playbackListToggleBtn) {
         playbackListToggleBtn.onclick = togglePlaybackQueueList;

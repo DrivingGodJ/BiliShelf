@@ -1,5 +1,26 @@
 const FOLDER_PLAYBACK_STORAGE_KEY = "folderPlaybackSession";
 const FOLDER_PLAYBACK_QUEUE_CAP = 1000;
+const FOLDER_PLAYBACK_URL_PARAM = "bilishelf_playback";
+
+function markFolderPlaybackUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    url.searchParams.set(FOLDER_PLAYBACK_URL_PARAM, "1");
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function isMarkedFolderPlaybackUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    return url.searchParams.get(FOLDER_PLAYBACK_URL_PARAM) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function normalizePlaybackSession(session) {
   if (!session) return null;
@@ -100,6 +121,9 @@ function getAdjacentPlaybackItems(queue = [], currentIndex = 0) {
 export {
   FOLDER_PLAYBACK_STORAGE_KEY,
   FOLDER_PLAYBACK_QUEUE_CAP,
+  FOLDER_PLAYBACK_URL_PARAM,
+  markFolderPlaybackUrl,
+  isMarkedFolderPlaybackUrl,
   normalizePlaybackSession,
   buildFolderPlaybackSession,
   findPlaybackQueueIndex,

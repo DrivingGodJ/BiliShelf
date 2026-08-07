@@ -57,8 +57,9 @@ test("selected folder description is shown above its video results", async () =>
 });
 
 test("video card width is adjustable, persisted, and drives an auto-fill grid", async () => {
-  const [uiStore, panel, settings, grid] = await Promise.all([
+  const [uiStore, app, panel, settings, grid] = await Promise.all([
     readSource("stores", "app-ui.ts"),
+    readSource("App.vue"),
     readSource("components", "panels", "ManagerPanel.vue"),
     readSource("components", "dialogs", "AiSettingsDialog.vue"),
     readSource("components", "VideoGrid.vue"),
@@ -71,6 +72,10 @@ test("video card width is adjustable, persisted, and drives an auto-fill grid", 
   assert.match(uiStore, /function setVideoCardWidth/);
   assert.match(uiStore, /function setCommentCardWidth/);
   assert.match(uiStore, /function setArticleCardWidth/);
+  assert.match(uiStore, /readExtensionStorage/);
+  assert.match(uiStore, /writeExtensionStorage/);
+  assert.match(uiStore, /async function initFromStorage/);
+  assert.match(app, /await uiStore\.initFromStorage\(\)/);
   assert.doesNotMatch(panel, /type="range"|update:videoCardWidth/);
   assert.match(settings, /value="cards"/);
   assert.match(settings, /v-model="localVideoCardWidth"/);

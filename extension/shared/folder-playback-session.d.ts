@@ -1,5 +1,9 @@
 export const FOLDER_PLAYBACK_STORAGE_KEY: "folderPlaybackSession";
 export const FOLDER_PLAYBACK_QUEUE_CAP: 1000;
+export const FOLDER_PLAYBACK_URL_PARAM: "bilishelf_playback";
+
+export function markFolderPlaybackUrl(rawUrl: unknown): string;
+export function isMarkedFolderPlaybackUrl(rawUrl: unknown): boolean;
 
 export type FolderPlaybackQueueItem = {
   id: number | null;

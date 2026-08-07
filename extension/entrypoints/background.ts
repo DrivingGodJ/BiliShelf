@@ -53,6 +53,7 @@ import {
   FOLDER_PLAYBACK_STORAGE_KEY,
   buildFolderPlaybackSession,
   findPlaybackQueueIndex,
+  markFolderPlaybackUrl,
   normalizePlaybackSession,
 } from "../shared/folder-playback-session.js";
 import { categorizeFolderVideo, requestAiJson } from "../shared/ai-category-runtime.js";
@@ -454,7 +455,7 @@ const BACKUP_REMINDER_NOTIFICATION_ID = "bilishelf-backup-reminder";
 const BACKUP_REMINDER_STORAGE_KEY = "bilishelf-backup-reminder-v1";
 const BACKUP_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const BACKUP_REMINDER_CHECK_INTERVAL_MINUTES = 60;
-const TAG_ENRICH_BATCH_SIZE = 2;
+const TAG_ENRICH_BATCH_SIZE = 5;
 const TAG_ENRICH_BATCH_DELAY_MIN_MS = 20_000;
 const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 10_000;
 const TAG_ENRICH_RESTORE_DELAY_MS = 5_000;
@@ -8701,7 +8702,9 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
           chrome.tabs?.create
         ) {
           try {
-            await chrome.tabs.create({ url: payload.firstItem.url });
+            await chrome.tabs.create({
+              url: markFolderPlaybackUrl(payload.firstItem.url) || payload.firstItem.url,
+            });
             opened = true;
           } catch (error) {
             // The queue is already persisted; report the tab failure without

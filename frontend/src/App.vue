@@ -3346,7 +3346,7 @@ onMounted(async () => {
   window.addEventListener("storage", handleStorageSync);
   startExportReminderChecks();
   migrateBackupReminderState();
-  uiStore.initFromStorage();
+  await uiStore.initFromStorage();
   if (route.name === "manager") {
     applyManagerQuery(route.query);
   }

@@ -21,6 +21,8 @@ test("content script reads the active playback session and renders a dedicated o
   assert.match(source, /requestLocalApi\("GET", "\/playback\/session"\)/);
   assert.match(source, /id: "bl-playback-overlay"/);
   assert.match(source, /function refreshPlaybackOverlay\(\)/);
+  assert.match(source, /isMarkedFolderPlaybackUrl\(location\.href\)/);
+  assert.match(source, /markFolderPlaybackUrl\(resolvePlaybackItemUrl\(item\)\)/);
 });
 
 test("playback overlay exposes previous next list and collapse controls", async () => {
@@ -39,6 +41,7 @@ test("playback overlay updates the active cursor before rendering controls", asy
   const source = await readContentSource();
 
   assert.match(source, /requestLocalApi\("PATCH", "\/playback\/session\/current"/);
+  assert.match(source, /videoId: Number\(item\?\.videoId\)/);
   assert.match(source, /findPlaybackQueueIndex\(/);
   assert.match(source, /getAdjacentPlaybackItems\(/);
 });
