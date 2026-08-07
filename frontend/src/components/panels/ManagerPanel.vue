@@ -162,16 +162,6 @@ function submitVideoPageJump() {
 </script>
 
 <template>
-  <SearchBar
-    :keyword="keyword"
-    :tags="tags"
-    :locale="locale"
-    @update:keyword="emit('update:keyword', String($event))"
-    @append-field-token="emit('appendFieldToken', $event)"
-    @search="emit('search')"
-    @clear="emit('clearSearch')"
-  />
-
   <section
     v-if="activeFolder"
     class="panel-surface flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between"
@@ -189,6 +179,16 @@ function submitVideoPageJump() {
       {{ t("common.videosCount", { count: total }) }}
     </span>
   </section>
+
+  <SearchBar
+    :keyword="keyword"
+    :tags="tags"
+    :locale="locale"
+    @update:keyword="emit('update:keyword', String($event))"
+    @append-field-token="emit('appendFieldToken', $event)"
+    @search="emit('search')"
+    @clear="emit('clearSearch')"
+  />
 
   <section class="panel-surface p-3 md:p-4">
     <div class="flex items-center gap-2 md:hidden">

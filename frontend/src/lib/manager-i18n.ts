@@ -214,14 +214,29 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "settings.saveAi": { "zh-CN": "保存 AI 设置", "en-US": "Save AI Settings" },
   "settings.saveListener": { "zh-CN": "保存监听设置", "en-US": "Save Listener Settings" },
   "sync.dialogTitle": {
-    "zh-CN": "选择要同步的收藏夹",
-    "en-US": "Select folders to sync",
+    "zh-CN": "同步B站",
+    "en-US": "Sync Bilibili",
   },
   "sync.dialogDesc": {
     "zh-CN":
-      "选择一个或多个收藏夹后，系统会按当前列表顺序逐个同步。",
+      "分别管理视频同步和标签补全；两项任务都会保存进度，可关闭管理页后继续执行。",
     "en-US":
-      "Select one or more folders and they will be synced one by one in the current list order.",
+      "Manage video sync and tag enrichment separately. Both persist progress and can continue after the manager closes.",
+  },
+  "sync.videoTab": { "zh-CN": "同步视频", "en-US": "Sync videos" },
+  "sync.tagTab": { "zh-CN": "补全标签", "en-US": "Enrich tags" },
+  "sync.tagScopeTitle": { "zh-CN": "选择标签补全范围", "en-US": "Choose tag scope" },
+  "sync.tagScopeDesc": {
+    "zh-CN": "选择一个或多个本地收藏夹，只为其中尚未获取 B 站标签的视频补全。重复视频只处理一次。",
+    "en-US": "Choose local folders and enrich only videos still missing Bilibili tags. Duplicate videos are processed once.",
+  },
+  "sync.tagFolderCount": {
+    "zh-CN": "已选 {selected} / {total} 个收藏夹",
+    "en-US": "{selected} / {total} folders selected",
+  },
+  "sync.tagScopeVideoCount": {
+    "zh-CN": "当前任务范围 {count} 个视频",
+    "en-US": "{count} videos in current task",
   },
   "sync.folderCount": {
     "zh-CN": "已选 {selected} / {total}",
@@ -253,15 +268,15 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   },
   "sync.includeTagEnrichmentHint": {
     "zh-CN":
-      "抓取并实时补齐 B 站标签（更完整但更慢）。建议关闭，主同步后将后台慢慢补齐。",
+      "在视频同步过程中同时抓取 B 站标签（更完整但更慢）。也可以在“补全标签”中单独发起任务。",
     "en-US":
-      "Fetch and enrich Bilibili tags during sync (more complete but slower). Recommended to keep off; tags will be enriched in background after main sync.",
+      "Fetch Bilibili tags during video sync (more complete but slower), or start a separate job from Tag enrichment.",
   },
   "sync.tagEnrichDisabledHint": {
     "zh-CN":
-      "主同步默认不抓取 archive-tags；同步完成后将自动进入阶段2，在后台低速补全标签。",
+      "主同步默认不抓取 archive-tags；需要时可切换到“补全标签”，选择本地收藏夹并独立发起任务。",
     "en-US":
-      "Archive-tags are skipped during primary sync. Phase 2 runs automatically in background to enrich tags at a low rate.",
+      "Archive-tags are skipped during video sync. Open Tag enrichment, select local folders, and start a separate job when needed.",
   },
   "sync.resumeHint": {
     "zh-CN": "检测到上次中断进度：将从第 {page} 页继续导入。",
@@ -326,6 +341,10 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "en-US": "Bilibili returned {count} invalid videos. Their saved records were preserved and do not prevent this sync from succeeding.",
   },
   "sync.dismissStatus": { "zh-CN": "关闭本次状态", "en-US": "Dismiss this status" },
+  "sync.tag.waitingForVideoSync": {
+    "zh-CN": "标签任务已加入队列。为减少风控风险，将在视频同步结束后自动开始。",
+    "en-US": "The tag task is queued and will start automatically after video sync to reduce risk-control exposure.",
+  },
   "sync.incomplete": { "zh-CN": "未完成夹", "en-US": "Incomplete" },
   "sync.diagnostics": { "zh-CN": "需要处理的项目", "en-US": "Items requiring attention" },
   "sync.phase.idle": { "zh-CN": "空闲", "en-US": "Idle" },
@@ -518,8 +537,8 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
       "Missing {missing}, last batch processed {processed}, bound {bound}",
   },
   "sync.tagEnrichTitle": {
-    "zh-CN": "阶段2：后台标签补全",
-    "en-US": "Phase 2: Background tag enrichment",
+    "zh-CN": "标签补全任务",
+    "en-US": "Tag enrichment job",
   },
   "sync.reloadTagEnrich": {
     "zh-CN": "刷新状态",
@@ -600,10 +619,14 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "zh-CN": "停止",
     "en-US": "Stop",
   },
+  "sync.interruptTagEnrich": {
+    "zh-CN": "中断任务",
+    "en-US": "Cancel task",
+  },
   "sync.tag.phase.idle": { "zh-CN": "未开始", "en-US": "Idle" },
   "sync.tag.phase.running": { "zh-CN": "执行中", "en-US": "Running" },
   "sync.tag.phase.waiting": { "zh-CN": "等待中", "en-US": "Waiting" },
-  "sync.tag.phase.paused": { "zh-CN": "已停止", "en-US": "Stopped" },
+  "sync.tag.phase.paused": { "zh-CN": "已暂停", "en-US": "Paused" },
   "sync.tag.phase.completed": { "zh-CN": "已完成", "en-US": "Completed" },
   "sync.tag.phase.failed": { "zh-CN": "失败", "en-US": "Failed" },
   "sync.tag.phaseDetail.idle": {
@@ -1474,6 +1497,10 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "zh-CN": "触发标签补全失败",
     "en-US": "Failed to trigger tag enrichment",
   },
+  "toast.tagEnrichDismissFail": {
+    "zh-CN": "关闭标签补全状态失败",
+    "en-US": "Failed to dismiss tag enrichment status",
+  },
   "toast.tagEnrichSettingsSaved": {
     "zh-CN": "标签补全速率已保存",
     "en-US": "Tag enrichment rate saved",
@@ -1695,8 +1722,8 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
       "Risk-control detected (412). Resume manually after cooldown.",
   },
   "toast.tagEnrichStopped": {
-    "zh-CN": "标签补全任务已停止，进度已保存",
-    "en-US": "Tag enrichment stopped with progress saved",
+    "zh-CN": "标签补全任务已暂停，进度已保存",
+    "en-US": "Tag enrichment paused with progress saved",
   },
   "toast.tagEnrichStarted": {
     "zh-CN": "标签补全任务已开始",
@@ -1712,9 +1739,9 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   },
   "toast.autoInitDoneDesc": {
     "zh-CN":
-      "已完成第一阶段同步，累计写入视频 {videos} 条，标签将继续后台补全。",
+      "视频同步完成，累计写入 {videos} 条。可在“同步B站 > 补全标签”中按收藏夹补全标签。",
     "en-US":
-      "Phase 1 sync finished with {videos} videos imported. Tag enrichment will continue in background.",
+      "Video sync finished with {videos} imported. Use Sync Bilibili > Tag enrichment to enrich selected folders.",
   },
   "toast.autoInitFail": {
     "zh-CN": "初始化同步失败，请稍后重试",

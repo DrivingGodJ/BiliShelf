@@ -182,15 +182,14 @@ function t(key: keyof typeof GRID_TEXT) {
 .video-grid {
   display: grid;
   grid-template-columns: repeat(
-    auto-fill,
-    minmax(min(100%, var(--video-card-width)), var(--video-card-width))
+    auto-fit,
+    minmax(min(100%, var(--video-card-width)), 1fr)
   );
-  justify-content: start;
 }
 
 @media (max-width: 639px) {
   .video-grid {
-    grid-template-columns: minmax(0, min(100%, var(--video-card-width)));
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

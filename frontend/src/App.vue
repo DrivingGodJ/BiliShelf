@@ -84,6 +84,7 @@ import {
   fetchFolderAiCategories,
   fetchHistoryModelSyncStatus,
   dismissHistoryModelSyncStatus,
+  dismissTagEnrichmentStatus,
   fetchTagEnrichmentStatus,
   fetchBidirectionalSyncSettings,
   fetchWebDavSettings,
@@ -311,6 +312,15 @@ const autoInitSelectedFolderIds = ref<number[]>([]);
 const autoInitSubmitting = ref(false);
 const tagEnrichmentStatus = ref<TagEnrichmentStatus | null>(null);
 const tagEnrichmentLoading = ref(false);
+const tagSelectedFolderIds = ref<number[]>([]);
+const tagEnrichmentStatusVisible = computed(() => {
+  const status = tagEnrichmentStatus.value;
+  if (!status) return false;
+  if (status.phase !== "idle") return true;
+  return (
+    (syncHistoryStatus.value?.startedAt ?? 0) > (status.dismissedAt ?? 0)
+  );
+});
 const tagEnrichmentSettings = computed<TagEnrichmentSettings | null>(() => {
   const status = tagEnrichmentStatus.value;
   if (!status) return null;
@@ -1426,6 +1436,16 @@ function applyTagEnrichmentStatus(status: TagEnrichmentStatus) {
   const previous = tagEnrichmentStatus.value;
   tagEnrichmentStatus.value = status;
   if (
+    !syncDialogOpen.value &&
+    tagSelectedFolderIds.value.length === 0 &&
+    status.selectedFolderIds.length > 0
+  ) {
+    const activeFolderIds = new Set(folders.value.map((folder) => folder.id));
+    tagSelectedFolderIds.value = status.selectedFolderIds.filter((folderId) =>
+      activeFolderIds.has(folderId),
+    );
+  }
+  if (
     previous &&
     (previous.processed !== status.processed ||
       previous.tagsBound !== status.tagsBound ||
@@ -1456,7 +1476,18 @@ async function resumeTagEnrichmentFromUi() {
   if (tagEnrichmentLoading.value) return;
   tagEnrichmentLoading.value = true;
   try {
-    const status = applyTagEnrichmentStatus(await resumeTagEnrichment());
+    const currentPhase = tagEnrichmentStatus.value?.phase ?? "idle";
+    const startsNewTask =
+      currentPhase === "idle" ||
+      currentPhase === "completed" ||
+      currentPhase === "failed";
+    const status = applyTagEnrichmentStatus(
+      await resumeTagEnrichment(
+        startsNewTask
+          ? { selectedFolderIds: tagSelectedFolderIds.value }
+          : undefined,
+      ),
+    );
     notifySuccess(
       status.phase === "completed" && status.totalMissing === 0
         ? t("toast.tagEnrichNoPending")
@@ -1478,6 +1509,18 @@ async function runTagEnrichmentNowFromUi() {
     notifySuccess(t("toast.tagEnrichTriggered"));
   } catch (error) {
     notifyError(t("toast.tagEnrichTriggerFail"), error);
+  } finally {
+    tagEnrichmentLoading.value = false;
+  }
+}
+
+async function dismissTagEnrichmentFromUi() {
+  if (!TAG_SYNC_ENABLED || tagEnrichmentLoading.value) return;
+  tagEnrichmentLoading.value = true;
+  try {
+    applyTagEnrichmentStatus(await dismissTagEnrichmentStatus());
+  } catch (error) {
+    notifyError(t("toast.tagEnrichDismissFail"), error);
   } finally {
     tagEnrichmentLoading.value = false;
   }
@@ -2452,6 +2495,21 @@ async function openSyncImportDialog() {
   }
   if (TAG_SYNC_ENABLED) tasks.push(refreshTagEnrichmentState());
   await Promise.all(tasks);
+  const activeFolderIds = new Set(folders.value.map((folder) => folder.id));
+  const persistedTagFolderIds =
+    tagEnrichmentStatus.value?.selectedFolderIds.filter((folderId) =>
+      activeFolderIds.has(folderId),
+    ) ?? [];
+  if (persistedTagFolderIds.length > 0) {
+    tagSelectedFolderIds.value = persistedTagFolderIds;
+  } else if (
+    selectedFolderId.value !== null &&
+    activeFolderIds.has(selectedFolderId.value)
+  ) {
+    tagSelectedFolderIds.value = [selectedFolderId.value];
+  } else {
+    tagSelectedFolderIds.value = folders.value.map((folder) => folder.id);
+  }
 }
 
 function toggleSyncFolder(remoteId: number, checked: boolean) {
@@ -2510,6 +2568,23 @@ async function stopHistoryModelSyncFromUi() {
   } finally {
     syncStopping.value = false;
   }
+}
+
+function toggleTagFolder(folderId: number, checked: boolean) {
+  const selected = new Set(tagSelectedFolderIds.value);
+  if (checked) selected.add(folderId);
+  else selected.delete(folderId);
+  tagSelectedFolderIds.value = folders.value
+    .map((folder) => folder.id)
+    .filter((id) => selected.has(id));
+}
+
+function selectAllTagFolders() {
+  tagSelectedFolderIds.value = folders.value.map((folder) => folder.id);
+}
+
+function clearTagFolders() {
+  tagSelectedFolderIds.value = [];
 }
 
 async function dismissHistoryModelSyncFromUi() {
@@ -3616,7 +3691,7 @@ onBeforeUnmount(() => {
         v-if="
           TAG_SYNC_ENABLED &&
           tagEnrichmentStatus &&
-          tagEnrichmentStatus.phase !== 'idle' &&
+          tagEnrichmentStatusVisible &&
           !trashMode &&
           !followingUpsMode &&
           !commentsMode &&
@@ -3624,12 +3699,15 @@ onBeforeUnmount(() => {
         "
         :status="tagEnrichmentStatus"
         :loading="tagEnrichmentLoading"
+        :start-disabled="false"
         :now-ms="tickNow"
         :t="t"
         @refresh="refreshTagEnrichmentState"
         @start="resumeTagEnrichmentFromUi"
         @stop="pauseTagEnrichmentFromUi"
         @run="runTagEnrichmentNowFromUi"
+        @dismiss="dismissTagEnrichmentFromUi"
+        @interrupt="dismissTagEnrichmentFromUi"
       />
 
       <AiOrganizerStatusBar
@@ -3959,10 +4037,15 @@ onBeforeUnmount(() => {
       :stopping="syncStopping"
       :tag-enrichment-status="tagEnrichmentStatus"
       :tag-enrichment-loading="tagEnrichmentLoading"
+      :tag-folders="folders"
+      :selected-tag-folder-ids="tagSelectedFolderIds"
       @update:open="syncDialogOpen = $event"
       @reload="loadSyncFolderOptions(true)"
       @select-all="selectAllSyncFolders"
       @clear-selection="clearSyncFolders"
+      @toggle-tag-folder="toggleTagFolder"
+      @select-all-tag-folders="selectAllTagFolders"
+      @clear-tag-folder-selection="clearTagFolders"
       @toggle-folder="
         (remoteId, checked) => toggleSyncFolder(remoteId, checked)
       "
@@ -3975,6 +4058,8 @@ onBeforeUnmount(() => {
       @start-tag-enrichment="resumeTagEnrichmentFromUi"
       @stop-tag-enrichment="pauseTagEnrichmentFromUi"
       @run-tag-enrichment="runTagEnrichmentNowFromUi"
+      @dismiss-tag-enrichment="dismissTagEnrichmentFromUi"
+      @interrupt-tag-enrichment="dismissTagEnrichmentFromUi"
     />
 
     <ConfirmActionDialog

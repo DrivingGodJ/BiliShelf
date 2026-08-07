@@ -54,9 +54,13 @@ test("selected folder description is shown above its video results", async () =>
   assert.match(panel, /\{\{ activeFolder\.name \}\}/);
   assert.match(panel, /v-if="activeFolder\.description"/);
   assert.match(panel, /\{\{ activeFolder\.description \}\}/);
+  assert.ok(
+    panel.indexOf('v-if="activeFolder"') < panel.indexOf("<SearchBar"),
+    "folder name and description should appear before search",
+  );
 });
 
-test("video card width is adjustable, persisted, and drives an auto-fill grid", async () => {
+test("video card width is adjustable, persisted, and fills the available grid width", async () => {
   const [uiStore, app, panel, settings, grid] = await Promise.all([
     readSource("stores", "app-ui.ts"),
     readSource("App.vue"),
@@ -85,7 +89,8 @@ test("video card width is adjustable, persisted, and drives an auto-fill grid", 
   assert.match(settings, /emit\("setCommentCardWidth", Number\(normalized\)\)/);
   assert.match(settings, /emit\("setArticleCardWidth", Number\(normalized\)\)/);
   assert.match(grid, /--video-card-width/);
-  assert.match(grid, /minmax\(min\(100%, var\(--video-card-width\)\), var\(--video-card-width\)\)/);
-  assert.match(grid, /minmax\(0, min\(100%, var\(--video-card-width\)\)\)/);
-  assert.match(grid, /justify-content: start/);
+  assert.match(grid, /repeat\(\s*auto-fit,/);
+  assert.match(grid, /minmax\(min\(100%, var\(--video-card-width\)\), 1fr\)/);
+  assert.match(grid, /grid-template-columns: minmax\(0, 1fr\)/);
+  assert.doesNotMatch(grid, /justify-content: start/);
 });

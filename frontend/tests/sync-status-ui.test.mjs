@@ -175,11 +175,12 @@ test("sync diagnostics have matching Chinese and English copy", async () => {
 });
 
 test("tag status bar exposes persisted progress and explicit task controls", async () => {
-  const [component, app, api, syncImport] = await Promise.all([
+  const [component, app, api, syncImport, background] = await Promise.all([
     readFile(tagStatusPath, "utf8"),
     readFile(appPath, "utf8"),
     readFile(apiPath, "utf8"),
     readFile(dialogPath, "utf8"),
+    readFile(backgroundPath, "utf8"),
   ]);
 
   assert.match(api, /phase: "idle" \| "running" \| "waiting" \| "paused"/);
@@ -189,6 +190,12 @@ test("tag status bar exposes persisted progress and explicit task controls", asy
   assert.match(api, /empty: number;/);
   assert.match(api, /failed: number;/);
   assert.match(api, /errors: Array</);
+  assert.match(api, /dismissedAt: number \| null;/);
+  assert.match(api, /selectedFolderIds: number\[\];/);
+  assert.match(api, /scopeVideoCount: number;/);
+  assert.match(api, /waitingForVideoSync: boolean;/);
+  assert.match(api, /dismissTagEnrichmentStatus/);
+  assert.match(api, /tag-enrichment\/dismiss/);
   assert.match(component, /aria-live="polite"/);
   assert.match(component, /status\?\.processed/);
   assert.match(component, /status\?\.totalMissing/);
@@ -196,14 +203,31 @@ test("tag status bar exposes persisted progress and explicit task controls", asy
   assert.match(component, /emit\('start'\)/);
   assert.match(component, /emit\('stop'\)/);
   assert.match(component, /emit\('run'\)/);
+  assert.match(component, /startDisabled\?: boolean;/);
+  assert.match(component, /emit\('interrupt'\)/);
+  assert.match(component, /emit\('dismiss'\)/);
+  assert.match(component, /sync\.tag\.waitingForVideoSync/);
+  assert.match(component, /phase === "paused"[\s\S]*sync\.resumeTagEnrich/);
+  assert.match(component, /loading \|\| startDisabled \|\| cooldownActive/);
   assert.match(app, /<TagEnrichmentStatusBar/);
-  assert.match(app, /tagEnrichmentStatus\.phase !== 'idle'/);
+  assert.match(app, /tagEnrichmentStatusVisible/);
+  assert.match(app, /status\.dismissedAt/);
   assert.match(app, /@start="resumeTagEnrichmentFromUi"/);
   assert.match(app, /@stop="pauseTagEnrichmentFromUi"/);
+  assert.match(app, /@dismiss="dismissTagEnrichmentFromUi"/);
   assert.match(syncImport, /TagEnrichmentStatusBar/);
+  assert.match(syncImport, /<TabsTrigger value="video"/);
+  assert.match(syncImport, /<TabsTrigger value="tags"/);
+  assert.match(syncImport, /selectedTagFolderIds: number\[\];/);
+  assert.match(syncImport, /emit\('toggle-tag-folder'/);
   assert.match(syncImport, /emit\('start-tag-enrichment'\)/);
   assert.match(syncImport, /emit\('stop-tag-enrichment'\)/);
   assert.match(syncImport, /emit\('run-tag-enrichment'\)/);
+  assert.match(syncImport, /emit\('dismiss-tag-enrichment'\)/);
+  assert.match(syncImport, /emit\('interrupt-tag-enrichment'\)/);
+  assert.match(background, /selectedFolderIds: number\[\];/);
+  assert.match(background, /waitingForVideoSync: boolean;/);
+  assert.match(background, /tag-enrichment\/dismiss/);
   assert.match(component, /panel-surface rounded-2xl/);
 });
 
@@ -212,8 +236,16 @@ test("tag task controls and phases have matching Chinese and English copy", asyn
 
   for (const key of [
     "sync.startTagEnrich",
+    "sync.resumeTagEnrich",
     "sync.stopTagEnrich",
+    "sync.pauseTagEnrich",
+    "sync.interruptTagEnrich",
     "sync.runTagEnrichNow",
+    "sync.dismissStatus",
+    "sync.tag.waitingForVideoSync",
+    "sync.videoTab",
+    "sync.tagTab",
+    "sync.tagScopeTitle",
     "sync.tag.phase.running",
     "sync.tag.phase.waiting",
     "sync.tag.phase.paused",

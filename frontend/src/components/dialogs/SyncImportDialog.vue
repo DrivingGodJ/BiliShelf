@@ -22,11 +22,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   HistoryModelSyncStatus,
   SyncRemoteFolder,
   TagEnrichmentStatus,
 } from "@/lib/api";
+import type { Folder } from "@/types";
 import { estimateSelectedVideoCount } from "@/lib/sync-folder-selection.js";
 
 const props = defineProps<{
@@ -42,6 +44,8 @@ const props = defineProps<{
   stopping: boolean;
   tagEnrichmentStatus: TagEnrichmentStatus | null;
   tagEnrichmentLoading: boolean;
+  tagFolders: Folder[];
+  selectedTagFolderIds: number[];
 }>();
 
 const emit = defineEmits<{
@@ -49,6 +53,9 @@ const emit = defineEmits<{
   "toggle-folder": [remoteId: number, checked: boolean];
   "select-all": [];
   "clear-selection": [];
+  "toggle-tag-folder": [folderId: number, checked: boolean];
+  "select-all-tag-folders": [];
+  "clear-tag-folder-selection": [];
   reload: [];
   submit: [];
   resume: [];
@@ -59,6 +66,8 @@ const emit = defineEmits<{
   "start-tag-enrichment": [];
   "stop-tag-enrichment": [];
   "run-tag-enrichment": [];
+  "dismiss-tag-enrichment": [];
+  "interrupt-tag-enrichment": [];
 }>();
 
 const selectedVideoCount = computed(() =>
@@ -80,6 +89,26 @@ const taskActive = computed(
   () =>
     Boolean(props.status?.running) ||
     (props.status?.phase === "waiting" && props.status.retryAutomatic),
+);
+const tagPhase = computed(() => props.tagEnrichmentStatus?.phase ?? "idle");
+const tagTaskActive = computed(
+  () =>
+    Boolean(props.tagEnrichmentStatus?.running) ||
+    tagPhase.value === "running" ||
+    tagPhase.value === "waiting",
+);
+const tagScopeLocked = computed(
+  () =>
+    tagTaskActive.value ||
+    tagPhase.value === "paused" ||
+    props.tagEnrichmentLoading,
+);
+const allTagFoldersSelected = computed(
+  () =>
+    props.tagFolders.length > 0 &&
+    props.tagFolders.every((folder) =>
+      props.selectedTagFolderIds.includes(folder.id),
+    ),
 );
 const invalidDetected = computed(() =>
   Math.max(0, Number(props.status?.invalidVideosDetected || 0)),
@@ -143,7 +172,20 @@ const retryTimeLabel = computed(() => {
         <DialogDescription>{{ t("sync.dialogDesc") }}</DialogDescription>
       </DialogHeader>
 
-      <section class="panel-surface space-y-4 p-4">
+      <Tabs default-value="video" class="mt-2">
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1">
+          <TabsTrigger value="video" class="gap-1.5 py-2.5">
+            <FolderSync class="h-4 w-4" />
+            {{ t("sync.videoTab") }}
+          </TabsTrigger>
+          <TabsTrigger value="tags" class="gap-1.5 py-2.5">
+            <ShieldCheck class="h-4 w-4" />
+            {{ t("sync.tagTab") }}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="video" class="mt-3">
+        <section class="panel-surface space-y-4 p-4">
         <section
           v-if="hasStatus && status"
           class="overflow-hidden rounded-xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-background to-background"
@@ -468,17 +510,6 @@ const retryTimeLabel = computed(() => {
           </label>
         </div>
 
-        <TagEnrichmentStatusBar
-          :status="tagEnrichmentStatus"
-          :loading="tagEnrichmentLoading"
-          :now-ms="nowMs"
-          :t="t"
-          @refresh="emit('refresh-tag-enrichment')"
-          @start="emit('start-tag-enrichment')"
-          @stop="emit('stop-tag-enrichment')"
-          @run="emit('run-tag-enrichment')"
-        />
-
         <div class="flex flex-wrap items-center justify-end gap-2">
           <Button
             variant="outline"
@@ -500,6 +531,80 @@ const retryTimeLabel = computed(() => {
           </Button>
         </div>
       </section>
+        </TabsContent>
+
+        <TabsContent value="tags" class="mt-3">
+          <section class="panel-surface space-y-4 p-4">
+            <div class="space-y-1">
+              <h3 class="text-sm font-semibold">{{ t("sync.tagScopeTitle") }}</h3>
+              <p class="text-xs text-muted-foreground">{{ t("sync.tagScopeDesc") }}</p>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary">
+                  {{ t("sync.tagFolderCount", { selected: selectedTagFolderIds.length, total: tagFolders.length }) }}
+                </Badge>
+                <Badge v-if="tagPhase !== 'idle'" variant="outline">
+                  {{ t("sync.tagScopeVideoCount", { count: tagEnrichmentStatus?.scopeVideoCount ?? 0 }) }}
+                </Badge>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  :disabled="tagScopeLocked || tagFolders.length === 0 || allTagFoldersSelected"
+                  @click="emit('select-all-tag-folders')"
+                >{{ t("common.selectAll") }}</Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  :disabled="tagScopeLocked || selectedTagFolderIds.length === 0"
+                  @click="emit('clear-tag-folder-selection')"
+                >{{ t("common.clear") }}</Button>
+              </div>
+            </div>
+
+            <div class="panel-surface-soft max-h-[240px] space-y-2 overflow-auto rounded-lg border p-3">
+              <div v-if="tagFolders.length === 0" class="text-sm text-muted-foreground">
+                {{ t("sync.emptyFolders") }}
+              </div>
+              <label
+                v-for="folder in tagFolders"
+                :key="folder.id"
+                class="panel-surface interactive-lift flex cursor-pointer items-center justify-between rounded-md border p-3"
+              >
+                <div class="flex min-w-0 items-center gap-2.5">
+                  <Checkbox
+                    :model-value="selectedTagFolderIds.includes(folder.id)"
+                    :disabled="tagScopeLocked"
+                    @update:model-value="emit('toggle-tag-folder', folder.id, $event === true)"
+                  />
+                  <span class="truncate text-sm font-medium">{{ folder.name }}</span>
+                </div>
+                <ShieldCheck
+                  class="h-4 w-4 shrink-0 text-muted-foreground"
+                  :class="selectedTagFolderIds.includes(folder.id) ? 'text-primary' : ''"
+                />
+              </label>
+            </div>
+
+            <TagEnrichmentStatusBar
+              :status="tagEnrichmentStatus"
+              :loading="tagEnrichmentLoading"
+              :start-disabled="selectedTagFolderIds.length === 0"
+              :now-ms="nowMs"
+              :t="t"
+              @refresh="emit('refresh-tag-enrichment')"
+              @start="emit('start-tag-enrichment')"
+              @stop="emit('stop-tag-enrichment')"
+              @run="emit('run-tag-enrichment')"
+              @dismiss="emit('dismiss-tag-enrichment')"
+              @interrupt="emit('interrupt-tag-enrichment')"
+            />
+          </section>
+        </TabsContent>
+      </Tabs>
     </DialogContent>
   </Dialog>
 </template>

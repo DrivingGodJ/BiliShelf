@@ -128,16 +128,15 @@ function handlePageSizeChange(value: string | number) {
 .content-card-grid {
   display: grid;
   grid-template-columns: repeat(
-    auto-fill,
-    minmax(min(100%, var(--content-card-width)), var(--content-card-width))
+    auto-fit,
+    minmax(min(100%, var(--content-card-width)), 1fr)
   );
-  justify-content: start;
   align-items: start;
 }
 
 @media (max-width: 639px) {
   .content-card-grid {
-    grid-template-columns: minmax(0, min(100%, var(--content-card-width)));
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

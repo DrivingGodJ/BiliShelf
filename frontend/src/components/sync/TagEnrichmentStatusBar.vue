@@ -4,11 +4,13 @@ import {
   CheckCircle2,
   CircleStop,
   Clock3,
+  Pause,
   Play,
   RefreshCcw,
   RotateCcw,
   Tags,
   TriangleAlert,
+  X,
 } from "lucide-vue-next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +20,7 @@ import type { TagEnrichmentStatus } from "@/lib/api";
 const props = defineProps<{
   status: TagEnrichmentStatus | null;
   loading: boolean;
+  startDisabled?: boolean;
   nowMs: number;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }>();
@@ -27,11 +30,19 @@ const emit = defineEmits<{
   start: [];
   stop: [];
   run: [];
+  dismiss: [];
+  interrupt: [];
 }>();
 
 const phase = computed(() => props.status?.phase ?? "idle");
 const active = computed(
   () => phase.value === "running" || phase.value === "waiting"
+);
+const canInterrupt = computed(
+  () => active.value || phase.value === "paused",
+);
+const waitingForVideoSync = computed(
+  () => Boolean(props.status?.waitingForVideoSync),
 );
 const cooldownActive = computed(
   () =>
@@ -116,26 +127,40 @@ const nextRunLabel = computed(() => {
         <Button
           v-if="active"
           size="sm"
-          variant="destructive"
+          variant="outline"
           :disabled="loading"
           @click="emit('stop')"
         >
-          <CircleStop class="h-3.5 w-3.5" />
-          {{ t("sync.stopTagEnrich") }}
+          <Pause class="h-3.5 w-3.5" />
+          {{ t("sync.pauseTagEnrich") }}
         </Button>
         <Button
-          v-else
+          v-if="canInterrupt"
           size="sm"
-          :disabled="loading || cooldownActive"
+          variant="destructive"
+          :disabled="loading"
+          @click="emit('interrupt')"
+        >
+          <CircleStop class="h-3.5 w-3.5" />
+          {{ t("sync.interruptTagEnrich") }}
+        </Button>
+        <Button
+          v-if="!active"
+          size="sm"
+          :disabled="loading || startDisabled || cooldownActive"
           @click="emit('start')"
         >
           <Play class="h-3.5 w-3.5" />
-          {{ t("sync.startTagEnrich") }}
+          {{
+            phase === "paused"
+              ? t("sync.resumeTagEnrich")
+              : t("sync.startTagEnrich")
+          }}
         </Button>
         <Button
           v-if="phase === 'waiting'"
           size="sm"
-          :disabled="loading"
+          :disabled="loading || waitingForVideoSync"
           @click="emit('run')"
         >
           <RotateCcw class="h-3.5 w-3.5" />
@@ -145,6 +170,13 @@ const nextRunLabel = computed(() => {
     </div>
 
     <div class="mt-3 space-y-2">
+      <div
+        v-if="waitingForVideoSync"
+        class="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-100"
+      >
+        <Clock3 class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{{ t("sync.tag.waitingForVideoSync") }}</span>
+      </div>
       <div class="flex items-center justify-between gap-3 text-xs">
         <span class="text-muted-foreground">
           {{
@@ -160,6 +192,21 @@ const nextRunLabel = computed(() => {
         </span>
       </div>
       <Progress :model-value="progressPercent" class="h-2" />
+    </div>
+
+    <div
+      v-if="!canInterrupt && phase !== 'idle'"
+      class="mt-3 flex justify-end border-t pt-3"
+    >
+      <Button
+        size="sm"
+        variant="outline"
+        :disabled="loading"
+        @click="emit('dismiss')"
+      >
+        <X class="h-3.5 w-3.5" />
+        {{ t("sync.dismissStatus") }}
+      </Button>
     </div>
 
     <div

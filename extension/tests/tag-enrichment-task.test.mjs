@@ -180,6 +180,154 @@ test("empty and permanently skipped videos do not re-enter the pending queue", (
   assert.deepEqual(payload.result, { total: 1, ids: [3] });
 });
 
+test("tag candidates are limited to selected folders and deduplicated", () => {
+  const payload = runBackgroundScenario({
+    exports: ["collectMissingSystemTagCandidates", "normalizeTagEnrichmentMeta"],
+    scenarioSource: `
+      const state = ${JSON.stringify(stateWithVideos([
+        { bvid: "BVONE" },
+        { bvid: "BVSHARED" },
+        { bvid: "BVTWO" },
+      ]))};
+      state.folders = [
+        { id: 1, name: "One", description: null, remoteMediaId: null, sortOrder: 0, deletedAt: null, createdAt: 1, updatedAt: 1 },
+        { id: 2, name: "Two", description: null, remoteMediaId: null, sortOrder: 1, deletedAt: null, createdAt: 1, updatedAt: 1 },
+      ];
+      state.folderItems = [
+        { id: 1, folderId: 1, videoId: 1, addedAt: 1 },
+        { id: 2, folderId: 1, videoId: 2, addedAt: 1 },
+        { id: 3, folderId: 2, videoId: 2, addedAt: 1 },
+        { id: 4, folderId: 2, videoId: 3, addedAt: 1 },
+      ];
+      const meta = normalizeTagEnrichmentMeta({
+        phase: "waiting",
+        selectedFolderIds: [1],
+      });
+      const result = collectMissingSystemTagCandidates(state, 10, 0, meta);
+      return { total: result.total, ids: result.items.map((item) => item.id) };
+    `,
+  });
+
+  assert.deepEqual(payload.result, { total: 2, ids: [1, 2] });
+});
+
+test("starting and pausing a scoped tag task preserves its selected folders", () => {
+  const state = stateWithVideos([{ bvid: "BVONE" }, { bvid: "BVTWO" }]);
+  state.counters.folder = 3;
+  state.counters.folderItem = 3;
+  state.folders = [
+    { id: 1, name: "One", description: null, remoteMediaId: null, sortOrder: 0, deletedAt: null, createdAt: 1, updatedAt: 1 },
+    { id: 2, name: "Two", description: null, remoteMediaId: null, sortOrder: 1, deletedAt: null, createdAt: 1, updatedAt: 1 },
+  ];
+  state.folderItems = [
+    { id: 1, folderId: 1, videoId: 1, addedAt: 1 },
+    { id: 2, folderId: 2, videoId: 2, addedAt: 1 },
+  ];
+  const payload = runBackgroundScenario({
+    exports: [
+      "startTagEnrichmentTask",
+      "pauseTagEnrichmentTask",
+      "getTagEnrichmentStatus",
+      "readState",
+    ],
+    input: { state },
+    preImportSource: databaseSetup,
+    scenarioSource: `
+      await startTagEnrichmentTask({ immediate: false, selectedFolderIds: [2] });
+      await pauseTagEnrichmentTask();
+      const status = getTagEnrichmentStatus(await readState());
+      return status;
+    `,
+  });
+
+  assert.equal(payload.result.phase, "paused");
+  assert.deepEqual(payload.result.selectedFolderIds, [2]);
+  assert.equal(payload.result.scopeVideoCount, 1);
+  assert.equal(payload.result.totalMissing, 1);
+});
+
+test("tag controls persist immediately while favorites sync owns the state queue", () => {
+  const state = stateWithVideos([{ bvid: "BVPENDING" }]);
+  state.counters.folder = 2;
+  state.counters.folderItem = 2;
+  state.folders = [
+    { id: 1, name: "Scoped", description: null, remoteMediaId: 99, sortOrder: 0, deletedAt: null, createdAt: 1, updatedAt: 1 },
+  ];
+  state.folderItems = [
+    { id: 1, folderId: 1, videoId: 1, addedAt: 1 },
+  ];
+
+  const payload = runBackgroundScenario({
+    exports: [
+      "startFavoritesSyncTask",
+      "startTagEnrichmentTask",
+      "pauseTagEnrichmentTask",
+      "dismissTagEnrichmentStatus",
+      "getTagEnrichmentStatus",
+      "getFavoritesSyncStatus",
+      "readState",
+    ],
+    input: { state },
+    preImportSource: databaseSetup,
+    scenarioSource: `
+      let releaseFetch;
+      let markFetchStarted;
+      const fetchStarted = new Promise((resolve) => {
+        markFetchStarted = resolve;
+      });
+      globalThis.fetch = () => {
+        markFetchStarted();
+        return new Promise((resolve) => {
+          releaseFetch = resolve;
+        });
+      };
+      const within = (promise, label) => Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(label + " timed out")), 250);
+        }),
+      ]);
+
+      await startFavoritesSyncTask({ selectedRemoteFolderIds: [99] });
+      await within(fetchStarted, "favorites fetch");
+
+      await within(
+        startTagEnrichmentTask({ selectedFolderIds: [1], immediate: true }),
+        "tag start",
+      );
+      const queued = getTagEnrichmentStatus(await readState());
+
+      await within(pauseTagEnrichmentTask(), "tag pause");
+      const paused = getTagEnrichmentStatus(await readState());
+
+      await within(
+        startTagEnrichmentTask({ immediate: true, force: true }),
+        "tag resume",
+      );
+      await within(dismissTagEnrichmentStatus(), "tag interrupt");
+      const interrupted = getTagEnrichmentStatus(await readState());
+
+      releaseFetch(new Response("", { status: 412 }));
+      for (let index = 0; index < 100; index += 1) {
+        const syncStatus = getFavoritesSyncStatus(await readState());
+        if (!syncStatus.running) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      return { queued, paused, interrupted };
+    `,
+  });
+
+  assert.equal(payload.result.queued.phase, "waiting");
+  assert.equal(payload.result.queued.waitingForVideoSync, true);
+  assert.deepEqual(payload.result.queued.selectedFolderIds, [1]);
+  assert.equal(payload.result.paused.phase, "paused");
+  assert.equal(payload.result.paused.waitingForVideoSync, false);
+  assert.equal(payload.result.interrupted.phase, "idle");
+  assert.equal(payload.result.interrupted.waitingForVideoSync, false);
+  assert.ok(payload.result.interrupted.dismissedAt > 0);
+});
+
 test("worker restart restores a running task as a scheduled waiting task", () => {
   const state = stateWithVideos([{ bvid: "BVPENDING" }], {
     phase: "running",
@@ -249,6 +397,60 @@ test("manual stop persists and suppresses future alarms", () => {
     payload.result.scheduledAfterResume.at(-1).name,
     "bilishelf-tag-enrich",
   );
+  assert.ok(payload.result.cleared.includes("bilishelf-tag-enrich"));
+});
+
+test("dismissing tag status persists the dismissal and keeps completed queue metadata", () => {
+  const state = stateWithVideos(
+    [
+      { bvid: "BVEMPTY" },
+      { bvid: "BVSKIPPED" },
+      { bvid: "BVPENDING" },
+    ],
+    {
+      phase: "paused",
+      paused: true,
+      batchSize: 7,
+      intervalSeconds: 75,
+      total: 3,
+      totalMissing: 1,
+      processed: 2,
+      checkedEmptyVideoIds: [1],
+      skippedVideoIds: [2],
+      nextRunAt: Date.now() + 60_000,
+      retryAttempt: 2,
+      riskCount: 1,
+      lastError: "temporary failure",
+    },
+  );
+  const payload = runBackgroundScenario({
+    exports: ["dismissTagEnrichmentStatus", "readState"],
+    input: { state },
+    preImportSource: databaseSetup,
+    scenarioSource: `
+      const before = Date.now();
+      const status = await dismissTagEnrichmentStatus();
+      const persisted = (await readState()).syncMeta.tagEnrichment;
+      return {
+        before,
+        status,
+        persisted,
+        cleared: globalThis.__clearedAlarms,
+      };
+    `,
+  });
+
+  assert.equal(payload.result.status.phase, "idle");
+  assert.equal(payload.result.status.paused, false);
+  assert.ok(payload.result.status.dismissedAt >= payload.result.before);
+  assert.equal(payload.result.persisted.batchSize, 7);
+  assert.equal(payload.result.persisted.intervalSeconds, 75);
+  assert.deepEqual(payload.result.persisted.checkedEmptyVideoIds, [1]);
+  assert.deepEqual(payload.result.persisted.skippedVideoIds, [2]);
+  assert.equal(payload.result.persisted.nextRunAt, null);
+  assert.equal(payload.result.persisted.retryAttempt, 0);
+  assert.equal(payload.result.persisted.riskCount, 0);
+  assert.equal(payload.result.persisted.lastError, null);
   assert.ok(payload.result.cleared.includes("bilishelf-tag-enrich"));
 });
 

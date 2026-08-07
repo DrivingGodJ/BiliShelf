@@ -185,6 +185,9 @@ type TagEnrichmentErrorItem = {
 type TagEnrichmentMeta = {
   phase: TagEnrichmentPhase;
   paused: boolean;
+  dismissedAt: number | null;
+  selectedFolderIds: number[];
+  waitingForVideoSync: boolean;
   batchSize: number;
   intervalSeconds: number;
   cursorAfterVideoId: number;
@@ -668,6 +671,9 @@ type CookiesApi = {
 const defaultTagEnrichmentMeta = (): TagEnrichmentMeta => ({
   phase: "idle",
   paused: false,
+  dismissedAt: null,
+  selectedFolderIds: [],
+  waitingForVideoSync: false,
   batchSize: TAG_ENRICH_BATCH_SIZE_DEFAULT,
   intervalSeconds: TAG_ENRICH_INTERVAL_SECONDS_DEFAULT,
   cursorAfterVideoId: 0,
@@ -751,6 +757,9 @@ function normalizeTagEnrichmentMeta(raw: unknown): TagEnrichmentMeta {
   return {
     phase: normalizeTagEnrichmentPhase(source.phase, paused),
     paused,
+    dismissedAt: toIntOrNull(source.dismissedAt),
+    selectedFolderIds: normalizePositiveIntList(source.selectedFolderIds),
+    waitingForVideoSync: Boolean(source.waitingForVideoSync),
     batchSize: Math.min(
       TAG_ENRICH_BATCH_SIZE_MAX,
       Math.max(
@@ -1433,6 +1442,7 @@ let biliRequestThrottleQueue: Promise<void> = Promise.resolve();
 let favoritesSyncTask: Promise<void> | null = null;
 let favoritesSyncStartPending = false;
 let favoritesSyncStopRequested = false;
+let favoritesSyncWorkingState: LocalState | null = null;
 let invalidVideoRecoveryTask: Promise<void> | null = null;
 let invalidVideoRecoveryStatus: InvalidVideoRecoveryStatus =
   defaultInvalidVideoRecoveryStatus();
@@ -5236,6 +5246,7 @@ function collectMissingSystemTagCandidates(
   cursorAfterVideoId = 0,
   meta = ensureTagEnrichmentMeta(state)
 ) {
+  const scopeVideoIds = getTagEnrichmentScopeVideoIds(state, meta.selectedFolderIds);
   const hasSystemTagVideoIds = getVideoIdSetWithSystemTags(state);
   const terminalVideoIds = new Set([
     ...meta.checkedEmptyVideoIds,
@@ -5245,6 +5256,7 @@ function collectMissingSystemTagCandidates(
     .filter(
       (video) =>
         video.deletedAt === null &&
+        scopeVideoIds.has(video.id) &&
         !hasSystemTagVideoIds.has(video.id) &&
         !terminalVideoIds.has(video.id)
     )
@@ -5308,14 +5320,44 @@ function bindSystemTagsToVideo(state: LocalState, videoId: number, tagNames: str
   return boundCount;
 }
 
-function resolveTagEnrichmentIntervalMs(meta: Pick<TagEnrichmentMeta, "intervalSeconds">) {
-  return Math.min(
-    TAG_ENRICH_INTERVAL_SECONDS_MAX,
-    Math.max(
-      TAG_ENRICH_INTERVAL_SECONDS_MIN,
-      toInt(meta.intervalSeconds, TAG_ENRICH_INTERVAL_SECONDS_DEFAULT),
-    ),
-  ) * 1000;
+function getTagEnrichmentScopeVideoIds(
+  state: LocalState,
+  selectedFolderIds: number[]
+) {
+  const activeVideoIds = new Set(
+    state.videos
+      .filter((video) => video.deletedAt === null)
+      .map((video) => video.id)
+  );
+  const normalizedFolderIds = normalizePositiveIntList(selectedFolderIds);
+  // Empty scope is retained only for active tasks created by older versions.
+  if (normalizedFolderIds.length === 0) return activeVideoIds;
+
+  const activeFolderIds = new Set(
+    state.folders
+      .filter(
+        (folder) =>
+          folder.deletedAt === null && normalizedFolderIds.includes(folder.id)
+      )
+      .map((folder) => folder.id)
+  );
+  return new Set(
+    state.folderItems
+      .filter(
+        (relation) =>
+          activeFolderIds.has(relation.folderId) &&
+          activeVideoIds.has(relation.videoId)
+      )
+      .map((relation) => relation.videoId)
+  );
+}
+
+function countTagEnrichmentScopeVideos(
+  state: LocalState,
+  meta = ensureTagEnrichmentMeta(state)
+) {
+  if (meta.selectedFolderIds.length === 0 && meta.phase === "idle") return 0;
+  return getTagEnrichmentScopeVideoIds(state, meta.selectedFolderIds).size;
 }
 
 function resolveTagEnrichmentBatchNextRunAt(
@@ -5379,21 +5421,23 @@ function applyTagEnrichmentFailurePolicy(
 
 async function runTagEnrichmentBatch() {
   if (favoritesSyncTask || favoritesSyncStartPending) {
-    const deferred = await withState((state) => {
+    const deferred = await mutateTagEnrichmentState((state) => {
       const meta = ensureTagEnrichmentMeta(state);
       if (!meta.paused && (meta.phase === "running" || meta.phase === "waiting")) {
         meta.phase = "waiting";
-        meta.nextRunAt = now() + resolveTagEnrichmentIntervalMs(meta);
+        meta.waitingForVideoSync = true;
+        meta.nextRunAt = null;
         meta.updatedAt = now();
       }
       return { ...meta };
-    }, true);
+    });
     scheduleTagEnrichment(deferred);
     return;
   }
 
   const plan = await withState((state) => {
     const meta = ensureTagEnrichmentMeta(state);
+    meta.waitingForVideoSync = false;
     const activeVideoIds = new Set(
       state.videos
         .filter((video) => video.deletedAt === null)
@@ -5537,6 +5581,7 @@ async function runTagEnrichmentBatch() {
     if (meta.paused || tagEnrichmentStopRequested) {
       meta.phase = "paused";
       meta.paused = true;
+      meta.waitingForVideoSync = false;
       meta.nextRunAt = null;
     } else if (failure && failure.phase !== "failed") {
       meta.phase = failure.phase;
@@ -5548,6 +5593,7 @@ async function runTagEnrichmentBatch() {
     } else if (meta.totalMissing > 0) {
       meta.phase = "waiting";
       meta.paused = false;
+      meta.waitingForVideoSync = false;
       meta.nextRunAt = resolveTagEnrichmentBatchNextRunAt(
         timestamp,
         Math.random,
@@ -5561,6 +5607,7 @@ async function runTagEnrichmentBatch() {
     } else {
       meta.phase = "completed";
       meta.paused = false;
+      meta.waitingForVideoSync = false;
       meta.finishedAt = timestamp;
       meta.nextRunAt = null;
       meta.retryAttempt = 0;
@@ -5606,13 +5653,55 @@ function triggerTagEnrichment() {
   return tagEnrichmentTask;
 }
 
+type StartTagEnrichmentOptions = {
+  reset?: boolean;
+  immediate?: boolean;
+  force?: boolean;
+  selectedFolderIds?: number[];
+};
+
+async function mutateTagEnrichmentState<T>(
+  mutate: (state: LocalState) => T,
+): Promise<T> {
+  const workingState = favoritesSyncWorkingState;
+  if (!workingState) return withState(mutate, true);
+
+  // Favorites sync owns the serialized queue for its entire run. Tag controls
+  // mutate that same live snapshot so queued work is visible immediately.
+  const result = mutate(workingState);
+  await writeState(workingState);
+  return result;
+}
+
 async function startTagEnrichmentTask(
-  options: { reset?: boolean; immediate?: boolean; force?: boolean } = {}
+  options: StartTagEnrichmentOptions = {},
 ) {
   if (!TAG_SYNC_ENABLED) return false;
   tagEnrichmentStopRequested = false;
-  const meta = await withState((state) => {
+  const meta = await mutateTagEnrichmentState((state) => {
     const current = ensureTagEnrichmentMeta(state);
+    const hasSelectedFolderIds = Object.prototype.hasOwnProperty.call(
+      options,
+      "selectedFolderIds"
+    );
+    const requestedFolderIds = normalizePositiveIntList(options.selectedFolderIds);
+    if (hasSelectedFolderIds && requestedFolderIds.length === 0) {
+      throw new Error("Select at least one folder for tag enrichment");
+    }
+    const activeFolderIds = new Set(
+      state.folders
+        .filter((folder) => folder.deletedAt === null)
+        .map((folder) => folder.id)
+    );
+    const validRequestedFolderIds = requestedFolderIds.filter((folderId) =>
+      activeFolderIds.has(folderId)
+    );
+    if (
+      hasSelectedFolderIds &&
+      validRequestedFolderIds.length !== requestedFolderIds.length
+    ) {
+      throw new Error("One or more selected folders no longer exist");
+    }
     if (
       current.phase === "paused" &&
       current.nextRunAt &&
@@ -5626,16 +5715,25 @@ async function startTagEnrichmentTask(
     }
     if (options.reset) {
       const fresh = defaultTagEnrichmentMeta();
+      fresh.batchSize = current.batchSize;
+      fresh.intervalSeconds = current.intervalSeconds;
       state.syncMeta.tagEnrichment = fresh;
     }
     const next = ensureTagEnrichmentMeta(state);
-    const pending = countMissingSystemTagVideos(state, next);
-    if (
+    const startsNewRun =
       next.phase === "idle" ||
       next.phase === "completed" ||
       next.phase === "failed" ||
-      options.reset
-    ) {
+      Boolean(options.reset);
+    if (hasSelectedFolderIds && startsNewRun) {
+      next.selectedFolderIds = validRequestedFolderIds;
+    }
+    if (startsNewRun && next.selectedFolderIds.length === 0) {
+      throw new Error("Select at least one folder for tag enrichment");
+    }
+    next.dismissedAt = null;
+    const pending = countMissingSystemTagVideos(state, next);
+    if (startsNewRun) {
       next.total = pending;
       next.processed = 0;
       next.succeeded = 0;
@@ -5652,6 +5750,7 @@ async function startTagEnrichmentTask(
     next.totalMissing = pending;
     next.total = Math.max(next.total, next.processed + pending);
     next.paused = false;
+    next.waitingForVideoSync = false;
     next.lastError = null;
     next.updatedAt = now();
     if (pending <= 0) {
@@ -5661,19 +5760,32 @@ async function startTagEnrichmentTask(
     } else {
       next.phase = "waiting";
       next.finishedAt = null;
-      next.nextRunAt = options.immediate === false
-        ? resolveTagEnrichmentBatchNextRunAt(
-            now(),
-            Math.random,
-            next.intervalSeconds,
-          )
-        : now() + 1000;
+      if (
+        favoritesSyncWorkingState ||
+        favoritesSyncTask ||
+        favoritesSyncStartPending
+      ) {
+        next.waitingForVideoSync = true;
+        next.nextRunAt = null;
+      } else {
+        next.nextRunAt = options.immediate === false
+          ? resolveTagEnrichmentBatchNextRunAt(
+              now(),
+              Math.random,
+              next.intervalSeconds,
+            )
+          : now() + 1000;
+      }
     }
     return { ...next };
-  }, true);
+  });
 
   scheduleTagEnrichment(meta);
-  if (meta.phase === "waiting" && options.immediate !== false) {
+  if (
+    meta.phase === "waiting" &&
+    !meta.waitingForVideoSync &&
+    options.immediate !== false
+  ) {
     void triggerTagEnrichment();
   }
   return meta.totalMissing > 0;
@@ -5681,16 +5793,39 @@ async function startTagEnrichmentTask(
 
 async function pauseTagEnrichmentTask() {
   tagEnrichmentStopRequested = true;
-  const meta = await withState((state) => {
+  const meta = await mutateTagEnrichmentState((state) => {
     const current = ensureTagEnrichmentMeta(state);
     current.phase = "paused";
     current.paused = true;
+    current.waitingForVideoSync = false;
     current.nextRunAt = null;
     current.updatedAt = now();
     return { ...current };
-  }, true);
+  });
   scheduleTagEnrichment(null);
   return meta;
+}
+
+async function dismissTagEnrichmentStatus() {
+  tagEnrichmentStopRequested = true;
+  scheduleTagEnrichment(null);
+  const runningTask = tagEnrichmentTask;
+  if (runningTask) await runningTask;
+
+  await mutateTagEnrichmentState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    const timestamp = now();
+    current.phase = "idle";
+    current.paused = false;
+    current.waitingForVideoSync = false;
+    current.dismissedAt = timestamp;
+    current.nextRunAt = null;
+    current.retryAttempt = 0;
+    current.riskCount = 0;
+    current.lastError = null;
+    current.updatedAt = timestamp;
+  });
+  return getTagEnrichmentStatus(await readState());
 }
 
 async function restoreTagEnrichmentTask() {
@@ -5699,9 +5834,11 @@ async function restoreTagEnrichmentTask() {
     if (current.paused || current.phase === "paused") return { ...current };
     if (current.phase === "running") {
       current.phase = "waiting";
+      current.waitingForVideoSync = false;
       current.nextRunAt = now() + TAG_ENRICH_RESTORE_DELAY_MS;
       current.updatedAt = now();
     } else if (current.phase === "waiting" && !current.nextRunAt) {
+      current.waitingForVideoSync = false;
       current.nextRunAt = now() + TAG_ENRICH_RESTORE_DELAY_MS;
       current.updatedAt = now();
     }
@@ -5710,26 +5847,16 @@ async function restoreTagEnrichmentTask() {
   scheduleTagEnrichment(meta);
 }
 
-async function ensureTagEnrichmentAfterRestore() {
-  const state = await readState();
-  const favoritesStatus = getFavoritesSyncStatus(state);
-  const tagMeta = ensureTagEnrichmentMeta(state);
-  if (
-    favoritesStatus.phase === "completed" &&
-    favoritesStatus.summary.videosProcessed > 0 &&
-    tagMeta.phase === "idle" &&
-    !tagMeta.paused
-  ) {
-    await startTagEnrichmentTask({ immediate: false });
-  }
-}
-
 function getTagEnrichmentStatus(state: LocalState) {
   if (!TAG_SYNC_ENABLED) {
     return {
       phase: "paused" as const,
       paused: true,
       running: false,
+      dismissedAt: null,
+      selectedFolderIds: [],
+      scopeVideoCount: 0,
+      waitingForVideoSync: false,
       batchSize: TAG_ENRICH_BATCH_SIZE_DEFAULT,
       intervalSeconds: TAG_ENRICH_INTERVAL_SECONDS_DEFAULT,
       batchSizeMin: TAG_ENRICH_BATCH_SIZE_MIN,
@@ -5766,6 +5893,13 @@ function getTagEnrichmentStatus(state: LocalState) {
     phase: meta.phase,
     paused: meta.paused,
     running: Boolean(tagEnrichmentTask) || meta.phase === "running",
+    dismissedAt: meta.dismissedAt,
+    selectedFolderIds: [...meta.selectedFolderIds],
+    scopeVideoCount: countTagEnrichmentScopeVideos(state, meta),
+    waitingForVideoSync:
+      meta.waitingForVideoSync &&
+      !meta.paused &&
+      (meta.phase === "running" || meta.phase === "waiting"),
     batchSize: meta.batchSize,
     intervalSeconds: meta.intervalSeconds,
     batchSizeMin: TAG_ENRICH_BATCH_SIZE_MIN,
@@ -5798,7 +5932,7 @@ function getTagEnrichmentStatus(state: LocalState) {
 }
 
 async function updateTagEnrichmentSettings(payload: Record<string, unknown>) {
-  const meta = await withState((state) => {
+  const meta = await mutateTagEnrichmentState((state) => {
     const current = ensureTagEnrichmentMeta(state);
     current.batchSize = Math.min(
       TAG_ENRICH_BATCH_SIZE_MAX,
@@ -5820,7 +5954,7 @@ async function updateTagEnrichmentSettings(payload: Record<string, unknown>) {
     }
     current.updatedAt = now();
     return { ...current };
-  }, true);
+  });
   scheduleTagEnrichment(meta);
   return getTagEnrichmentStatus(await readState());
 }
@@ -7358,14 +7492,21 @@ async function startFavoritesSyncTask(params: {
       if (!job || job.id !== jobId) {
         throw new Error("Favorites sync checkpoint is no longer active");
       }
-      return syncFromBilibiliToState(state, {
-        selectedRemoteFolderIds: job.selectedRemoteFolderIds,
-        job,
-        shouldStop: () => favoritesSyncStopRequested,
-        onCheckpoint: async () => {
-          await writeState(state);
+      favoritesSyncWorkingState = state;
+      try {
+        return await syncFromBilibiliToState(state, {
+          selectedRemoteFolderIds: job.selectedRemoteFolderIds,
+          job,
+          shouldStop: () => favoritesSyncStopRequested,
+          onCheckpoint: async () => {
+            await writeState(state);
+          }
+        });
+      } finally {
+        if (favoritesSyncWorkingState === state) {
+          favoritesSyncWorkingState = null;
         }
-      });
+      }
     }, false)
       .then(async (result) => {
         let retryJob: FavoritesSyncJob | null = null;
@@ -7404,14 +7545,6 @@ async function startFavoritesSyncTask(params: {
           }
         }, true);
         scheduleFavoritesSyncRetry(retryJob);
-        if (
-          TAG_SYNC_ENABLED &&
-          result.completed &&
-          !result.riskBlocked &&
-          result.summary.videosProcessed > 0
-        ) {
-          await startTagEnrichmentTask({ immediate: false });
-        }
       })
       .catch(async (error) => {
         const message = isBiliRequestError(error)
@@ -7435,9 +7568,28 @@ async function startFavoritesSyncTask(params: {
         }, true);
         scheduleFavoritesSyncRetry(retryJob);
       })
-      .finally(() => {
+      .finally(async () => {
+        favoritesSyncWorkingState = null;
         favoritesSyncTask = null;
         favoritesSyncStopRequested = false;
+        if (!TAG_SYNC_ENABLED) return;
+        const queuedMeta = await withState((state) => {
+          const current = ensureTagEnrichmentMeta(state);
+          if (
+            current.paused ||
+            current.phase !== "waiting" ||
+            !current.waitingForVideoSync
+          ) {
+            return null;
+          }
+          current.waitingForVideoSync = false;
+          current.nextRunAt = now() + 1000;
+          current.updatedAt = now();
+          return { ...current };
+        }, true);
+        if (!queuedMeta) return;
+        scheduleTagEnrichment(queuedMeta);
+        void triggerTagEnrichment();
       });
 
     return true;
@@ -8752,14 +8904,30 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
         path === "/sync/bilibili/tag-enrichment/pause"
       ) {
         await pauseTagEnrichmentTask();
+      } else if (path === "/sync/bilibili/tag-enrichment/dismiss") {
+        await dismissTagEnrichmentStatus();
       } else if (path === "/sync/bilibili/tag-enrichment/restart") {
-        await startTagEnrichmentTask({ reset: true, immediate: true, force: true });
+        await startTagEnrichmentTask({
+          reset: true,
+          immediate: true,
+          force: true,
+          ...(Array.isArray(body.selectedFolderIds)
+            ? { selectedFolderIds: normalizePositiveIntList(body.selectedFolderIds) }
+            : {})
+        });
       } else if (
-        path === "/sync/bilibili/tag-enrichment/start" ||
         path === "/sync/bilibili/tag-enrichment/resume" ||
         path === "/sync/bilibili/tag-enrichment/run"
       ) {
         await startTagEnrichmentTask({ immediate: true, force: true });
+      } else if (path === "/sync/bilibili/tag-enrichment/start") {
+        await startTagEnrichmentTask({
+          immediate: true,
+          force: true,
+          ...(Array.isArray(body.selectedFolderIds)
+            ? { selectedFolderIds: normalizePositiveIntList(body.selectedFolderIds) }
+            : {})
+        });
       } else {
         return fail(404, `Route not found: ${method} ${path}`);
       }
@@ -10301,11 +10469,9 @@ export default defineBackground(() => {
   void readState()
     .then((state) => scheduleFavoritesSyncRetry(state.syncMeta.favoritesJob.active))
     .catch(() => undefined);
-  void restoreTagEnrichmentTask()
-    .then(() => ensureTagEnrichmentAfterRestore())
-    .catch((error) => {
-      console.warn("[tag-enrich] restore failed:", error);
-    });
+  void restoreTagEnrichmentTask().catch((error) => {
+    console.warn("[tag-enrich] restore failed:", error);
+  });
   void readAiOrganizerTask()
     .then((task) => {
       if (

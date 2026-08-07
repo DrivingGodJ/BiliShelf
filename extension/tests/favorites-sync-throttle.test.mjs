@@ -199,16 +199,19 @@ test("background startup restores persisted tag enrichment scheduling", async ()
   );
 });
 
-test("completed favorites sync schedules low-frequency tag enrichment", async () => {
+test("favorites sync only resumes an explicitly queued tag task", async () => {
   const source = await readFile(
     path.join(repoRoot, "extension", "entrypoints", "background.ts"),
     "utf8"
   );
 
-  assert.match(
+  assert.doesNotMatch(
     source,
     /result\.summary\.videosProcessed > 0[\s\S]{0,240}startTagEnrichmentTask\(\{ immediate: false \}\)/
   );
+  assert.match(source, /!current\.waitingForVideoSync/);
+  assert.match(source, /current\.waitingForVideoSync = false;/);
+  assert.match(source, /void triggerTagEnrichment\(\);/);
 });
 
 test("background alarm resumes only persisted waiting tag tasks", async () => {

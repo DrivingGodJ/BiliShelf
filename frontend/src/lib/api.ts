@@ -747,6 +747,10 @@ export type TagEnrichmentStatus = {
   phase: "idle" | "running" | "waiting" | "paused" | "completed" | "failed";
   paused: boolean;
   running: boolean;
+  dismissedAt: number | null;
+  selectedFolderIds: number[];
+  scopeVideoCount: number;
+  waitingForVideoSync: boolean;
   batchSize: number;
   intervalSeconds: number;
   batchSizeMin: number;
@@ -928,9 +932,18 @@ export async function pauseTagEnrichment() {
   });
 }
 
-export async function resumeTagEnrichment() {
+export async function dismissTagEnrichmentStatus() {
+  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/dismiss", {
+    method: "POST",
+  });
+}
+
+export async function resumeTagEnrichment(payload?: {
+  selectedFolderIds?: number[];
+}) {
   return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/start", {
     method: "POST",
+    body: JSON.stringify(payload ?? {}),
   });
 }
 
@@ -940,9 +953,12 @@ export async function runTagEnrichmentNow() {
   });
 }
 
-export async function restartTagEnrichment() {
+export async function restartTagEnrichment(payload?: {
+  selectedFolderIds?: number[];
+}) {
   return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/restart", {
     method: "POST",
+    body: JSON.stringify(payload ?? {}),
   });
 }
 

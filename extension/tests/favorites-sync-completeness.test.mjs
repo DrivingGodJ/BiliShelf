@@ -328,9 +328,9 @@ test("returned invalid videos only warn and still complete the sync", () => {
   });
 });
 
-test("completed warning syncs remain eligible for tag enrichment", async () => {
+test("completed warning syncs do not implicitly create a tag task", async () => {
   const source = await readFile(backgroundPath, "utf8");
-  assert.match(
+  assert.doesNotMatch(
     source,
     /TAG_SYNC_ENABLED\s*&&\s*result\.completed\s*&&\s*!result\.riskBlocked[\s\S]{0,160}startTagEnrichmentTask/,
   );
