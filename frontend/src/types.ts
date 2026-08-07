@@ -295,6 +295,7 @@ export type FavoritesSyncSummary = {
   videosUpserted: number;
   skippedMissingBvid: number;
   unresolvedMissingBvid: number;
+  unavailableRemoteVideos: number;
   incompleteFolders: number;
   folderLinksAdded: number;
   folderLinksRemoved: number;
@@ -341,6 +342,14 @@ export type HistoryModelSyncStatus = {
     folder: string;
     expected: number;
     observed: number;
+    reason: string;
+  }>;
+  unavailableFolders: Array<{
+    remoteFolderId: number;
+    folder: string;
+    expected: number;
+    observed: number;
+    unavailable: number;
     reason: string;
   }>;
 };

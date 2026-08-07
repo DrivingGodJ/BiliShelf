@@ -260,6 +260,7 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   },
   "sync.startImport": { "zh-CN": "开始同步", "en-US": "Start sync" },
   "sync.statusTitle": { "zh-CN": "同步任务", "en-US": "Sync job" },
+  "sync.openMonitor": { "zh-CN": "打开监控", "en-US": "Open monitor" },
   "sync.statusReady": { "zh-CN": "等待开始", "en-US": "Ready to start" },
   "sync.currentWork": { "zh-CN": "当前进度", "en-US": "Current progress" },
   "sync.preparing": { "zh-CN": "正在准备收藏夹", "en-US": "Preparing folders" },
@@ -289,6 +290,17 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "sync.linked": { "zh-CN": "新增关系", "en-US": "New links" },
   "sync.skipped": { "zh-CN": "跳过项", "en-US": "Skipped" },
   "sync.unresolved": { "zh-CN": "未解析", "en-US": "Unresolved" },
+  "sync.unavailable": { "zh-CN": "B站未返回", "en-US": "Not returned" },
+  "sync.unavailableHint": {
+    "zh-CN": "有 {count} 条未由 B 站返回，通常是失效、私密或不可见视频；其余内容已同步，本轮未执行删除。",
+    "en-US": "{count} entries were not returned by Bilibili, usually because they are invalid, private, or unavailable. Other items were synced; no deletions were applied.",
+  },
+  "sync.invalidDetected": { "zh-CN": "已识别失效", "en-US": "Invalid videos" },
+  "sync.invalidDetectedHint": {
+    "zh-CN": "B站返回的数据中识别到 {count} 条失效视频；已保留其收藏记录，不影响本次同步成功。",
+    "en-US": "Bilibili returned {count} invalid videos. Their saved records were preserved and do not prevent this sync from succeeding.",
+  },
+  "sync.dismissStatus": { "zh-CN": "关闭本次状态", "en-US": "Dismiss this status" },
   "sync.incomplete": { "zh-CN": "未完成夹", "en-US": "Incomplete" },
   "sync.diagnostics": { "zh-CN": "需要处理的项目", "en-US": "Items requiring attention" },
   "sync.phase.idle": { "zh-CN": "空闲", "en-US": "Idle" },
@@ -446,6 +458,10 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "autoInit.statusCompleted": {
     "zh-CN": "同步完成",
     "en-US": "Sync completed",
+  },
+  "autoInit.statusCompletedWithUnavailable": {
+    "zh-CN": "同步完成，{count} 条视频疑似失效、私密或不可见",
+    "en-US": "Sync completed; {count} videos appear invalid, private, or unavailable",
   },
   "autoInit.cooldownRemain": {
     "zh-CN": "预计 {time} 后可续传",
@@ -1333,6 +1349,14 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
     "zh-CN": "已同步收藏夹 {folders} 个，更新视频 {videos} 条",
     "en-US": "Synced {folders} folders and upserted {videos} videos",
   },
+  "toast.syncUnavailable": {
+    "zh-CN": "另有 {count} 条视频未由 B 站返回，通常是失效、私密或不可见视频；其余内容已同步。",
+    "en-US": "{count} videos were not returned by Bilibili, usually because they are invalid, private, or unavailable. Other items were synced.",
+  },
+  "toast.syncInvalidDetected": {
+    "zh-CN": "识别到 {count} 条失效视频，已保留记录，不影响同步成功。",
+    "en-US": "Detected {count} invalid videos. Their records were preserved and the sync still succeeded.",
+  },
   "toast.syncPartial": {
     "zh-CN": "部分收藏夹同步失败",
     "en-US": "Some folders failed to sync",
@@ -1343,6 +1367,7 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   },
   "toast.syncFail": { "zh-CN": "同步导入失败", "en-US": "Sync import failed" },
   "toast.syncStopFail": { "zh-CN": "停止同步失败", "en-US": "Failed to stop sync" },
+  "toast.syncDismissFail": { "zh-CN": "关闭同步状态失败", "en-US": "Failed to dismiss sync status" },
   "toast.syncNoProgress": {
     "zh-CN": "本轮未拉取到可用数据，请确认已打开并登录 B 站页面后重试。",
     "en-US":

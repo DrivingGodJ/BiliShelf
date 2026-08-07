@@ -19,6 +19,10 @@ import type {
   Video,
   VideoFilter,
 } from "../types";
+import {
+  resolveExtensionRuntime,
+  sendExtensionRuntimeMessage,
+} from "./extension-runtime.js";
 
 const API_BASE = "/api";
 const LOCAL_API_MESSAGE = "BILISHELF_LOCAL_API";
@@ -42,35 +46,9 @@ type LocalApiResponse<T = unknown> = {
   error?: string;
 };
 
-type ChromeLikeRuntime = {
-  id?: string;
-  sendMessage: (
-    message: unknown,
-    callback?: (response?: unknown) => void
-  ) => Promise<unknown> | void;
-};
-
-function getRuntime(): ChromeLikeRuntime | null {
-  const chromeRuntime = (
-    globalThis as { chrome?: { runtime?: ChromeLikeRuntime } }
-  ).chrome?.runtime;
-  if (chromeRuntime?.id && typeof chromeRuntime.sendMessage === "function") {
-    return chromeRuntime;
-  }
-
-  const browserRuntime = (
-    globalThis as { browser?: { runtime?: ChromeLikeRuntime } }
-  ).browser?.runtime;
-  if (browserRuntime?.id && typeof browserRuntime.sendMessage === "function") {
-    return browserRuntime;
-  }
-
-  return null;
-}
-
 function shouldUseLocalExtensionApi() {
   if (import.meta.env.VITE_RUNTIME_TARGET === "extension") return true;
-  const runtime = getRuntime();
+  const runtime = resolveExtensionRuntime();
   if (!runtime) return false;
   return (
     window.location.protocol === "chrome-extension:" ||
@@ -120,8 +98,8 @@ function requestThroughExtension<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const runtime = getRuntime();
-  if (!runtime) {
+  const transport = resolveExtensionRuntime();
+  if (!transport) {
     throw new Error("Extension runtime is unavailable");
   }
 
@@ -153,17 +131,7 @@ function requestThroughExtension<T>(
       );
     }, timeoutMs);
 
-    const callback = (response?: unknown) => {
-      const runtimeLastError = (
-        globalThis as {
-          chrome?: { runtime?: { lastError?: { message?: string } } };
-        }
-      ).chrome?.runtime?.lastError?.message;
-      if (runtimeLastError) {
-        finish(() => reject(new Error(runtimeLastError)));
-        return;
-      }
-
+    const handleResponse = (response?: unknown) => {
       const result = (response ?? {}) as LocalApiResponse<T>;
       if (result.ok) {
         finish(() => resolve(result.data as T));
@@ -177,19 +145,9 @@ function requestThroughExtension<T>(
       );
     };
 
-    try {
-      const maybePromise = runtime.sendMessage(message, callback);
-      if (
-        maybePromise &&
-        typeof (maybePromise as Promise<unknown>).then === "function"
-      ) {
-        (maybePromise as Promise<unknown>)
-          .then((response) => callback(response))
-          .catch((error) => finish(() => reject(error)));
-      }
-    } catch (error) {
-      finish(() => reject(error));
-    }
+    sendExtensionRuntimeMessage(transport, message)
+      .then(handleResponse)
+      .catch((error) => finish(() => reject(error)));
   });
 }
 
@@ -917,6 +875,13 @@ export async function fetchHistoryModelSyncStatus() {
 export async function stopHistoryModelSync() {
   return request<{ ok: true; status: HistoryModelSyncStatus }>(
     "/sync/bilibili/history-model/stop",
+    { method: "POST" },
+  );
+}
+
+export async function dismissHistoryModelSyncStatus() {
+  return request<{ ok: true; status: HistoryModelSyncStatus }>(
+    "/sync/bilibili/history-model/dismiss",
     { method: "POST" },
   );
 }

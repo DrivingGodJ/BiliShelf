@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import { runBackgroundScenario } from "./helpers/background-runtime-harness.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const backgroundPath = path.resolve(__dirname, "..", "entrypoints", "background.ts");
 
 const emptyStateSource = `({
   counters: { folder: 1, video: 1, folderItem: 1, tag: 1, videoTag: 1 },
@@ -231,7 +237,7 @@ test("unresolved identities are reported and block destructive reconciliation", 
   assert.equal(payload.result.incomplete.length, 1);
 });
 
-test("a truncated final page is incomplete and removes no local relationship", () => {
+test("a naturally-ended count gap completes with unavailable warnings and no deletion", () => {
   const payload = runBackgroundScenario({
     exports: ["syncFromBilibiliToState"],
     setupSource: `
@@ -262,16 +268,109 @@ test("a truncated final page is incomplete and removes no local relationship", (
       return {
         relationCount: state.folderItems.length,
         incomplete: result.incompleteFolders,
+        unavailable: result.unavailableFolders,
+        unavailableCount: result.summary.unavailableRemoteVideos,
+        completed: result.completed,
         removed: result.summary.folderLinksRemoved,
       };
     `,
   });
 
   assert.equal(payload.result.relationCount, 2);
-  assert.equal(payload.result.incomplete.length, 1);
-  assert.equal(payload.result.incomplete[0].expected, 2);
-  assert.equal(payload.result.incomplete[0].observed, 1);
+  assert.equal(payload.result.incomplete.length, 0);
+  assert.equal(payload.result.unavailable.length, 1);
+  assert.equal(payload.result.unavailable[0].expected, 2);
+  assert.equal(payload.result.unavailable[0].observed, 1);
+  assert.equal(payload.result.unavailable[0].unavailable, 1);
+  assert.equal(payload.result.unavailableCount, 1);
+  assert.equal(payload.result.completed, true);
   assert.equal(payload.result.removed, 0);
+});
+
+test("returned invalid videos only warn and still complete the sync", () => {
+  const payload = runBackgroundScenario({
+    exports: ["syncFromBilibiliToState"],
+    setupSource: `
+      globalThis.fetch = async (request) => {
+        const url = String(request);
+        const data = url.includes("/x/web-interface/nav")
+          ? { isLogin: true, mid: 1 }
+          : url.includes("/x/v3/fav/folder/created/list-all")
+            ? { list: [{ id: 99, title: "Remote", media_count: 1 }] }
+            : url.includes("/x/v3/fav/resource/list")
+              ? {
+                  medias: [{ bvid: "BVINVALID", title: "Deleted video", attr: 1 }],
+                  has_more: false,
+                  info: { media_count: 1 },
+                }
+              : null;
+        if (data === null) throw new Error("Unexpected URL: " + url);
+        return new Response(JSON.stringify({ code: 0, data }), { status: 200 });
+      };
+    `,
+    scenarioSource: `
+      const state = ${emptyStateSource};
+      const result = await syncFromBilibiliToState(state, {});
+      return {
+        completed: result.completed,
+        invalidVideosDetected: result.invalidVideosDetected,
+        isInvalid: state.videos[0]?.isInvalid,
+        errors: result.errors,
+      };
+    `,
+  });
+
+  assert.deepEqual(payload.result, {
+    completed: true,
+    invalidVideosDetected: 1,
+    isInvalid: true,
+    errors: [],
+  });
+});
+
+test("completed warning syncs remain eligible for tag enrichment", async () => {
+  const source = await readFile(backgroundPath, "utf8");
+  assert.match(
+    source,
+    /TAG_SYNC_ENABLED\s*&&\s*result\.completed\s*&&\s*!result\.riskBlocked[\s\S]{0,160}startTagEnrichmentTask/,
+  );
+});
+
+test("an empty page that still reports more pages remains incomplete", () => {
+  const payload = runBackgroundScenario({
+    exports: ["syncFromBilibiliToState"],
+    setupSource: `
+      globalThis.fetch = async (request) => {
+        const url = String(request);
+        const data = url.includes("/x/web-interface/nav")
+          ? { isLogin: true, mid: 1 }
+          : url.includes("/x/v3/fav/folder/created/list-all")
+            ? { list: [{ id: 99, title: "Remote", media_count: 2 }] }
+            : url.includes("/x/v3/fav/resource/list")
+              ? { medias: [], has_more: true, info: { media_count: 2 } }
+              : null;
+        if (data === null) throw new Error("Unexpected URL: " + url);
+        return new Response(JSON.stringify({ code: 0, data }), { status: 200 });
+      };
+    `,
+    scenarioSource: `
+      const state = ${existingFolderStateSource(["BVKEEP"])};
+      const result = await syncFromBilibiliToState(state, {
+        selectedRemoteFolderIds: [99],
+      });
+      return {
+        completed: result.completed,
+        incomplete: result.incompleteFolders,
+        unavailable: result.unavailableFolders,
+        relationCount: state.folderItems.length,
+      };
+    `,
+  });
+
+  assert.equal(payload.result.completed, false);
+  assert.equal(payload.result.incomplete.length, 1);
+  assert.equal(payload.result.unavailable.length, 0);
+  assert.equal(payload.result.relationCount, 1);
 });
 
 test("risk-blocked scans preserve every pre-existing local relationship", () => {

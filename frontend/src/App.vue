@@ -17,6 +17,7 @@ import FollowingUpImportDialog from "./components/dialogs/FollowingUpImportDialo
 import AiCategoryBrowser from "./components/AiCategoryBrowser.vue";
 import AiOrganizerStatusBar from "./components/AiOrganizerStatusBar.vue";
 import TagEnrichmentStatusBar from "./components/sync/TagEnrichmentStatusBar.vue";
+import FavoritesSyncStatusBar from "./components/sync/FavoritesSyncStatusBar.vue";
 import ManagerFolderNavigation from "./components/layout/ManagerFolderNavigation.vue";
 import ManagerHeader from "./components/layout/ManagerHeader.vue";
 import ManagerPanel from "./components/panels/ManagerPanel.vue";
@@ -82,6 +83,7 @@ import {
   fetchVideos,
   fetchFolderAiCategories,
   fetchHistoryModelSyncStatus,
+  dismissHistoryModelSyncStatus,
   fetchTagEnrichmentStatus,
   fetchBidirectionalSyncSettings,
   fetchWebDavSettings,
@@ -258,6 +260,14 @@ function isHistoryModelSyncActive(status: HistoryModelSyncStatus | null) {
 const favoritesSyncActive = computed(
   () => syncingImport.value || isHistoryModelSyncActive(syncHistoryStatus.value),
 );
+const favoritesSyncStatusVisible = computed(
+  () =>
+    !trashMode.value &&
+    !followingUpsMode.value &&
+    !commentsMode.value &&
+    !articlesMode.value &&
+    Boolean(syncHistoryStatus.value && syncHistoryStatus.value.phase !== "idle"),
+);
 const followingUps = ref<FollowedUp[]>([]);
 const followingUpKeyword = ref("");
 const followingUpLoading = ref(false);
@@ -359,6 +369,9 @@ const autoInitOwnerId = `tab-${Date.now()}-${Math.random()
 const tickNow = ref(Date.now());
 let autoInitHeartbeatTimer: number | null = null;
 let tagEnrichmentPollTimer: number | null = null;
+let syncLiveRefreshTimer: number | null = null;
+let syncLiveRefreshRunning = false;
+let syncLiveRefreshPending = false;
 let autoInitRetryTimer: number | null = null;
 let tickTimer: number | null = null;
 let exportReminderTimer: number | null = null;
@@ -464,11 +477,15 @@ async function refreshTags() {
   }
 }
 
-async function refreshVideos() {
+async function refreshVideos(options: { silent?: boolean } = {}) {
   if (trashMode.value) return;
   try {
     const { extracted, globalKeyword } = parseKeywordFromUtils(keyword.value);
-    await refreshVideosData({ extracted, globalKeyword });
+    await refreshVideosData({
+      extracted,
+      globalKeyword,
+      silent: options.silent === true,
+    });
   } catch (error) {
     console.error(error);
     notifyError(t("toast.loadVideosFail"), error);
@@ -777,16 +794,16 @@ async function refreshTrash() {
   }
 }
 
-async function refreshFoldersAndVideos() {
-  await Promise.all([refreshFolders(), refreshVideos()]);
+async function refreshFoldersAndVideos(options: { silent?: boolean } = {}) {
+  await Promise.all([refreshFolders(), refreshVideos(options)]);
 }
 
-async function refreshTagsAndVideos() {
-  await Promise.all([refreshTags(), refreshVideos()]);
+async function refreshTagsAndVideos(options: { silent?: boolean } = {}) {
+  await Promise.all([refreshTags(), refreshVideos(options)]);
 }
 
-async function refreshFoldersVideosAndTags() {
-  await Promise.all([refreshFolders(), refreshVideos(), refreshTags()]);
+async function refreshFoldersVideosAndTags(options: { silent?: boolean } = {}) {
+  await Promise.all([refreshFolders(), refreshVideos(options), refreshTags()]);
 }
 
 async function refreshTrashAndVideos() {
@@ -1012,6 +1029,7 @@ type AutoInitState = {
   phase1Imported: number;
   phase1Scanned: number;
   targetVideosEstimate: number;
+  unavailableVideos: number;
   lastError: string;
 };
 
@@ -1059,6 +1077,7 @@ function getDefaultAutoInitState(): AutoInitState {
     phase1Imported: 0,
     phase1Scanned: 0,
     targetVideosEstimate: 0,
+    unavailableVideos: 0,
     lastError: "",
   };
 }
@@ -1109,6 +1128,10 @@ function readAutoInitState() {
         0,
         Math.trunc(Number(parsed.targetVideosEstimate ?? 0))
       ),
+      unavailableVideos: Math.max(
+        0,
+        Math.trunc(Number(parsed.unavailableVideos ?? 0))
+      ),
       lastError: String(parsed.lastError ?? ""),
     } as AutoInitState;
   } catch {
@@ -1155,8 +1178,8 @@ function looksLikeRiskControlError(message: string) {
 const autoInitPhase1Progress = computed(() => {
   const target = Math.max(0, autoInitState.value.targetVideosEstimate);
   const imported = Math.max(0, autoInitState.value.phase1Imported);
+  if (autoInitState.value.status === "completed") return 100;
   if (target <= 0) {
-    if (autoInitState.value.status === "completed") return 100;
     return imported > 0 ? Math.min(95, imported % 100) : 0;
   }
   return Math.max(0, Math.min(100, (imported / target) * 100));
@@ -1176,7 +1199,13 @@ const autoInitStatusText = computed(() => {
   if (status === "running") return t("autoInit.statusRunning");
   if (status === "cooldown") return t("autoInit.statusCooldown");
   if (status === "failed") return t("autoInit.statusFailed");
-  if (status === "completed") return t("autoInit.statusCompleted");
+  if (status === "completed") {
+    return autoInitState.value.unavailableVideos > 0
+      ? t("autoInit.statusCompletedWithUnavailable", {
+          count: autoInitState.value.unavailableVideos,
+        })
+      : t("autoInit.statusCompleted");
+  }
   return t("autoInit.statusIdle");
 });
 
@@ -1328,7 +1357,12 @@ function maybeNotifyExportReminder() {
 }
 
 function handleExportReminderVisibility() {
-  if (document.visibilityState === "visible") maybeNotifyExportReminder();
+  if (document.visibilityState !== "visible") return;
+  maybeNotifyExportReminder();
+  if (route.name !== "manager") return;
+  void refreshHistoryModelSyncStatus();
+  if (TAG_SYNC_ENABLED) void refreshTagEnrichmentState();
+  if (favoritesSyncActive.value) scheduleSyncLibraryRefresh();
 }
 
 function startExportReminderChecks() {
@@ -1364,7 +1398,7 @@ async function refreshTagEnrichmentState() {
   }
   tagEnrichmentLoading.value = true;
   try {
-    tagEnrichmentStatus.value = await fetchTagEnrichmentStatus();
+    applyTagEnrichmentStatus(await fetchTagEnrichmentStatus());
   } catch (error) {
     console.warn("[tag-enrichment] status failed:", error);
   } finally {
@@ -1372,12 +1406,27 @@ async function refreshTagEnrichmentState() {
   }
 }
 
+function applyTagEnrichmentStatus(status: TagEnrichmentStatus) {
+  const previous = tagEnrichmentStatus.value;
+  tagEnrichmentStatus.value = status;
+  if (
+    previous &&
+    (previous.processed !== status.processed ||
+      previous.tagsBound !== status.tagsBound ||
+      previous.phase !== status.phase) &&
+    route.name === "manager"
+  ) {
+    void refreshTagsAndVideos({ silent: true });
+  }
+  return status;
+}
+
 async function pauseTagEnrichmentFromUi() {
   if (!TAG_SYNC_ENABLED) return;
   if (tagEnrichmentLoading.value) return;
   tagEnrichmentLoading.value = true;
   try {
-    tagEnrichmentStatus.value = await pauseTagEnrichment();
+    applyTagEnrichmentStatus(await pauseTagEnrichment());
     notifySuccess(t("toast.tagEnrichStopped"));
   } catch (error) {
     notifyError(t("toast.tagEnrichPauseFail"), error);
@@ -1391,10 +1440,9 @@ async function resumeTagEnrichmentFromUi() {
   if (tagEnrichmentLoading.value) return;
   tagEnrichmentLoading.value = true;
   try {
-    tagEnrichmentStatus.value = await resumeTagEnrichment();
+    const status = applyTagEnrichmentStatus(await resumeTagEnrichment());
     notifySuccess(
-      tagEnrichmentStatus.value.phase === "completed" &&
-        tagEnrichmentStatus.value.totalMissing === 0
+      status.phase === "completed" && status.totalMissing === 0
         ? t("toast.tagEnrichNoPending")
         : t("toast.tagEnrichStarted")
     );
@@ -1410,7 +1458,7 @@ async function runTagEnrichmentNowFromUi() {
   if (tagEnrichmentLoading.value) return;
   tagEnrichmentLoading.value = true;
   try {
-    tagEnrichmentStatus.value = await runTagEnrichmentNow();
+    applyTagEnrichmentStatus(await runTagEnrichmentNow());
     notifySuccess(t("toast.tagEnrichTriggered"));
   } catch (error) {
     notifyError(t("toast.tagEnrichTriggerFail"), error);
@@ -2160,6 +2208,58 @@ function stopHistoryModelSyncPolling() {
   }
 }
 
+function historySyncDataSignature(status: HistoryModelSyncStatus | null) {
+  if (!status) return "";
+  const summary = status.summary;
+  return [
+    status.phase,
+    status.current,
+    status.folderIndex,
+    status.currentPage,
+    summary.foldersSynced,
+    summary.videosProcessed,
+    summary.videosUpserted,
+    summary.folderLinksAdded,
+    summary.folderLinksRemoved,
+    summary.unavailableRemoteVideos,
+  ].join(":");
+}
+
+function scheduleSyncLibraryRefresh() {
+  syncLiveRefreshPending = true;
+  if (syncLiveRefreshTimer !== null || syncLiveRefreshRunning) return;
+  syncLiveRefreshTimer = window.setTimeout(async () => {
+    syncLiveRefreshTimer = null;
+    if (!syncLiveRefreshPending || route.name !== "manager") return;
+    syncLiveRefreshPending = false;
+    syncLiveRefreshRunning = true;
+    try {
+      await refreshFoldersAndVideos({ silent: true });
+    } finally {
+      syncLiveRefreshRunning = false;
+      if (syncLiveRefreshPending) scheduleSyncLibraryRefresh();
+    }
+  }, 250);
+}
+
+function applyHistoryModelSyncStatus(
+  status: HistoryModelSyncStatus,
+  options: { refreshLibrary?: boolean } = {},
+) {
+  const previousSignature = historySyncDataSignature(syncHistoryStatus.value);
+  syncHistoryStatus.value = status;
+  const nextSignature = historySyncDataSignature(status);
+  if (
+    options.refreshLibrary !== false &&
+    previousSignature &&
+    previousSignature !== nextSignature
+  ) {
+    scheduleSyncLibraryRefresh();
+  }
+  ensureHistoryModelSyncPolling();
+  return status;
+}
+
 function ensureHistoryModelSyncPolling() {
   const shouldPoll =
     !syncingImport.value &&
@@ -2178,7 +2278,7 @@ function ensureHistoryModelSyncPolling() {
 async function refreshHistoryModelSyncStatus() {
   try {
     const status = await fetchHistoryModelSyncStatus();
-    syncHistoryStatus.value = status;
+    applyHistoryModelSyncStatus(status);
     if (status.selectedRemoteFolderIds.length > 0) {
       const available = new Set(syncFolders.value.map((item) => item.remoteId));
       syncSelectedFolderIds.value =
@@ -2186,7 +2286,6 @@ async function refreshHistoryModelSyncStatus() {
           ? status.selectedRemoteFolderIds.filter((id) => available.has(id))
           : [...status.selectedRemoteFolderIds];
     }
-    ensureHistoryModelSyncPolling();
     return status;
   } catch (error) {
     console.error(error);
@@ -2369,10 +2468,23 @@ async function stopHistoryModelSyncFromUi() {
   syncStopping.value = true;
   try {
     const result = await stopHistoryModelSync();
-    syncHistoryStatus.value = result.status;
-    ensureHistoryModelSyncPolling();
+    applyHistoryModelSyncStatus(result.status);
   } catch (error) {
     notifyError(t("toast.syncStopFail"), error);
+  } finally {
+    syncStopping.value = false;
+  }
+}
+
+async function dismissHistoryModelSyncFromUi() {
+  if (syncStopping.value || favoritesSyncActive.value) return;
+  syncStopping.value = true;
+  try {
+    const result = await dismissHistoryModelSyncStatus();
+    applyHistoryModelSyncStatus(result.status, { refreshLibrary: false });
+    stopHistoryModelSyncPolling();
+  } catch (error) {
+    notifyError(t("toast.syncDismissFail"), error);
   } finally {
     syncStopping.value = false;
   }
@@ -2388,9 +2500,12 @@ async function restartHistoryModelSyncFromUi() {
 }
 
 type FolderSyncRunResult = {
+  completed: boolean;
   foldersSynced: number;
   videosImported: number;
   videosScanned: number;
+  unavailableRemoteVideos: number;
+  invalidVideosDetected: number;
   riskBlocked: boolean;
   noProgress: boolean;
   hasMorePage: boolean;
@@ -2420,7 +2535,7 @@ async function runFavoritesSyncLikeHistory(
       resumePageByFolder,
       restart: options.restart,
     });
-    syncHistoryStatus.value = startResult.status;
+    applyHistoryModelSyncStatus(startResult.status);
     if (!startResult.started && !startResult.status.running) {
       await sleepMs(180);
       startResult = await startHistoryModelSync({
@@ -2428,7 +2543,7 @@ async function runFavoritesSyncLikeHistory(
         resumePageByFolder,
         restart: options.restart,
       });
-      syncHistoryStatus.value = startResult.status;
+      applyHistoryModelSyncStatus(startResult.status);
     }
     if (
       !startResult.started &&
@@ -2444,7 +2559,7 @@ async function runFavoritesSyncLikeHistory(
     const pollStartedAt = Date.now();
     while (true) {
       status = await fetchHistoryModelSyncStatus();
-      syncHistoryStatus.value = status;
+      applyHistoryModelSyncStatus(status);
       const waitingForAutomaticRetry =
         status.phase === "waiting" && status.retryAutomatic;
       if (!status.running && !waitingForAutomaticRetry) break;
@@ -2458,7 +2573,7 @@ async function runFavoritesSyncLikeHistory(
     }
 
     const foldersSynced = Math.max(0, status.summary.foldersSynced);
-    const videosImported = Math.max(0, status.summary.folderLinksAdded);
+    const videosImported = Math.max(0, status.summary.videosUpserted);
     const videosScanned = Math.max(0, status.summary.videosProcessed);
     const riskBlocked = Boolean(status.riskBlocked);
     const resumeMapRaw = status.resumePageByFolder ?? {};
@@ -2479,6 +2594,14 @@ async function runFavoritesSyncLikeHistory(
       singleFolderId !== null
         ? resumeMap[String(singleFolderId)] ?? null
         : null;
+    const unavailableRemoteVideos = Math.max(
+      0,
+      Number(status.summary.unavailableRemoteVideos || 0),
+    );
+    const invalidVideosDetected = Math.max(
+      0,
+      Number(status.invalidVideosDetected || 0),
+    );
     const errorsOmittedTotal = 0;
     const allErrors = status.errors ?? [];
     if (status.lastError && allErrors.length === 0) {
@@ -2528,7 +2651,8 @@ async function runFavoritesSyncLikeHistory(
       .filter(Boolean)
       .join(" | ");
 
-    const fullyFailed = videosImported === 0 && allErrors.length > 0;
+    const completed = status.phase === "completed";
+    const fullyFailed = !completed && videosImported === 0 && allErrors.length > 0;
     const noProgress = videosImported === 0 && videosScanned === 0;
     if (options.notify) {
       if (fullyFailed) {
@@ -2536,27 +2660,35 @@ async function runFavoritesSyncLikeHistory(
           t("toast.syncFail"),
           errorDesc || t("common.requestFailed")
         );
-      } else if (!noProgress) {
+      } else if (completed) {
         if (options.closeDialogOnSuccess) {
           syncDialogOpen.value = false;
         }
-        notifySuccess(
-          t("toast.syncDone"),
-          t("toast.syncSummary", {
-            folders: foldersSynced,
-            videos: videosImported,
-          })
-        );
-        if (allErrors.length > 0) {
-          notifyError(t("toast.syncPartial"), errorDesc);
-        }
+        const summaryMessage = t("toast.syncSummary", {
+          folders: foldersSynced,
+          videos: videosImported,
+        });
+        const warningMessages = [
+          unavailableRemoteVideos > 0
+            ? t("toast.syncUnavailable", { count: unavailableRemoteVideos })
+            : "",
+          invalidVideosDetected > 0
+            ? t("toast.syncInvalidDetected", { count: invalidVideosDetected })
+            : "",
+        ].filter(Boolean);
+        notifySuccess(t("toast.syncDone"), [summaryMessage, ...warningMessages].join(" | "));
+      } else if (allErrors.length > 0) {
+        notifyError(t("toast.syncPartial"), errorDesc || t("common.requestFailed"));
       }
     }
 
     return {
+      completed,
       foldersSynced,
       videosImported,
       videosScanned,
+      unavailableRemoteVideos,
+      invalidVideosDetected,
       riskBlocked,
       noProgress,
       hasMorePage:
@@ -2576,9 +2708,12 @@ async function runFavoritesSyncLikeHistory(
     const riskBlocked = looksLikeRiskControlError(message);
     if (options.notify) notifyError(t("toast.syncFail"), error);
     return {
+      completed: false,
       foldersSynced: 0,
       videosImported: 0,
       videosScanned: 0,
+      unavailableRemoteVideos: 0,
+      invalidVideosDetected: 0,
       riskBlocked,
       noProgress: true,
       hasMorePage: false,
@@ -2588,6 +2723,7 @@ async function runFavoritesSyncLikeHistory(
     };
   } finally {
     syncingImport.value = false;
+    ensureHistoryModelSyncPolling();
   }
 }
 
@@ -2724,6 +2860,7 @@ async function maybeStartAutoInitSync(options: { force?: boolean } = {}) {
 
     let totalImported = Math.max(0, state.phase1Imported);
     let totalScanned = Math.max(0, state.phase1Scanned);
+    let totalUnavailable = Math.max(0, state.unavailableVideos);
     for (let index = startIndex; index < normalizedIds.length; index += 1) {
       const folderId = normalizedIds[index];
       const result = await runFavoritesSyncLikeHistory([folderId], {
@@ -2732,6 +2869,8 @@ async function maybeStartAutoInitSync(options: { force?: boolean } = {}) {
       });
       totalImported += result.videosImported;
       totalScanned += result.videosScanned;
+      totalUnavailable +=
+        result.unavailableRemoteVideos + result.invalidVideosDetected;
 
       if (result.riskBlocked) {
         const latest = readAutoInitState();
@@ -2746,13 +2885,14 @@ async function maybeStartAutoInitSync(options: { force?: boolean } = {}) {
           phase1Imported: totalImported,
           phase1Scanned: totalScanned,
           targetVideosEstimate: Math.max(0, latest.targetVideosEstimate || 0),
+          unavailableVideos: totalUnavailable,
           lastError: result.errors[0]?.message || "risk-control (412)",
         });
         notifyError(t("toast.autoInitCooling"), t("toast.autoInitCoolingDesc"));
         return;
       }
 
-      if (result.noProgress && result.errors.length > 0) {
+      if (!result.completed) {
         const latest = readAutoInitState();
         writeAutoInitState({
           status: "failed",
@@ -2763,6 +2903,7 @@ async function maybeStartAutoInitSync(options: { force?: boolean } = {}) {
           phase1Imported: totalImported,
           phase1Scanned: totalScanned,
           targetVideosEstimate: Math.max(0, latest.targetVideosEstimate || 0),
+          unavailableVideos: totalUnavailable,
           lastError: result.errors[0]?.message || "sync failed",
         });
         notifyError(
@@ -2782,6 +2923,7 @@ async function maybeStartAutoInitSync(options: { force?: boolean } = {}) {
         phase1Imported: totalImported,
         phase1Scanned: totalScanned,
         targetVideosEstimate: Math.max(0, latest.targetVideosEstimate || 0),
+        unavailableVideos: totalUnavailable,
         lastError: "",
       });
       await sleepMs(640 + Math.floor(Math.random() * 260));
@@ -2797,6 +2939,7 @@ async function maybeStartAutoInitSync(options: { force?: boolean } = {}) {
       phase1Imported: totalImported,
       phase1Scanned: totalScanned,
       targetVideosEstimate: Math.max(0, latest.targetVideosEstimate || 0),
+      unavailableVideos: totalUnavailable,
       lastError: "",
     });
     if (TAG_SYNC_ENABLED) {
@@ -3275,6 +3418,10 @@ onBeforeUnmount(() => {
     autoInitRetryTimer = null;
   }
   stopHistoryModelSyncPolling();
+  if (syncLiveRefreshTimer !== null) {
+    window.clearTimeout(syncLiveRefreshTimer);
+    syncLiveRefreshTimer = null;
+  }
   stopFollowingUpImportPolling();
   stopTagEnrichmentPolling();
   stopAiOrganizerPolling();
@@ -3418,6 +3565,16 @@ onBeforeUnmount(() => {
           {{ autoInitState.lastError }}
         </p>
       </section>
+
+      <FavoritesSyncStatusBar
+        v-if="favoritesSyncStatusVisible && syncHistoryStatus"
+        :status="syncHistoryStatus"
+        :stopping="syncStopping"
+        :t="t"
+        @open="openSyncImportDialog"
+        @stop="stopHistoryModelSyncFromUi"
+        @dismiss="dismissHistoryModelSyncFromUi"
+      />
 
       <TagEnrichmentStatusBar
         v-if="
@@ -3771,6 +3928,7 @@ onBeforeUnmount(() => {
       @resume="resumeHistoryModelSyncFromUi"
       @restart="restartHistoryModelSyncFromUi"
       @stop="stopHistoryModelSyncFromUi"
+      @dismiss="dismissHistoryModelSyncFromUi"
     />
 
     <ConfirmActionDialog

@@ -47,6 +47,7 @@ const emit = defineEmits<{
   resume: [];
   restart: [];
   stop: [];
+  dismiss: [];
 }>();
 
 const selectedVideoCount = computed(() =>
@@ -69,10 +70,19 @@ const taskActive = computed(
     Boolean(props.status?.running) ||
     (props.status?.phase === "waiting" && props.status.retryAutomatic),
 );
+const invalidDetected = computed(() =>
+  Math.max(0, Number(props.status?.invalidVideosDetected || 0)),
+);
+const hasWarnings = computed(
+  () =>
+    Number(props.status?.summary.unavailableRemoteVideos || 0) > 0 ||
+    invalidDetected.value > 0,
+);
 
 const progressPercent = computed(() => {
   const status = props.status;
   if (!status) return 0;
+  if (status.phase === "completed") return 100;
   if (status.total > 0) {
     return Math.min(100, Math.round((status.current / status.total) * 100));
   }
@@ -82,7 +92,7 @@ const progressPercent = computed(() => {
       Math.round((status.folderIndex / status.folderTotal) * 100)
     );
   }
-  return status.phase === "completed" ? 100 : 0;
+  return 0;
 });
 
 const retryRemainingSeconds = computed(() => {
@@ -134,8 +144,12 @@ const retryTimeLabel = computed(() => {
                 <div class="flex items-center gap-2">
                   <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-primary">
                     <CheckCircle2
-                      v-if="status.phase === 'completed'"
+                      v-if="status.phase === 'completed' && !hasWarnings"
                       class="h-4 w-4"
+                    />
+                    <AlertTriangle
+                      v-else-if="status.phase === 'completed' && hasWarnings"
+                      class="h-4 w-4 text-amber-600 dark:text-amber-400"
                     />
                     <Clock3
                       v-else-if="status.phase === 'paused' || status.phase === 'waiting'"
@@ -226,12 +240,36 @@ const retryTimeLabel = computed(() => {
                   {{ status.summary.unresolvedMissingBvid }}
                 </p>
               </div>
+              <div class="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.unavailable") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ status.summary.unavailableRemoteVideos }}
+                </p>
+              </div>
+              <div class="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] p-2.5">
+                <p class="text-[11px] text-muted-foreground">{{ t("sync.invalidDetected") }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums">
+                  {{ invalidDetected }}
+                </p>
+              </div>
               <div class="rounded-lg border bg-background/75 p-2.5">
                 <p class="text-[11px] text-muted-foreground">{{ t("sync.incomplete") }}</p>
                 <p class="mt-1 text-lg font-semibold tabular-nums">
                   {{ status.summary.incompleteFolders }}
                 </p>
               </div>
+            </div>
+
+            <div
+              v-if="status.summary.unavailableRemoteVideos > 0 || invalidDetected > 0"
+              class="space-y-1.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3 text-xs text-amber-800 dark:text-amber-200"
+            >
+              <p v-if="status.summary.unavailableRemoteVideos > 0">
+                {{ t("sync.unavailableHint", { count: status.summary.unavailableRemoteVideos }) }}
+              </p>
+              <p v-if="invalidDetected > 0">
+                {{ t("sync.invalidDetectedHint", { count: invalidDetected }) }}
+              </p>
             </div>
 
             <div
@@ -297,6 +335,20 @@ const retryTimeLabel = computed(() => {
               >
                 <Square class="h-3.5 w-3.5" />
                 {{ stopping ? t("sync.stopping") : t("sync.stop") }}
+              </Button>
+            </div>
+
+            <div
+              v-else-if="status.phase !== 'idle'"
+              class="flex justify-end"
+            >
+              <Button
+                size="sm"
+                variant="outline"
+                :disabled="loading"
+                @click="emit('dismiss')"
+              >
+                {{ t("sync.dismissStatus") }}
               </Button>
             </div>
           </div>

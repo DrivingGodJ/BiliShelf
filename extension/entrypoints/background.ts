@@ -507,6 +507,7 @@ type FavoritesSyncSummaryStatus = {
   videosUpserted: number;
   skippedMissingBvid: number;
   unresolvedMissingBvid: number;
+  unavailableRemoteVideos: number;
   incompleteFolders: number;
   folderLinksAdded: number;
   folderLinksRemoved: number;
@@ -527,6 +528,15 @@ type FavoritesSyncIncompleteFolder = {
   folder: string;
   expected: number;
   observed: number;
+  reason: string;
+};
+
+type FavoritesSyncUnavailableFolder = {
+  remoteFolderId: number;
+  folder: string;
+  expected: number;
+  observed: number;
+  unavailable: number;
   reason: string;
 };
 
@@ -559,6 +569,7 @@ type FavoritesSyncStatus = {
   errors: Array<{ folder: string; message: string }>;
   unresolvedItems: FavoritesSyncUnresolvedItem[];
   incompleteFolders: FavoritesSyncIncompleteFolder[];
+  unavailableFolders: FavoritesSyncUnavailableFolder[];
 };
 
 type FavoritesSyncJobPhase = "running" | "paused" | "waiting" | "failed";
@@ -593,6 +604,7 @@ type FavoritesSyncJob = {
   errors: Array<{ folder: string; message: string }>;
   unresolvedItems: FavoritesSyncUnresolvedItem[];
   incompleteFolders: FavoritesSyncIncompleteFolder[];
+  unavailableFolders: FavoritesSyncUnavailableFolder[];
   riskBlocked: boolean;
   lastError: string | null;
   retry: FavoritesSyncRetryState;
@@ -796,6 +808,7 @@ const defaultStage3ReconcileMeta = (): Stage3ReconcileMeta => ({
     videosUpserted: 0,
     skippedMissingBvid: 0,
     unresolvedMissingBvid: 0,
+    unavailableRemoteVideos: 0,
     incompleteFolders: 0,
     folderLinksAdded: 0,
     folderLinksRemoved: 0,
@@ -841,6 +854,7 @@ const emptyFavoritesSyncSummary = (): FavoritesSyncSummaryStatus => ({
   videosUpserted: 0,
   skippedMissingBvid: 0,
   unresolvedMissingBvid: 0,
+  unavailableRemoteVideos: 0,
   incompleteFolders: 0,
   folderLinksAdded: 0,
   folderLinksRemoved: 0,
@@ -876,7 +890,8 @@ const defaultFavoritesSyncStatus = (): FavoritesSyncStatus => ({
   summary: emptyFavoritesSyncSummary(),
   errors: [],
   unresolvedItems: [],
-  incompleteFolders: []
+  incompleteFolders: [],
+  unavailableFolders: []
 });
 
 function normalizeFavoritesSyncSummary(value: unknown): FavoritesSyncSummaryStatus {
@@ -890,6 +905,10 @@ function normalizeFavoritesSyncSummary(value: unknown): FavoritesSyncSummaryStat
     videosUpserted: Math.max(0, toInt(raw.videosUpserted, 0)),
     skippedMissingBvid: Math.max(0, toInt(raw.skippedMissingBvid, 0)),
     unresolvedMissingBvid: Math.max(0, toInt(raw.unresolvedMissingBvid, 0)),
+    unavailableRemoteVideos: Math.max(
+      0,
+      toInt(raw.unavailableRemoteVideos, 0)
+    ),
     incompleteFolders: Math.max(0, toInt(raw.incompleteFolders, 0)),
     folderLinksAdded: Math.max(0, toInt(raw.folderLinksAdded, 0)),
     folderLinksRemoved: Math.max(0, toInt(raw.folderLinksRemoved, 0)),
@@ -954,6 +973,35 @@ function normalizeFavoritesSyncIncompleteFolders(value: unknown) {
       };
     })
     .filter((item): item is FavoritesSyncIncompleteFolder => Boolean(item))
+    .slice(-100);
+}
+
+function normalizeFavoritesSyncUnavailableFolders(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Partial<FavoritesSyncUnavailableFolder>;
+      const remoteFolderId = toInt(raw.remoteFolderId);
+      const expected = Math.max(0, toInt(raw.expected, 0));
+      const observed = Math.max(0, toInt(raw.observed, 0));
+      const unavailable = Math.max(
+        0,
+        toInt(raw.unavailable, Math.max(0, expected - observed))
+      );
+      if (remoteFolderId <= 0 || unavailable <= 0) return null;
+      return {
+        remoteFolderId,
+        folder: normalizeText(raw.folder) || `Bilibili Favorite ${remoteFolderId}`,
+        expected,
+        observed,
+        unavailable,
+        reason:
+          normalizeText(raw.reason) ||
+          "Bilibili did not return these unavailable videos"
+      };
+    })
+    .filter((item): item is FavoritesSyncUnavailableFolder => Boolean(item))
     .slice(-100);
 }
 
@@ -1039,7 +1087,10 @@ function normalizeFavoritesSyncStatus(value: unknown): FavoritesSyncStatus {
     summary: normalizeFavoritesSyncSummary(raw.summary),
     errors: normalizeFavoritesSyncErrors(raw.errors),
     unresolvedItems: normalizeFavoritesSyncUnresolvedItems(raw.unresolvedItems),
-    incompleteFolders: normalizeFavoritesSyncIncompleteFolders(raw.incompleteFolders)
+    incompleteFolders: normalizeFavoritesSyncIncompleteFolders(raw.incompleteFolders),
+    unavailableFolders: normalizeFavoritesSyncUnavailableFolders(
+      raw.unavailableFolders
+    )
   };
 }
 
@@ -1136,6 +1187,9 @@ function normalizeFavoritesSyncJobMeta(value: unknown = null): FavoritesSyncJobM
     incompleteFolders: normalizeFavoritesSyncIncompleteFolders(
       activeRaw.incompleteFolders
     ),
+    unavailableFolders: normalizeFavoritesSyncUnavailableFolders(
+      activeRaw.unavailableFolders
+    ),
     riskBlocked: Boolean(activeRaw.riskBlocked),
     lastError: normalizeText(activeRaw.lastError) || null,
     retry: {
@@ -1186,6 +1240,7 @@ function createFavoritesSyncJob(
     errors: [],
     unresolvedItems: [],
     incompleteFolders: [],
+    unavailableFolders: [],
     riskBlocked: false,
     lastError: null,
     retry: {
@@ -1281,7 +1336,8 @@ function statusFromFavoritesSyncJob(
     summary: { ...job.summary },
     errors: job.errors.slice(-30),
     unresolvedItems: job.unresolvedItems.slice(-100),
-    incompleteFolders: job.incompleteFolders.slice(-100)
+    incompleteFolders: job.incompleteFolders.slice(-100),
+    unavailableFolders: job.unavailableFolders.slice(-100)
   };
 }
 
@@ -1302,7 +1358,10 @@ function completeFavoritesSyncJob(
   };
   meta.lastStatus = {
     ...statusFromFavoritesSyncJob(job, false, finishedAt),
-    message: "Favorites sync completed",
+    message:
+      job.summary.unavailableRemoteVideos > 0 || job.invalidVideoIds.length > 0
+        ? "Favorites sync completed with warnings"
+        : "Favorites sync completed",
     phase: "completed",
     nextRetryAt: null,
     retryAutomatic: false
@@ -5601,6 +5660,20 @@ async function restoreTagEnrichmentTask() {
   scheduleTagEnrichment(meta);
 }
 
+async function ensureTagEnrichmentAfterRestore() {
+  const state = await readState();
+  const favoritesStatus = getFavoritesSyncStatus(state);
+  const tagMeta = ensureTagEnrichmentMeta(state);
+  if (
+    favoritesStatus.phase === "completed" &&
+    favoritesStatus.summary.videosProcessed > 0 &&
+    tagMeta.phase === "idle" &&
+    !tagMeta.paused
+  ) {
+    await startTagEnrichmentTask({ immediate: false });
+  }
+}
+
 function getTagEnrichmentStatus(state: LocalState) {
   if (!TAG_SYNC_ENABLED) {
     return {
@@ -5996,6 +6069,7 @@ type SyncSummary = {
   videosUpserted: number;
   skippedMissingBvid: number;
   unresolvedMissingBvid: number;
+  unavailableRemoteVideos: number;
   incompleteFolders: number;
   folderLinksAdded: number;
   folderLinksRemoved: number;
@@ -6132,6 +6206,7 @@ async function syncFromBilibiliToState(
   let videosUpserted = job?.summary.videosUpserted ?? 0;
   let skippedMissingBvid = job?.summary.skippedMissingBvid ?? 0;
   let unresolvedMissingBvid = job?.summary.unresolvedMissingBvid ?? 0;
+  let unavailableRemoteVideos = job?.summary.unavailableRemoteVideos ?? 0;
   let incompleteFolderCount = job?.summary.incompleteFolders ?? 0;
   let folderLinksAdded = job?.summary.folderLinksAdded ?? 0;
   let folderLinksRemoved = job?.summary.folderLinksRemoved ?? 0;
@@ -6143,6 +6218,8 @@ async function syncFromBilibiliToState(
     job?.unresolvedItems.slice() ?? [];
   const incompleteFolders: FavoritesSyncIncompleteFolder[] =
     job?.incompleteFolders.slice() ?? [];
+  const unavailableFolders: FavoritesSyncUnavailableFolder[] =
+    job?.unavailableFolders.slice() ?? [];
   let progressCurrent = job?.current ?? 0;
   let videosSinceCooldown = 0;
   let stopped = false;
@@ -6174,6 +6251,7 @@ async function syncFromBilibiliToState(
       videosUpserted,
       skippedMissingBvid,
       unresolvedMissingBvid,
+      unavailableRemoteVideos,
       incompleteFolders: incompleteFolderCount,
       folderLinksAdded,
       folderLinksRemoved,
@@ -6184,6 +6262,7 @@ async function syncFromBilibiliToState(
     job.errors = errors.slice(-100);
     job.unresolvedItems = unresolvedItems.slice(-100);
     job.incompleteFolders = incompleteFolders.slice(-100);
+    job.unavailableFolders = unavailableFolders.slice(-100);
     job.lastError = errors.at(-1)?.message ?? null;
     job.riskBlocked = riskBlocked;
     job.updatedAt = now();
@@ -6264,6 +6343,7 @@ async function syncFromBilibiliToState(
       }
       let folderFailed = false;
       let folderIncompleteReason = "";
+      let folderUnavailableCount = 0;
       const remoteBvidKeys = new Set<string>(
         job?.seenBvidKeysByFolder[String(remoteFolder.remoteId)] ?? []
       );
@@ -6277,6 +6357,16 @@ async function syncFromBilibiliToState(
         }
       }
       incompleteFolderCount = incompleteFolders.length;
+      for (let index = unavailableFolders.length - 1; index >= 0; index -= 1) {
+        if (unavailableFolders[index]?.remoteFolderId !== remoteFolder.remoteId) {
+          continue;
+        }
+        unavailableRemoteVideos = Math.max(
+          0,
+          unavailableRemoteVideos - unavailableFolders[index].unavailable
+        );
+        unavailableFolders.splice(index, 1);
+      }
       if (page === 1) {
         for (let index = unresolvedItems.length - 1; index >= 0; index -= 1) {
           if (unresolvedItems[index]?.remoteFolderId === remoteFolder.remoteId) {
@@ -6360,10 +6450,11 @@ async function syncFromBilibiliToState(
           expectedRemoteCount = Math.trunc(responseTotal);
         }
         if (medias.length === 0) {
-          if (folderMediaData.has_more === true || observedRowCount < expectedRemoteCount) {
-            folderIncompleteReason = folderMediaData.has_more === true
-              ? "Remote response reported more pages but returned an empty page"
-              : "Remote response ended before the reported total was observed";
+          if (folderMediaData.has_more === true) {
+            folderIncompleteReason =
+              "Remote response reported more pages but returned an empty page";
+          } else if (observedRowCount < expectedRemoteCount) {
+            folderUnavailableCount = expectedRemoteCount - observedRowCount;
           }
           break;
         }
@@ -6536,9 +6627,11 @@ async function syncFromBilibiliToState(
           pageSize,
           medias.length
         );
-        if (!remoteHasMore && observedRowCount !== expectedRemoteCount) {
+        if (!remoteHasMore && observedRowCount < expectedRemoteCount) {
+          folderUnavailableCount = expectedRemoteCount - observedRowCount;
+        } else if (!remoteHasMore && observedRowCount > expectedRemoteCount) {
           folderIncompleteReason =
-            "Remote response total does not match the number of observed rows";
+            "Remote response returned more rows than its reported total";
         }
         if (remoteHasMore) {
           page += 1;
@@ -6590,6 +6683,31 @@ async function syncFromBilibiliToState(
             job.seenBvidKeysByFolder[String(remoteFolder.remoteId)] = [];
             job.observedRowCountByFolder[String(remoteFolder.remoteId)] = 0;
           }
+          await checkpointJob();
+        }
+      } else if (folderUnavailableCount > 0) {
+        unavailableRemoteVideos += folderUnavailableCount;
+        unavailableFolders.push({
+          remoteFolderId: remoteFolder.remoteId,
+          folder: remoteFolder.title,
+          expected: expectedRemoteCount,
+          observed: observedRowCount,
+          unavailable: folderUnavailableCount,
+          reason:
+            "Bilibili did not return these entries; they are usually invalid, private, or otherwise unavailable"
+        });
+        // The returned rows are safe to import, but an inferred unavailable gap
+        // must never authorize remote-deletion reconciliation.
+        if (job) {
+          job.completedRemoteFolderIds = Array.from(
+            new Set([...job.completedRemoteFolderIds, remoteFolder.remoteId])
+          ).sort((left, right) => left - right);
+          delete job.seenBvidKeysByFolder[String(remoteFolder.remoteId)];
+          delete job.observedRowCountByFolder[String(remoteFolder.remoteId)];
+          job.currentFolderRemoteId = null;
+          job.currentFolderTitle = remoteFolder.title;
+          job.currentFolderIndex = folderPosition;
+          job.nextPage = 1;
           await checkpointJob();
         }
       } else {
@@ -6680,6 +6798,7 @@ async function syncFromBilibiliToState(
     videosUpserted,
     skippedMissingBvid,
     unresolvedMissingBvid,
+    unavailableRemoteVideos,
     incompleteFolders: incompleteFolderCount,
     folderLinksAdded,
     folderLinksRemoved,
@@ -6698,6 +6817,7 @@ async function syncFromBilibiliToState(
     job.errors = errors.slice(-100);
     job.unresolvedItems = unresolvedItems.slice(-100);
     job.incompleteFolders = incompleteFolders.slice(-100);
+    job.unavailableFolders = unavailableFolders.slice(-100);
     job.riskBlocked = riskBlocked;
     job.lastError = returnedErrors.at(-1)?.message ?? null;
     job.current = videosProcessed;
@@ -6726,6 +6846,7 @@ async function syncFromBilibiliToState(
     invalidVideoIds,
     unresolvedItems: unresolvedItems.slice(-100),
     incompleteFolders: incompleteFolders.slice(-100),
+    unavailableFolders: unavailableFolders.slice(-100),
     errors: returnedErrors,
     errorsOmitted,
     syncedAt: now()
@@ -6747,7 +6868,8 @@ function getFavoritesSyncStatus(state: LocalState) {
     summary: { ...status.summary },
     errors: status.errors.slice(-30),
     unresolvedItems: status.unresolvedItems.slice(-100),
-    incompleteFolders: status.incompleteFolders.slice(-100)
+    incompleteFolders: status.incompleteFolders.slice(-100),
+    unavailableFolders: status.unavailableFolders.slice(-100)
   };
 }
 
@@ -7165,6 +7287,7 @@ async function startFavoritesSyncTask(params: {
           active.errors = [...result.errors];
           active.unresolvedItems = [...result.unresolvedItems];
           active.incompleteFolders = [...result.incompleteFolders];
+          active.unavailableFolders = [...result.unavailableFolders];
           active.riskBlocked = Boolean(result.riskBlocked);
           active.lastError = result.errors.at(-1)?.message ?? null;
           active.updatedAt = now();
@@ -7255,6 +7378,15 @@ async function stopFavoritesSyncTask() {
 
   const snapshot = await readState();
   return getFavoritesSyncStatus(snapshot);
+}
+
+async function dismissFavoritesSyncStatus() {
+  return withState((state) => {
+    const meta = ensureFavoritesSyncJobMeta(state);
+    meta.active = null;
+    meta.lastStatus = defaultFavoritesSyncStatus();
+    return getFavoritesSyncStatus(state);
+  }, true);
 }
 
 function buildExportPayload(state: LocalState) {
@@ -8433,6 +8565,16 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
       return ok({
         ok: true,
         status: await stopFavoritesSyncTask()
+      });
+    }
+
+    if (method === "POST" && path === "/sync/bilibili/history-model/dismiss") {
+      if (favoritesSyncTask || favoritesSyncStartPending) {
+        return fail(409, "Stop the active favorites sync before dismissing it");
+      }
+      return ok({
+        ok: true,
+        status: await dismissFavoritesSyncStatus()
       });
     }
 
@@ -10041,9 +10183,11 @@ export default defineBackground(() => {
   void readState()
     .then((state) => scheduleFavoritesSyncRetry(state.syncMeta.favoritesJob.active))
     .catch(() => undefined);
-  void restoreTagEnrichmentTask().catch((error) => {
-    console.warn("[tag-enrich] restore failed:", error);
-  });
+  void restoreTagEnrichmentTask()
+    .then(() => ensureTagEnrichmentAfterRestore())
+    .catch((error) => {
+      console.warn("[tag-enrich] restore failed:", error);
+    });
   void readAiOrganizerTask()
     .then((task) => {
       if (

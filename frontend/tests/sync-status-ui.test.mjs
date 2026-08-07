@@ -24,6 +24,14 @@ const tagStatusPath = path.join(
   "sync",
   "TagEnrichmentStatusBar.vue",
 );
+const favoritesStatusPath = path.join(
+  repoRoot,
+  "frontend",
+  "src",
+  "components",
+  "sync",
+  "FavoritesSyncStatusBar.vue",
+);
 const apiPath = path.join(repoRoot, "frontend", "src", "lib", "api.ts");
 const typesPath = path.join(repoRoot, "frontend", "src", "types.ts");
 const i18nPath = path.join(repoRoot, "frontend", "src", "lib", "manager-i18n.ts");
@@ -55,6 +63,8 @@ test("sync status contract exposes durable progress, retry, and diagnostics", as
   assert.match(types, /nextRetryAt: number \| null;/);
   assert.match(types, /unresolvedItems: Array</);
   assert.match(types, /incompleteFolders: Array</);
+  assert.match(types, /unavailableRemoteVideos: number;/);
+  assert.match(types, /unavailableFolders: Array</);
 });
 
 test("sync dialog renders current work, counters, skipped items, and explicit controls", async () => {
@@ -71,11 +81,37 @@ test("sync dialog renders current work, counters, skipped items, and explicit co
   assert.match(source, /status\.summary\.incompleteFolders/);
   assert.match(source, /status\.unresolvedItems/);
   assert.match(source, /status\.incompleteFolders/);
+  assert.match(source, /status\.summary\.unavailableRemoteVideos/);
+  assert.match(source, /invalidVideosDetected/);
+  assert.match(source, /sync\.invalidDetectedHint/);
   assert.match(source, /status\.errors/);
   assert.match(source, /resume: \[\];/);
   assert.match(source, /restart: \[\];/);
+  assert.match(source, /dismiss: \[\];/);
   assert.match(source, /emit\('resume'\)/);
   assert.match(source, /emit\('restart'\)/);
+  assert.match(source, /emit\('dismiss'\)/);
+});
+
+test("all extension builds share an external sync monitor and live checkpoint refresh", async () => {
+  const [app, component, api, background] = await Promise.all([
+    readFile(appPath, "utf8"),
+    readFile(favoritesStatusPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(backgroundPath, "utf8"),
+  ]);
+
+  assert.match(app, /<FavoritesSyncStatusBar/);
+  assert.match(app, /favoritesSyncStatusVisible/);
+  assert.match(app, /scheduleSyncLibraryRefresh/);
+  assert.match(app, /refreshFoldersAndVideos\(\{ silent: true \}\)/);
+  assert.match(component, /aria-live="polite"/);
+  assert.match(component, /status\.summary\.unavailableRemoteVideos/);
+  assert.match(component, /status\.invalidVideosDetected/);
+  assert.match(component, /emit\('open'\)/);
+  assert.match(component, /emit\('dismiss'\)/);
+  assert.match(api, /dismissHistoryModelSyncStatus/);
+  assert.match(background, /history-model\/dismiss/);
 });
 
 test("app polls automatic retries but leaves risk-paused jobs for explicit resume", async () => {
@@ -126,6 +162,11 @@ test("sync diagnostics have matching Chinese and English copy", async () => {
     "sync.upserted",
     "sync.skipped",
     "sync.unresolved",
+    "sync.unavailable",
+    "sync.unavailableHint",
+    "sync.invalidDetected",
+    "sync.invalidDetectedHint",
+    "sync.dismissStatus",
     "sync.incomplete",
     "sync.diagnostics",
   ]) {
