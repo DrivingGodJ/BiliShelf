@@ -84,7 +84,10 @@ import {
   fetchFolderAiCategories,
   fetchHistoryModelSyncStatus,
   dismissHistoryModelSyncStatus,
+  acknowledgeExtensionUpdateNotice,
+  checkExtensionUpdate,
   dismissTagEnrichmentStatus,
+  fetchExtensionUpdateStatus,
   fetchTagEnrichmentStatus,
   fetchBidirectionalSyncSettings,
   fetchWebDavSettings,
@@ -116,6 +119,7 @@ import {
   updateBidirectionalSyncSettings,
   updateWebDavSettings,
   type BidirectionalSyncSettings,
+  type ExtensionUpdateStatus,
   type HistoryModelSyncStatus,
   type TagEnrichmentSettings,
   type TagEnrichmentStatus,
@@ -335,8 +339,10 @@ const tagEnrichmentSettings = computed<TagEnrichmentSettings | null>(() => {
 });
 const aiSettingsDialogOpen = ref(false);
 const settingsSection = ref<
-  "ai" | "listener" | "tags" | "language" | "theme" | "cards"
+  "ai" | "listener" | "tags" | "language" | "theme" | "cards" | "about"
 >("ai");
+const extensionUpdateStatus = ref<ExtensionUpdateStatus | null>(null);
+const extensionUpdateLoading = ref(false);
 const reopenAiOrganizerAfterSettings = ref(false);
 const aiSettings = ref<AiSettings | null>(null);
 const aiSettingsBusy = ref(false);
@@ -1790,13 +1796,14 @@ async function performClearFolderAiCategories(folderId: number) {
 }
 
 function openSettingsDialog(
-  section: "ai" | "listener" | "tags" | "language" | "theme" | "cards" = "ai",
+  section: "ai" | "listener" | "tags" | "language" | "theme" | "cards" | "about" = "ai",
 ) {
   settingsSection.value = EXTENSION_LOCAL_API_RUNTIME ? section : "language";
   reopenAiOrganizerAfterSettings.value = aiOrganizerDialogOpen.value;
   aiOrganizerDialogOpen.value = false;
   aiSettingsDialogOpen.value = true;
   if (EXTENSION_LOCAL_API_RUNTIME) {
+    void refreshExtensionUpdateState();
     void refreshAiSettings();
     void refreshBidirectionalSyncSettings();
     if (TAG_SYNC_ENABLED) void refreshTagEnrichmentState();
@@ -2284,6 +2291,46 @@ function stopHistoryModelSyncPolling() {
   if (syncHistoryPollTimer !== null) {
     window.clearTimeout(syncHistoryPollTimer);
     syncHistoryPollTimer = null;
+  }
+}
+
+async function refreshExtensionUpdateState(options: { force?: boolean; announce?: boolean } = {}) {
+  if (!EXTENSION_LOCAL_API_RUNTIME) return;
+  try {
+    const status = options.force
+      ? await checkExtensionUpdate()
+      : await fetchExtensionUpdateStatus();
+    extensionUpdateStatus.value = status;
+    if (options.announce && status.notice) {
+      notifySuccess(
+        t("toast.extensionUpdated", { version: status.notice.currentVersion }),
+        t("toast.extensionUpdatedDesc", { previous: status.notice.previousVersion }),
+      );
+      extensionUpdateStatus.value = await acknowledgeExtensionUpdateNotice();
+    }
+  } catch (error) {
+    if (options.force) notifyError(t("toast.extensionUpdateCheckFail"), error);
+    else console.warn("[extension-update] status failed:", error);
+  }
+}
+
+async function checkExtensionUpdateFromUi() {
+  if (!EXTENSION_LOCAL_API_RUNTIME || extensionUpdateLoading.value) return;
+  extensionUpdateLoading.value = true;
+  try {
+    const status = await checkExtensionUpdate();
+    extensionUpdateStatus.value = status;
+    if (status.lastError) {
+      notifyError(t("toast.extensionUpdateCheckFail"), status.lastError);
+    } else if (status.updateAvailable) {
+      notifySuccess(t("toast.extensionUpdateAvailable", { version: status.latestLabel }));
+    } else {
+      notifySuccess(t("toast.extensionUpToDate"));
+    }
+  } catch (error) {
+    notifyError(t("toast.extensionUpdateCheckFail"), error);
+  } finally {
+    extensionUpdateLoading.value = false;
   }
 }
 
@@ -3455,6 +3502,9 @@ onMounted(async () => {
   startExportReminderChecks();
   migrateBackupReminderState();
   await uiStore.initFromStorage();
+  // Update checks are intentionally out of the library bootstrap path: a
+  // temporary network failure must never prevent the manager from loading.
+  void refreshExtensionUpdateState({ announce: true });
   if (route.name === "manager") {
     applyManagerQuery(route.query);
   }
@@ -3969,6 +4019,8 @@ onBeforeUnmount(() => {
       :video-card-width="videoCardWidth"
       :comment-card-width="commentCardWidth"
       :article-card-width="articleCardWidth"
+      :update-status="extensionUpdateStatus"
+      :update-loading="extensionUpdateLoading"
       @update:open="handleAiSettingsDialogOpen"
       @update:section="settingsSection = $event"
       @reload="refreshAiSettings"
@@ -3982,6 +4034,7 @@ onBeforeUnmount(() => {
       @set-video-card-width="uiStore.setVideoCardWidth($event)"
       @set-comment-card-width="uiStore.setCommentCardWidth($event)"
       @set-article-card-width="uiStore.setArticleCardWidth($event)"
+      @check-update="checkExtensionUpdateFromUi"
     />
 
     <AiOrganizerDialog

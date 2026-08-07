@@ -88,6 +88,10 @@ import type {
   FolderAiAnalysisRecord as SharedFolderAiAnalysisRecord,
   VideoAiAnalysisRecord as SharedVideoAiAnalysisRecord
 } from "../shared/ai-state.js";
+import {
+  resolveExtensionReleaseChannel,
+  resolveExtensionUpdateAvailability,
+} from "../shared/extension-update.js";
 
 type FolderRecord = {
   id: number;
@@ -399,6 +403,56 @@ type LocalApiRequest = {
   body?: unknown;
 };
 
+type ExtensionReleaseChannel = "chrome" | "edge" | "firefox";
+
+type ExtensionReleaseEntry = {
+  version: string | null;
+  label: string | null;
+  url: string | null;
+};
+
+type ExtensionReleaseDocument = {
+  schemaVersion: number;
+  github: ExtensionReleaseEntry;
+  channels: Record<ExtensionReleaseChannel, ExtensionReleaseEntry>;
+};
+
+type ExtensionUpdateNotice = {
+  previousVersion: string;
+  currentVersion: string;
+  installedAt: number;
+};
+
+type ExtensionUpdateState = {
+  lastCheckedAt: number;
+  lastError: string | null;
+  release: ExtensionReleaseDocument | null;
+  notice: ExtensionUpdateNotice | null;
+};
+
+type ExtensionUpdateStatus = {
+  currentVersion: string;
+  channel: ExtensionReleaseChannel;
+  checkedAt: number | null;
+  lastError: string | null;
+  storeVersion: string | null;
+  storeUrl: string | null;
+  githubVersion: string | null;
+  githubLabel: string | null;
+  githubUrl: string;
+  latestVersion: string;
+  latestLabel: string;
+  updateAvailable: boolean;
+  storeUpdateAvailable: boolean;
+  githubUpdateAvailable: boolean;
+  storePending: boolean;
+  preferredSource: "store" | "github";
+  preferredUrl: string;
+  repositoryUrl: string;
+  releasesUrl: string;
+  notice: ExtensionUpdateNotice | null;
+};
+
 type FolderPlaybackQueueItem = {
   id: number | null;
   videoId: number | null;
@@ -460,6 +514,15 @@ const BACKUP_REMINDER_NOTIFICATION_ID = "bilishelf-backup-reminder";
 const BACKUP_REMINDER_STORAGE_KEY = "bilishelf-backup-reminder-v1";
 const BACKUP_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const BACKUP_REMINDER_CHECK_INTERVAL_MINUTES = 60;
+const EXTENSION_UPDATE_ALARM = "bilishelf-extension-update-check";
+const EXTENSION_UPDATE_STATE_KEY = "extension-update-state-v1";
+const EXTENSION_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const EXTENSION_UPDATE_CHECK_INTERVAL_MINUTES = 24 * 60;
+const EXTENSION_UPDATE_METADATA_URL =
+  "https://raw.githubusercontent.com/TLRKFXE/BiliShelf/main/release-channels.json";
+const EXTENSION_UPDATE_REQUEST_TIMEOUT_MS = 12_000;
+const GITHUB_REPOSITORY_URL = "https://github.com/TLRKFXE/BiliShelf";
+const GITHUB_RELEASES_URL = `${GITHUB_REPOSITORY_URL}/releases`;
 const TAG_ENRICH_BATCH_SIZE_MIN = 1;
 const TAG_ENRICH_BATCH_SIZE_DEFAULT = 5;
 const TAG_ENRICH_BATCH_SIZE_MAX = 10;
@@ -1564,6 +1627,205 @@ async function writeStoredValues(records: Array<{ key: string; value: unknown }>
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error || new Error("IndexedDB write failed"));
     tx.onabort = () => reject(tx.error || new Error("IndexedDB write was aborted"));
+  });
+}
+
+const defaultExtensionReleaseDocument = (): ExtensionReleaseDocument => ({
+  schemaVersion: 1,
+  github: {
+    version: "1.0.1",
+    label: "v1.0.1",
+    url: "https://github.com/TLRKFXE/BiliShelf/releases/tag/v1.0.1",
+  },
+  channels: {
+    chrome: { version: null, label: null, url: null },
+    edge: {
+      version: null,
+      label: null,
+      url: "https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/cnenidkjccfkjjbkcmkkbgjilhohpjbi",
+    },
+    firefox: {
+      version: "0.1.5",
+      label: null,
+      url: "https://addons.mozilla.org/firefox/addon/bilishelf/",
+    },
+  },
+});
+
+function normalizeUpdateUrl(value: unknown) {
+  const text = normalizeText(value);
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeReleaseEntry(
+  raw: unknown,
+  fallback: ExtensionReleaseEntry,
+): ExtensionReleaseEntry {
+  const source = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    version: normalizeText(source.version) || fallback.version,
+    label: normalizeText(source.label) || fallback.label,
+    url: normalizeUpdateUrl(source.url) ?? fallback.url,
+  };
+}
+
+function normalizeExtensionReleaseDocument(raw: unknown): ExtensionReleaseDocument | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Record<string, unknown>;
+  if (toInt(source.schemaVersion, 0) !== 1) return null;
+  const fallback = defaultExtensionReleaseDocument();
+  const channels = source.channels && typeof source.channels === "object"
+    ? source.channels as Record<string, unknown>
+    : {};
+  return {
+    schemaVersion: 1,
+    github: normalizeReleaseEntry(source.github, fallback.github),
+    channels: {
+      chrome: normalizeReleaseEntry(channels.chrome, fallback.channels.chrome),
+      edge: normalizeReleaseEntry(channels.edge, fallback.channels.edge),
+      firefox: normalizeReleaseEntry(channels.firefox, fallback.channels.firefox),
+    },
+  };
+}
+
+function normalizeExtensionUpdateState(raw: unknown): ExtensionUpdateState {
+  const source = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const rawNotice = source.notice && typeof source.notice === "object"
+    ? source.notice as Record<string, unknown>
+    : null;
+  const currentVersion = normalizeText(chrome.runtime.getManifest?.().version) || "0.0.0";
+  const notice = rawNotice && normalizeText(rawNotice.previousVersion)
+    ? {
+        previousVersion: normalizeText(rawNotice.previousVersion),
+        currentVersion: normalizeText(rawNotice.currentVersion) || currentVersion,
+        installedAt: toInt(rawNotice.installedAt, 0),
+      }
+    : null;
+  return {
+    lastCheckedAt: toInt(source.lastCheckedAt, 0),
+    lastError: normalizeText(source.lastError) || null,
+    release: normalizeExtensionReleaseDocument(source.release),
+    notice,
+  };
+}
+
+function getExtensionUpdateChannel(): ExtensionReleaseChannel {
+  const manifest = chrome.runtime.getManifest?.() as
+    | { browser_specific_settings?: { gecko?: unknown } }
+    | undefined;
+  return resolveExtensionReleaseChannel({
+    userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+    hasGeckoSettings: Boolean(manifest?.browser_specific_settings?.gecko),
+  }) as ExtensionReleaseChannel;
+}
+
+function getCurrentExtensionVersion() {
+  return normalizeText(chrome.runtime.getManifest?.().version) || "0.0.0";
+}
+
+function buildExtensionUpdateStatus(state: ExtensionUpdateState): ExtensionUpdateStatus {
+  const release = state.release ?? defaultExtensionReleaseDocument();
+  const channel = getExtensionUpdateChannel();
+  const store = release.channels[channel];
+  const github = release.github;
+  const availability = resolveExtensionUpdateAvailability({
+    currentVersion: getCurrentExtensionVersion(),
+    storeVersion: store.version,
+    storeUrl: store.url,
+    githubVersion: github.version,
+    githubLabel: github.label,
+    githubUrl: github.url ?? GITHUB_RELEASES_URL,
+  });
+  return {
+    ...availability,
+    preferredUrl: availability.preferredUrl ?? GITHUB_RELEASES_URL,
+    channel,
+    checkedAt: state.lastCheckedAt || null,
+    lastError: state.lastError,
+    storeUrl: store.url,
+    githubLabel: github.label,
+    githubUrl: github.url ?? GITHUB_RELEASES_URL,
+    repositoryUrl: GITHUB_REPOSITORY_URL,
+    releasesUrl: GITHUB_RELEASES_URL,
+    notice: state.notice,
+  };
+}
+
+async function fetchExtensionReleaseDocument() {
+  const response = await fetchWithTimeout(
+    EXTENSION_UPDATE_METADATA_URL,
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    },
+    EXTENSION_UPDATE_REQUEST_TIMEOUT_MS,
+    "Extension update metadata request",
+  );
+  if (!response.ok) {
+    throw new Error(`Update metadata request failed (${response.status})`);
+  }
+  const document = normalizeExtensionReleaseDocument(await response.json());
+  if (!document) throw new Error("Update metadata is invalid");
+  return document;
+}
+
+async function readExtensionUpdateState() {
+  return normalizeExtensionUpdateState(
+    await readStoredValue<ExtensionUpdateState>(EXTENSION_UPDATE_STATE_KEY),
+  );
+}
+
+async function checkExtensionUpdate(force = false) {
+  const current = await readExtensionUpdateState();
+  const due =
+    force ||
+    !current.release ||
+    Date.now() - current.lastCheckedAt >= EXTENSION_UPDATE_CHECK_INTERVAL_MS;
+  if (!due) return buildExtensionUpdateStatus(current);
+
+  const next = { ...current, lastCheckedAt: Date.now() };
+  try {
+    next.release = await fetchExtensionReleaseDocument();
+    next.lastError = null;
+  } catch (error) {
+    next.lastError = error instanceof Error ? error.message : String(error);
+  }
+  await writeStoredValues([{ key: EXTENSION_UPDATE_STATE_KEY, value: next }]);
+  return buildExtensionUpdateStatus(next);
+}
+
+async function acknowledgeExtensionUpdateNotice() {
+  const state = await readExtensionUpdateState();
+  state.notice = null;
+  await writeStoredValues([{ key: EXTENSION_UPDATE_STATE_KEY, value: state }]);
+  return buildExtensionUpdateStatus(state);
+}
+
+async function recordExtensionUpdate(previousVersion: unknown) {
+  const previous = normalizeText(previousVersion);
+  const current = getCurrentExtensionVersion();
+  if (!previous || previous === current) return;
+  const state = await readExtensionUpdateState();
+  state.notice = {
+    previousVersion: previous,
+    currentVersion: current,
+    installedAt: Date.now(),
+  };
+  await writeStoredValues([{ key: EXTENSION_UPDATE_STATE_KEY, value: state }]);
+}
+
+function scheduleExtensionUpdateCheckAlarm() {
+  if (!chrome.alarms?.create) return;
+  chrome.alarms.create(EXTENSION_UPDATE_ALARM, {
+    delayInMinutes: 5,
+    periodInMinutes: EXTENSION_UPDATE_CHECK_INTERVAL_MINUTES,
   });
 }
 
@@ -8683,6 +8945,15 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
   try {
     // Fast-path status endpoints must bypass withState queue, otherwise
     // long-running sync tasks block polling and trigger frontend timeouts.
+    if (method === "GET" && path === "/app/update/status") {
+      return ok(await checkExtensionUpdate(false));
+    }
+    if (method === "POST" && path === "/app/update/check") {
+      return ok(await checkExtensionUpdate(true));
+    }
+    if (method === "POST" && path === "/app/update/acknowledge") {
+      return ok(await acknowledgeExtensionUpdateNotice());
+    }
     if (method === "GET" && path === "/ai/organizer/status") {
       return ok(buildAiOrganizerStatus(await readAiOrganizerTask()));
     }
@@ -10460,6 +10731,10 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
 }
 
 export default defineBackground(() => {
+  scheduleExtensionUpdateCheckAlarm();
+  void checkExtensionUpdate(false).catch((error) => {
+    console.warn("[extension-update] initial check failed:", error);
+  });
   void scheduleBackupReminderAlarm().catch((error) => {
     console.warn("[backup-reminder] alarm setup failed:", error);
   });
@@ -10489,6 +10764,12 @@ export default defineBackground(() => {
 
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === EXTENSION_UPDATE_ALARM) {
+        void checkExtensionUpdate(false).catch((error) => {
+          console.warn("[extension-update] scheduled check failed:", error);
+        });
+        return;
+      }
       if (alarm.name === BACKUP_REMINDER_ALARM) {
         void checkAndNotifyBackupReminder().catch((error) => {
           console.warn("[backup-reminder] alarm failed:", error);
@@ -10541,6 +10822,13 @@ export default defineBackground(() => {
     if (notificationId !== BACKUP_REMINDER_NOTIFICATION_ID) return;
     chrome.notifications?.clear?.(notificationId);
     chrome.runtime.openOptionsPage?.();
+  });
+
+  chrome.runtime.onInstalled?.addListener((details) => {
+    if (details.reason !== "update") return;
+    void recordExtensionUpdate(details.previousVersion).catch((error) => {
+      console.warn("[extension-update] update notice failed:", error);
+    });
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

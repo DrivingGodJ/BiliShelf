@@ -115,6 +115,12 @@ pnpm ext:zip:all
 
 ## Release Summary
 
+### v1.0.1
+
+- Added an About page with GitHub repository and browser store links in Settings
+- Added daily update checks and a one-time post-update reminder
+- Store installs prefer the current browser store; manual installs fall back to GitHub Releases
+
 ### v0.1.26
 
 Added:

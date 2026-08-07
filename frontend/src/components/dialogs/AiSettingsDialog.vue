@@ -2,6 +2,9 @@
 import { computed, ref, watch } from "vue";
 import {
   Bot,
+  ExternalLink,
+  Github,
+  Info,
   Languages,
   LayoutGrid,
   Moon,
@@ -15,6 +18,7 @@ import {
   Unplug,
 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,6 +38,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchAiSettingsModels } from "@/lib/api";
 import type {
   BidirectionalSyncSettings,
+  ExtensionUpdateStatus,
   TagEnrichmentSettings,
 } from "@/lib/api";
 import {
@@ -55,7 +60,8 @@ type SettingsSection =
   | "tags"
   | "language"
   | "theme"
-  | "cards";
+  | "cards"
+  | "about";
 
 const props = defineProps<{
   open: boolean;
@@ -75,6 +81,8 @@ const props = defineProps<{
   videoCardWidth: number;
   commentCardWidth: number;
   articleCardWidth: number;
+  updateStatus: ExtensionUpdateStatus | null;
+  updateLoading: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -109,6 +117,7 @@ const emit = defineEmits<{
   setVideoCardWidth: [value: number];
   setCommentCardWidth: [value: number];
   setArticleCardWidth: [value: number];
+  checkUpdate: [];
 }>();
 
 const OFFICIAL_PROVIDER_IDS = new Set<AiSettingsProviderId>([
@@ -141,6 +150,19 @@ const localVideoCardWidth = ref(String(props.videoCardWidth));
 const localCommentCardWidth = ref(String(props.commentCardWidth));
 const localArticleCardWidth = ref(String(props.articleCardWidth));
 let modelRequestToken = 0;
+const FALLBACK_GITHUB_URL = "https://github.com/TLRKFXE/BiliShelf";
+const FALLBACK_GITHUB_RELEASES_URL = `${FALLBACK_GITHUB_URL}/releases`;
+
+const updateActionUrl = computed(
+  () => props.updateStatus?.preferredUrl || props.updateStatus?.releasesUrl || FALLBACK_GITHUB_RELEASES_URL,
+);
+const githubUpdateUrl = computed(
+  () => props.updateStatus?.githubUrl || props.updateStatus?.releasesUrl || FALLBACK_GITHUB_RELEASES_URL,
+);
+const updateCheckedLabel = computed(() => {
+  const timestamp = props.updateStatus?.checkedAt;
+  return timestamp ? new Date(timestamp).toLocaleString() : "-";
+});
 
 const providerOptions = computed(() => [
   { value: "openai" as const, label: "OpenAI" },
@@ -464,7 +486,7 @@ watch(
       </DialogHeader>
 
       <Tabs :model-value="activeSection" @update:model-value="updateSection">
-        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-6">
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-7">
           <TabsTrigger v-if="showAi" value="ai" class="gap-1.5 py-2.5">
             <Bot class="h-3.5 w-3.5" />
             {{ t("settings.ai") }}
@@ -488,6 +510,10 @@ watch(
           <TabsTrigger value="cards" class="gap-1.5 py-2.5">
             <LayoutGrid class="h-3.5 w-3.5" />
             {{ t("settings.cardSize") }}
+          </TabsTrigger>
+          <TabsTrigger value="about" class="gap-1.5 py-2.5">
+            <Info class="h-3.5 w-3.5" />
+            {{ t("settings.about") }}
           </TabsTrigger>
         </TabsList>
 
@@ -760,6 +786,86 @@ watch(
               </label>
             </div>
             <p class="text-[11px] text-muted-foreground">{{ t("settings.cardSizeHint", { min: VIDEO_CARD_WIDTH_MIN, max: VIDEO_CARD_WIDTH_MAX }) }}</p>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="about" class="mt-4">
+          <section class="panel-surface space-y-4 rounded-lg border p-4">
+            <div class="flex items-start gap-3">
+              <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-muted/50 text-muted-foreground">
+                <Info class="h-4 w-4" />
+              </span>
+              <div class="min-w-0">
+                <p class="text-sm font-medium">{{ t("settings.aboutTitle") }}</p>
+                <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ t("settings.aboutDescription") }}</p>
+              </div>
+            </div>
+
+            <div class="grid gap-2 sm:grid-cols-2">
+              <div class="rounded-md border bg-muted/20 p-3">
+                <p class="text-xs text-muted-foreground">{{ t("settings.currentVersion") }}</p>
+                <p class="mt-1 text-sm font-semibold tabular-nums">{{ updateStatus?.currentVersion || "-" }}</p>
+              </div>
+              <div class="rounded-md border bg-muted/20 p-3">
+                <p class="text-xs text-muted-foreground">{{ t("settings.updateChannel") }}</p>
+                <p class="mt-1 text-sm font-semibold">{{ t(`settings.channel.${updateStatus?.channel || "chrome"}`) }}</p>
+              </div>
+              <div class="rounded-md border bg-muted/20 p-3">
+                <p class="text-xs text-muted-foreground">{{ t("settings.storeVersion") }}</p>
+                <p class="mt-1 text-sm font-semibold tabular-nums">{{ updateStatus?.storeVersion || t("settings.notPublished") }}</p>
+              </div>
+              <div class="rounded-md border bg-muted/20 p-3">
+                <p class="text-xs text-muted-foreground">{{ t("settings.githubVersion") }}</p>
+                <p class="mt-1 text-sm font-semibold">{{ updateStatus?.githubLabel || updateStatus?.githubVersion || "-" }}</p>
+              </div>
+            </div>
+
+            <div
+              v-if="updateStatus?.updateAvailable"
+              class="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm"
+            >
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-medium">{{ t("settings.updateAvailable", { version: updateStatus.latestLabel }) }}</span>
+                <Badge v-if="updateStatus.storeUpdateAvailable" variant="secondary">{{ t("settings.storeReady") }}</Badge>
+                <Badge v-else-if="updateStatus.storePending" variant="outline">{{ t("settings.storePending") }}</Badge>
+              </div>
+              <p v-if="updateStatus.storePending" class="mt-1 text-xs text-muted-foreground">{{ t("settings.storePendingDescription") }}</p>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <Button as-child size="sm">
+                  <a :href="updateActionUrl" target="_blank" rel="noopener noreferrer">
+                    <ExternalLink class="h-3.5 w-3.5" />
+                    {{ updateStatus.preferredSource === "store" ? t("settings.openStore") : t("settings.openGithubRelease") }}
+                  </a>
+                </Button>
+                <Button v-if="updateStatus.preferredSource === 'store' && updateStatus.githubUpdateAvailable" as-child size="sm" variant="outline">
+                  <a :href="githubUpdateUrl" target="_blank" rel="noopener noreferrer">
+                    <Github class="h-3.5 w-3.5" />
+                    {{ t("settings.openGithubRelease") }}
+                  </a>
+                </Button>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2 border-t pt-4">
+              <Button size="sm" :disabled="updateLoading" @click="emit('checkUpdate')">
+                <RefreshCcw class="h-3.5 w-3.5" />
+                {{ t("settings.checkUpdate") }}
+              </Button>
+              <Button as-child size="sm" variant="outline">
+                <a :href="updateStatus?.storeUrl || updateStatus?.releasesUrl || FALLBACK_GITHUB_RELEASES_URL" target="_blank" rel="noopener noreferrer">
+                  <ExternalLink class="h-3.5 w-3.5" />
+                  {{ updateStatus?.storeUrl ? t("settings.openStore") : t("settings.openGithubRelease") }}
+                </a>
+              </Button>
+              <Button as-child size="sm" variant="outline">
+                <a :href="updateStatus?.repositoryUrl || FALLBACK_GITHUB_URL" target="_blank" rel="noopener noreferrer">
+                  <Github class="h-3.5 w-3.5" />
+                  {{ t("settings.openGithub") }}
+                </a>
+              </Button>
+            </div>
+            <p class="text-[11px] text-muted-foreground">{{ t("settings.lastChecked", { time: updateCheckedLabel }) }}</p>
+            <p v-if="updateStatus?.lastError" class="text-xs text-amber-600 dark:text-amber-400">{{ t("settings.updateCheckFailed", { error: updateStatus.lastError }) }}</p>
           </section>
         </TabsContent>
       </Tabs>

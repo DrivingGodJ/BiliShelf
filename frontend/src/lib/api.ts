@@ -46,6 +46,33 @@ type LocalApiResponse<T = unknown> = {
   error?: string;
 };
 
+export type ExtensionUpdateStatus = {
+  currentVersion: string;
+  channel: "chrome" | "edge" | "firefox";
+  checkedAt: number | null;
+  lastError: string | null;
+  storeVersion: string | null;
+  storeUrl: string | null;
+  githubVersion: string | null;
+  githubLabel: string | null;
+  githubUrl: string;
+  latestVersion: string;
+  latestLabel: string;
+  updateAvailable: boolean;
+  storeUpdateAvailable: boolean;
+  githubUpdateAvailable: boolean;
+  storePending: boolean;
+  preferredSource: "store" | "github";
+  preferredUrl: string;
+  repositoryUrl: string;
+  releasesUrl: string;
+  notice: {
+    previousVersion: string;
+    currentVersion: string;
+    installedAt: number;
+  } | null;
+};
+
 function shouldUseLocalExtensionApi() {
   if (import.meta.env.VITE_RUNTIME_TARGET === "extension") return true;
   const runtime = resolveExtensionRuntime();
@@ -889,6 +916,22 @@ export async function stopHistoryModelSync() {
     "/sync/bilibili/history-model/stop",
     { method: "POST" },
   );
+}
+
+export async function fetchExtensionUpdateStatus() {
+  return request<ExtensionUpdateStatus>("/app/update/status");
+}
+
+export async function checkExtensionUpdate() {
+  return request<ExtensionUpdateStatus>("/app/update/check", {
+    method: "POST",
+  });
+}
+
+export async function acknowledgeExtensionUpdateNotice() {
+  return request<ExtensionUpdateStatus>("/app/update/acknowledge", {
+    method: "POST",
+  });
 }
 
 export async function dismissHistoryModelSyncStatus() {
