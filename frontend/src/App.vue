@@ -100,6 +100,7 @@ import {
   restoreWebDavBackup,
   runFolderAiCategories,
   runTagEnrichmentNow,
+  updateTagEnrichmentSettings,
   startFollowingUpImport,
   startAiOrganizer,
   startFolderPlaybackSession,
@@ -115,6 +116,7 @@ import {
   updateWebDavSettings,
   type BidirectionalSyncSettings,
   type HistoryModelSyncStatus,
+  type TagEnrichmentSettings,
   type TagEnrichmentStatus,
   type WebDavSettings,
   updateVideo,
@@ -309,8 +311,22 @@ const autoInitSelectedFolderIds = ref<number[]>([]);
 const autoInitSubmitting = ref(false);
 const tagEnrichmentStatus = ref<TagEnrichmentStatus | null>(null);
 const tagEnrichmentLoading = ref(false);
+const tagEnrichmentSettings = computed<TagEnrichmentSettings | null>(() => {
+  const status = tagEnrichmentStatus.value;
+  if (!status) return null;
+  return {
+    batchSize: status.batchSize,
+    intervalSeconds: status.intervalSeconds,
+    batchSizeMin: status.batchSizeMin,
+    batchSizeMax: status.batchSizeMax,
+    intervalSecondsMin: status.intervalSecondsMin,
+    intervalSecondsMax: status.intervalSecondsMax,
+  };
+});
 const aiSettingsDialogOpen = ref(false);
-const settingsSection = ref<"ai" | "listener" | "language" | "theme" | "cards">("ai");
+const settingsSection = ref<
+  "ai" | "listener" | "tags" | "language" | "theme" | "cards"
+>("ai");
 const reopenAiOrganizerAfterSettings = ref(false);
 const aiSettings = ref<AiSettings | null>(null);
 const aiSettingsBusy = ref(false);
@@ -1467,6 +1483,22 @@ async function runTagEnrichmentNowFromUi() {
   }
 }
 
+async function saveTagEnrichmentSettingsFromUi(payload: {
+  batchSize: number;
+  intervalSeconds: number;
+}) {
+  if (!TAG_SYNC_ENABLED || tagEnrichmentLoading.value) return;
+  tagEnrichmentLoading.value = true;
+  try {
+    applyTagEnrichmentStatus(await updateTagEnrichmentSettings(payload));
+    notifySuccess(t("toast.tagEnrichSettingsSaved"));
+  } catch (error) {
+    notifyError(t("toast.tagEnrichSettingsSaveFail"), error);
+  } finally {
+    tagEnrichmentLoading.value = false;
+  }
+}
+
 async function refreshBidirectionalSyncSettings() {
   if (!BILIBILI_LISTENER_SETTINGS_ENABLED) {
     bidirectionalSyncSettings.value = null;
@@ -1715,7 +1747,7 @@ async function performClearFolderAiCategories(folderId: number) {
 }
 
 function openSettingsDialog(
-  section: "ai" | "listener" | "language" | "theme" | "cards" = "ai",
+  section: "ai" | "listener" | "tags" | "language" | "theme" | "cards" = "ai",
 ) {
   settingsSection.value = EXTENSION_LOCAL_API_RUNTIME ? section : "language";
   reopenAiOrganizerAfterSettings.value = aiOrganizerDialogOpen.value;
@@ -1724,6 +1756,7 @@ function openSettingsDialog(
   if (EXTENSION_LOCAL_API_RUNTIME) {
     void refreshAiSettings();
     void refreshBidirectionalSyncSettings();
+    if (TAG_SYNC_ENABLED) void refreshTagEnrichmentState();
   }
 }
 
@@ -3848,8 +3881,11 @@ onBeforeUnmount(() => {
       :section="settingsSection"
       :listener-loading="bidirectionalSyncSaving"
       :listener-settings="bidirectionalSyncSettings"
+      :tag-enrichment-loading="tagEnrichmentLoading"
+      :tag-enrichment-settings="tagEnrichmentSettings"
       :show-ai="AI_ORGANIZER_ENABLED || AI_CATEGORIES_ENABLED"
       :show-listener="BILIBILI_LISTENER_SETTINGS_ENABLED"
+      :show-tag-enrichment="TAG_SYNC_ENABLED"
       :locale="locale"
       :is-dark="isDark"
       :video-card-width="videoCardWidth"
@@ -3862,6 +3898,7 @@ onBeforeUnmount(() => {
       @test="testAiSettingsFromUi"
       @reload-listener="refreshBidirectionalSyncSettings"
       @save-listener="saveBidirectionalSyncSettings"
+      @save-tag-enrichment="saveTagEnrichmentSettingsFromUi"
       @set-locale="uiStore.setLocale($event)"
       @set-theme="uiStore.setTheme($event)"
       @set-video-card-width="uiStore.setVideoCardWidth($event)"
@@ -3920,6 +3957,8 @@ onBeforeUnmount(() => {
       :status="syncHistoryStatus"
       :now-ms="tickNow"
       :stopping="syncStopping"
+      :tag-enrichment-status="tagEnrichmentStatus"
+      :tag-enrichment-loading="tagEnrichmentLoading"
       @update:open="syncDialogOpen = $event"
       @reload="loadSyncFolderOptions(true)"
       @select-all="selectAllSyncFolders"
@@ -3932,6 +3971,10 @@ onBeforeUnmount(() => {
       @restart="restartHistoryModelSyncFromUi"
       @stop="stopHistoryModelSyncFromUi"
       @dismiss="dismissHistoryModelSyncFromUi"
+      @refresh-tag-enrichment="refreshTagEnrichmentState"
+      @start-tag-enrichment="resumeTagEnrichmentFromUi"
+      @stop-tag-enrichment="pauseTagEnrichmentFromUi"
+      @run-tag-enrichment="runTagEnrichmentNowFromUi"
     />
 
     <ConfirmActionDialog

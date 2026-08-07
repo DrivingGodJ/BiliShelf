@@ -175,10 +175,11 @@ test("sync diagnostics have matching Chinese and English copy", async () => {
 });
 
 test("tag status bar exposes persisted progress and explicit task controls", async () => {
-  const [component, app, api] = await Promise.all([
+  const [component, app, api, syncImport] = await Promise.all([
     readFile(tagStatusPath, "utf8"),
     readFile(appPath, "utf8"),
     readFile(apiPath, "utf8"),
+    readFile(dialogPath, "utf8"),
   ]);
 
   assert.match(api, /phase: "idle" \| "running" \| "waiting" \| "paused"/);
@@ -199,6 +200,10 @@ test("tag status bar exposes persisted progress and explicit task controls", asy
   assert.match(app, /tagEnrichmentStatus\.phase !== 'idle'/);
   assert.match(app, /@start="resumeTagEnrichmentFromUi"/);
   assert.match(app, /@stop="pauseTagEnrichmentFromUi"/);
+  assert.match(syncImport, /TagEnrichmentStatusBar/);
+  assert.match(syncImport, /emit\('start-tag-enrichment'\)/);
+  assert.match(syncImport, /emit\('stop-tag-enrichment'\)/);
+  assert.match(syncImport, /emit\('run-tag-enrichment'\)/);
   assert.match(component, /panel-surface rounded-2xl/);
 });
 

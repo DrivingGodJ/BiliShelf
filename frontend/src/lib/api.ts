@@ -747,6 +747,12 @@ export type TagEnrichmentStatus = {
   phase: "idle" | "running" | "waiting" | "paused" | "completed" | "failed";
   paused: boolean;
   running: boolean;
+  batchSize: number;
+  intervalSeconds: number;
+  batchSizeMin: number;
+  batchSizeMax: number;
+  intervalSecondsMin: number;
+  intervalSecondsMax: number;
   cursorAfterVideoId: number;
   total: number;
   totalMissing: number;
@@ -890,6 +896,30 @@ export async function dismissHistoryModelSyncStatus() {
 
 export async function fetchTagEnrichmentStatus() {
   return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/status");
+}
+
+export type TagEnrichmentSettings = Pick<
+  TagEnrichmentStatus,
+  | "batchSize"
+  | "intervalSeconds"
+  | "batchSizeMin"
+  | "batchSizeMax"
+  | "intervalSecondsMin"
+  | "intervalSecondsMax"
+>;
+
+export async function fetchTagEnrichmentSettings() {
+  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/settings");
+}
+
+export async function updateTagEnrichmentSettings(payload: {
+  batchSize: number;
+  intervalSeconds: number;
+}) {
+  return request<TagEnrichmentStatus>("/sync/bilibili/tag-enrichment/settings", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function pauseTagEnrichment() {

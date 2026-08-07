@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import {
   Bot,
+  CircleStop,
   CheckCircle2,
   Download,
   Pause,
@@ -9,7 +10,6 @@ import {
   RefreshCcw,
   RotateCcw,
   Settings,
-  Square,
   TriangleAlert,
   Undo2,
 } from "lucide-vue-next";
@@ -249,11 +249,11 @@ watch(
             <Button
               v-if="taskActive"
               size="sm"
-              variant="outline"
+              variant="destructive"
               :disabled="busy"
               @click="emit('cancel')"
             >
-              <Square class="h-3.5 w-3.5" />
+              <CircleStop class="h-3.5 w-3.5" />
               {{ t("ai.organizer.cancel") }}
             </Button>
           </div>

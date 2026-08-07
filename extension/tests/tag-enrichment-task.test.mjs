@@ -98,8 +98,64 @@ test("legacy tag state migrates to a durable paused task", () => {
   assert.equal(payload.result.paused, true);
   assert.equal(payload.result.cursorAfterVideoId, 42);
   assert.equal(payload.result.totalMissing, 8);
+  assert.equal(payload.result.batchSize, 5);
+  assert.equal(payload.result.intervalSeconds, 20);
   assert.deepEqual(payload.result.checkedEmptyVideoIds, []);
   assert.deepEqual(payload.result.errors, []);
+});
+
+test("tag task rate settings are normalized to supported limits", () => {
+  const payload = runBackgroundScenario({
+    exports: ["normalizeTagEnrichmentMeta"],
+    scenarioSource: `
+      return {
+        low: normalizeTagEnrichmentMeta({ batchSize: -4, intervalSeconds: 1 }),
+        high: normalizeTagEnrichmentMeta({ batchSize: 99, intervalSeconds: 999 }),
+      };
+    `,
+  });
+
+  assert.equal(payload.result.low.batchSize, 1);
+  assert.equal(payload.result.low.intervalSeconds, 20);
+  assert.equal(payload.result.high.batchSize, 10);
+  assert.equal(payload.result.high.intervalSeconds, 300);
+});
+
+test("updating tag task rate persists settings and reschedules a waiting task", () => {
+  const state = stateWithVideos([{ bvid: "BVPENDING" }], {
+    phase: "waiting",
+    paused: false,
+    total: 1,
+    totalMissing: 1,
+    nextRunAt: 1,
+  });
+  const payload = runBackgroundScenario({
+    exports: ["updateTagEnrichmentSettings", "readState"],
+    input: { state },
+    preImportSource: databaseSetup,
+    scenarioSource: `
+      const before = Date.now();
+      const status = await updateTagEnrichmentSettings({
+        batchSize: 99,
+        intervalSeconds: 75,
+      });
+      const persisted = (await readState()).syncMeta.tagEnrichment;
+      return {
+        before,
+        status,
+        persisted,
+        alarm: globalThis.__scheduledAlarms.at(-1),
+      };
+    `,
+  });
+
+  assert.equal(payload.result.status.batchSize, 10);
+  assert.equal(payload.result.status.intervalSeconds, 75);
+  assert.equal(payload.result.persisted.batchSize, 10);
+  assert.equal(payload.result.persisted.intervalSeconds, 75);
+  assert.equal(payload.result.alarm.name, "bilishelf-tag-enrich");
+  assert.ok(payload.result.alarm.when >= payload.result.before + 75_000);
+  assert.ok(payload.result.alarm.when <= payload.result.before + 85_000);
 });
 
 test("empty and permanently skipped videos do not re-enter the pending queue", () => {
@@ -234,18 +290,25 @@ test("an empty remote tag response completes once without looping forever", () =
   assert.equal(payload.result.lastBatchProcessed, 1);
 });
 
-test("tag batches keep a bounded 20-to-30-second next-run window", () => {
+test("tag batches use the configured base interval plus bounded jitter", () => {
   const payload = runBackgroundScenario({
     exports: ["resolveTagEnrichmentBatchNextRunAt"],
     scenarioSource: `
       return {
         low: resolveTagEnrichmentBatchNextRunAt(1_000, () => 0),
         high: resolveTagEnrichmentBatchNextRunAt(1_000, () => 1),
+        customLow: resolveTagEnrichmentBatchNextRunAt(1_000, () => 0, 75),
+        customHigh: resolveTagEnrichmentBatchNextRunAt(1_000, () => 1, 75),
       };
     `,
   });
 
-  assert.deepEqual(payload.result, { low: 21_000, high: 31_000 });
+  assert.deepEqual(payload.result, {
+    low: 21_000,
+    high: 31_000,
+    customLow: 76_000,
+    customHigh: 86_000,
+  });
 });
 
 test("risk control pauses the tag task without scheduling automatic retries", () => {

@@ -170,6 +170,31 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "settings.title": { "zh-CN": "设置", "en-US": "Settings" },
   "settings.ai": { "zh-CN": "AI 设置", "en-US": "AI" },
   "settings.listener": { "zh-CN": "监听设置", "en-US": "Listener" },
+  "settings.tagEnrichment": { "zh-CN": "标签补全", "en-US": "Tag Enrichment" },
+  "settings.tagEnrichmentTitle": {
+    "zh-CN": "标签补全速率",
+    "en-US": "Tag enrichment rate",
+  },
+  "settings.tagEnrichmentDescription": {
+    "zh-CN": "设置每批处理数量和批次间基础间隔。设置会保存在后台任务中，关闭管理页后仍然生效。",
+    "en-US": "Set the number processed per batch and the base interval between batches. Settings persist in the background task after the manager is closed.",
+  },
+  "settings.tagBatchSize": {
+    "zh-CN": "每批视频数量",
+    "en-US": "Videos per batch",
+  },
+  "settings.tagInterval": {
+    "zh-CN": "批次基础间隔",
+    "en-US": "Base batch interval",
+  },
+  "settings.tagEnrichmentLimits": {
+    "zh-CN": "允许每批 {batchMin}-{batchMax} 条、间隔 {intervalMin}-{intervalMax} 秒。实际批次间隔会额外加入 0-10 秒随机抖动，单条请求也保留安全间隔；提高速率会增加触发 B 站风控的风险。",
+    "en-US": "Allowed range: {batchMin}-{batchMax} videos and {intervalMin}-{intervalMax}s. The actual batch interval adds 0-10s of jitter and keeps a safe delay between requests; higher rates increase Bilibili risk-control exposure.",
+  },
+  "settings.saveTagEnrichment": {
+    "zh-CN": "保存补全速率",
+    "en-US": "Save enrichment rate",
+  },
   "settings.language": { "zh-CN": "语言", "en-US": "Language" },
   "settings.theme": { "zh-CN": "主题", "en-US": "Theme" },
   "settings.cardSize": { "zh-CN": "卡片大小", "en-US": "Card Size" },
@@ -1448,6 +1473,14 @@ export const MANAGER_I18N: Record<string, Record<Locale, string>> = {
   "toast.tagEnrichTriggerFail": {
     "zh-CN": "触发标签补全失败",
     "en-US": "Failed to trigger tag enrichment",
+  },
+  "toast.tagEnrichSettingsSaved": {
+    "zh-CN": "标签补全速率已保存",
+    "en-US": "Tag enrichment rate saved",
+  },
+  "toast.tagEnrichSettingsSaveFail": {
+    "zh-CN": "保存标签补全速率失败",
+    "en-US": "Failed to save tag enrichment rate",
   },
   "toast.syncSettingsSaved": {
     "zh-CN": "监听设置已保存",

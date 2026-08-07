@@ -2,11 +2,11 @@
 import { computed } from "vue";
 import {
   CheckCircle2,
+  CircleStop,
   Clock3,
   Play,
   RefreshCcw,
   RotateCcw,
-  Square,
   Tags,
   TriangleAlert,
 } from "lucide-vue-next";
@@ -116,11 +116,11 @@ const nextRunLabel = computed(() => {
         <Button
           v-if="active"
           size="sm"
-          variant="outline"
+          variant="destructive"
           :disabled="loading"
           @click="emit('stop')"
         >
-          <Square class="h-3.5 w-3.5" />
+          <CircleStop class="h-3.5 w-3.5" />
           {{ t("sync.stopTagEnrich") }}
         </Button>
         <Button

@@ -80,7 +80,8 @@ test("video card width is adjustable, persisted, and drives an auto-fill grid", 
   assert.match(settings, /value="cards"/);
   assert.match(settings, /v-model="localVideoCardWidth"/);
   assert.match(settings, /type="number"/);
-  assert.match(settings, /emit\("setVideoCardWidth", normalized\)/);
+  assert.match(settings, /String\(value \?\? ""\)\.trim\(\)/);
+  assert.match(settings, /emit\("setVideoCardWidth", Number\(normalized\)\)/);
   assert.match(settings, /emit\("setCommentCardWidth", Number\(normalized\)\)/);
   assert.match(settings, /emit\("setArticleCardWidth", Number\(normalized\)\)/);
   assert.match(grid, /--video-card-width/);

@@ -60,4 +60,12 @@ test("playback overlay renders an in-page queue list and supports collapsed stat
   assert.match(source, /playbackListOpen/);
   assert.match(source, /playbackCollapsed/);
   assert.match(source, /togglePlaybackOverlayCollapsed/);
+  assert.match(
+    source,
+    /#bl-playback-overlay\[data-collapsed="true"\] \.bl-playback-header-copy \{\s*display: none;/s,
+  );
+  assert.match(
+    source,
+    /#bl-playback-overlay\[data-collapsed="true"\] \{[\s\S]*width: max-content;/,
+  );
 });

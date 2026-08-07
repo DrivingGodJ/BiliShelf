@@ -3,10 +3,10 @@ import { computed } from "vue";
 import {
   Clock3,
   Bot,
+  CircleStop,
   Eye,
   Pause,
   Play,
-  Square,
   TriangleAlert,
 } from "lucide-vue-next";
 import { Badge } from "@/components/ui/badge";
@@ -89,13 +89,13 @@ const retryRemainingSeconds = computed(() => {
         <Button
           v-if="status.running || phase === 'paused'"
           size="icon"
-          variant="outline"
+          variant="destructive"
           :disabled="busy"
           :title="t('ai.organizer.cancel')"
           :aria-label="t('ai.organizer.cancel')"
           @click="emit('stop')"
         >
-          <Square class="h-3.5 w-3.5" />
+          <CircleStop class="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>

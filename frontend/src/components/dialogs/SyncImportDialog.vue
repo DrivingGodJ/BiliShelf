@@ -3,17 +3,18 @@ import { computed } from "vue";
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleStop,
   Clock3,
   FolderSync,
   ListRestart,
   RefreshCcw,
   ShieldCheck,
-  Square,
 } from "lucide-vue-next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import TagEnrichmentStatusBar from "@/components/sync/TagEnrichmentStatusBar.vue";
 import {
   Dialog,
   DialogContent,
@@ -21,7 +22,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { HistoryModelSyncStatus, SyncRemoteFolder } from "@/lib/api";
+import type {
+  HistoryModelSyncStatus,
+  SyncRemoteFolder,
+  TagEnrichmentStatus,
+} from "@/lib/api";
 import { estimateSelectedVideoCount } from "@/lib/sync-folder-selection.js";
 
 const props = defineProps<{
@@ -35,6 +40,8 @@ const props = defineProps<{
   status: HistoryModelSyncStatus | null;
   nowMs: number;
   stopping: boolean;
+  tagEnrichmentStatus: TagEnrichmentStatus | null;
+  tagEnrichmentLoading: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -48,6 +55,10 @@ const emit = defineEmits<{
   restart: [];
   stop: [];
   dismiss: [];
+  "refresh-tag-enrichment": [];
+  "start-tag-enrichment": [];
+  "stop-tag-enrichment": [];
+  "run-tag-enrichment": [];
 }>();
 
 const selectedVideoCount = computed(() =>
@@ -333,7 +344,7 @@ const retryTimeLabel = computed(() => {
                 :disabled="stopping"
                 @click="emit('stop')"
               >
-                <Square class="h-3.5 w-3.5" />
+                <CircleStop class="h-3.5 w-3.5" />
                 {{ stopping ? t("sync.stopping") : t("sync.stop") }}
               </Button>
             </div>
@@ -456,6 +467,17 @@ const retryTimeLabel = computed(() => {
             />
           </label>
         </div>
+
+        <TagEnrichmentStatusBar
+          :status="tagEnrichmentStatus"
+          :loading="tagEnrichmentLoading"
+          :now-ms="nowMs"
+          :t="t"
+          @refresh="emit('refresh-tag-enrichment')"
+          @start="emit('start-tag-enrichment')"
+          @stop="emit('stop-tag-enrichment')"
+          @run="emit('run-tag-enrichment')"
+        />
 
         <div class="flex flex-wrap items-center justify-end gap-2">
           <Button

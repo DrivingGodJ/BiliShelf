@@ -9,7 +9,9 @@ import {
   RadioTower,
   Settings,
   Sun,
+  Tags,
   TestTubeDiagonal,
+  Timer,
   Unplug,
 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
@@ -30,7 +32,10 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchAiSettingsModels } from "@/lib/api";
-import type { BidirectionalSyncSettings } from "@/lib/api";
+import type {
+  BidirectionalSyncSettings,
+  TagEnrichmentSettings,
+} from "@/lib/api";
 import {
   buildAiSettingsPayload,
   mergeAiModelOptions,
@@ -44,7 +49,13 @@ import {
   type Locale,
 } from "@/stores/app-ui";
 
-type SettingsSection = "ai" | "listener" | "language" | "theme" | "cards";
+type SettingsSection =
+  | "ai"
+  | "listener"
+  | "tags"
+  | "language"
+  | "theme"
+  | "cards";
 
 const props = defineProps<{
   open: boolean;
@@ -54,8 +65,11 @@ const props = defineProps<{
   section?: SettingsSection;
   listenerLoading: boolean;
   listenerSettings: BidirectionalSyncSettings | null;
+  tagEnrichmentLoading: boolean;
+  tagEnrichmentSettings: TagEnrichmentSettings | null;
   showAi: boolean;
   showListener: boolean;
+  showTagEnrichment: boolean;
   locale: Locale;
   isDark: boolean;
   videoCardWidth: number;
@@ -89,6 +103,7 @@ const emit = defineEmits<{
   "update:section": [value: SettingsSection];
   saveListener: [payload: { biliToLocalEnabled: boolean }];
   reloadListener: [];
+  saveTagEnrichment: [payload: { batchSize: number; intervalSeconds: number }];
   setLocale: [value: Locale];
   setTheme: [value: "light" | "dark"];
   setVideoCardWidth: [value: number];
@@ -118,6 +133,10 @@ const modelError = ref("");
 const hydrating = ref(false);
 const activeSection = ref<SettingsSection>(props.section ?? "ai");
 const localBiliToLocalEnabled = ref(false);
+const localTagBatchSize = ref(String(props.tagEnrichmentSettings?.batchSize ?? 5));
+const localTagIntervalSeconds = ref(
+  String(props.tagEnrichmentSettings?.intervalSeconds ?? 20),
+);
 const localVideoCardWidth = ref(String(props.videoCardWidth));
 const localCommentCardWidth = ref(String(props.commentCardWidth));
 const localArticleCardWidth = ref(String(props.articleCardWidth));
@@ -278,21 +297,47 @@ function saveListenerSettings() {
 }
 
 function commitVideoCardWidth() {
-  const parsed = Number.parseInt(localVideoCardWidth.value.trim(), 10);
-  if (!Number.isFinite(parsed)) {
-    localVideoCardWidth.value = String(props.videoCardWidth);
-    return;
-  }
-  const normalized = Math.min(
-    VIDEO_CARD_WIDTH_MAX,
-    Math.max(VIDEO_CARD_WIDTH_MIN, parsed),
+  const normalized = normalizeLocalCardWidth(
+    localVideoCardWidth.value,
+    props.videoCardWidth,
   );
-  localVideoCardWidth.value = String(normalized);
-  emit("setVideoCardWidth", normalized);
+  localVideoCardWidth.value = normalized;
+  emit("setVideoCardWidth", Number(normalized));
 }
 
-function normalizeLocalCardWidth(value: string, fallback: number) {
-  const parsed = Number.parseInt(value.trim(), 10);
+function normalizeBoundedInteger(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function saveTagEnrichmentSettings() {
+  if (props.tagEnrichmentLoading) return;
+  const settings = props.tagEnrichmentSettings;
+  const batchSize = normalizeBoundedInteger(
+    localTagBatchSize.value,
+    settings?.batchSize ?? 5,
+    settings?.batchSizeMin ?? 1,
+    settings?.batchSizeMax ?? 10,
+  );
+  const intervalSeconds = normalizeBoundedInteger(
+    localTagIntervalSeconds.value,
+    settings?.intervalSeconds ?? 20,
+    settings?.intervalSecondsMin ?? 20,
+    settings?.intervalSecondsMax ?? 300,
+  );
+  localTagBatchSize.value = String(batchSize);
+  localTagIntervalSeconds.value = String(intervalSeconds);
+  emit("saveTagEnrichment", { batchSize, intervalSeconds });
+}
+
+function normalizeLocalCardWidth(value: unknown, fallback: number) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
   if (!Number.isFinite(parsed)) return String(fallback);
   return String(
     Math.min(VIDEO_CARD_WIDTH_MAX, Math.max(VIDEO_CARD_WIDTH_MIN, parsed)),
@@ -341,6 +386,16 @@ watch(
     localBiliToLocalEnabled.value = Boolean(
       props.listenerSettings?.biliToLocalEnabled,
     );
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [props.open, props.tagEnrichmentSettings] as const,
+  ([open, settings]) => {
+    if (!open || !settings) return;
+    localTagBatchSize.value = String(settings.batchSize);
+    localTagIntervalSeconds.value = String(settings.intervalSeconds);
   },
   { immediate: true },
 );
@@ -409,7 +464,7 @@ watch(
       </DialogHeader>
 
       <Tabs :model-value="activeSection" @update:model-value="updateSection">
-        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-5">
+        <TabsList class="grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-6">
           <TabsTrigger v-if="showAi" value="ai" class="gap-1.5 py-2.5">
             <Bot class="h-3.5 w-3.5" />
             {{ t("settings.ai") }}
@@ -417,6 +472,10 @@ watch(
           <TabsTrigger v-if="showListener" value="listener" class="gap-1.5 py-2.5">
             <RadioTower class="h-3.5 w-3.5" />
             {{ t("settings.listener") }}
+          </TabsTrigger>
+          <TabsTrigger v-if="showTagEnrichment" value="tags" class="gap-1.5 py-2.5">
+            <Tags class="h-3.5 w-3.5" />
+            {{ t("settings.tagEnrichment") }}
           </TabsTrigger>
           <TabsTrigger value="language" class="gap-1.5 py-2.5">
             <Languages class="h-3.5 w-3.5" />
@@ -542,6 +601,70 @@ watch(
             </Button>
             <Button :disabled="listenerLoading" @click="saveListenerSettings">{{ t("settings.saveListener") }}</Button>
           </div>
+        </TabsContent>
+
+        <TabsContent v-if="showTagEnrichment" value="tags" class="mt-4">
+          <section class="panel-surface space-y-4 rounded-lg border p-4">
+            <div class="flex items-start gap-3">
+              <span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-muted/50 text-muted-foreground">
+                <Timer class="h-4 w-4" />
+              </span>
+              <div>
+                <p class="text-sm font-medium">{{ t("settings.tagEnrichmentTitle") }}</p>
+                <p class="mt-1 text-xs leading-5 text-muted-foreground">
+                  {{ t("settings.tagEnrichmentDescription") }}
+                </p>
+              </div>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label class="space-y-1.5">
+                <span class="text-xs text-muted-foreground">{{ t("settings.tagBatchSize") }}</span>
+                <Input
+                  v-model="localTagBatchSize"
+                  type="number"
+                  inputmode="numeric"
+                  :min="tagEnrichmentSettings?.batchSizeMin ?? 1"
+                  :max="tagEnrichmentSettings?.batchSizeMax ?? 10"
+                  step="1"
+                  class="tabular-nums"
+                  :disabled="tagEnrichmentLoading"
+                />
+              </label>
+              <label class="space-y-1.5">
+                <span class="text-xs text-muted-foreground">{{ t("settings.tagInterval") }}</span>
+                <div class="flex items-center gap-2">
+                  <Input
+                    v-model="localTagIntervalSeconds"
+                    type="number"
+                    inputmode="numeric"
+                    :min="tagEnrichmentSettings?.intervalSecondsMin ?? 20"
+                    :max="tagEnrichmentSettings?.intervalSecondsMax ?? 300"
+                    step="1"
+                    class="tabular-nums"
+                    :disabled="tagEnrichmentLoading"
+                  />
+                  <span class="shrink-0 text-sm text-muted-foreground">s</span>
+                </div>
+              </label>
+            </div>
+
+            <p class="text-[11px] leading-5 text-muted-foreground">
+              {{
+                t("settings.tagEnrichmentLimits", {
+                  batchMin: tagEnrichmentSettings?.batchSizeMin ?? 1,
+                  batchMax: tagEnrichmentSettings?.batchSizeMax ?? 10,
+                  intervalMin: tagEnrichmentSettings?.intervalSecondsMin ?? 20,
+                  intervalMax: tagEnrichmentSettings?.intervalSecondsMax ?? 300,
+                })
+              }}
+            </p>
+            <div class="flex justify-end border-t pt-4">
+              <Button :disabled="tagEnrichmentLoading" @click="saveTagEnrichmentSettings">
+                {{ t("settings.saveTagEnrichment") }}
+              </Button>
+            </div>
+          </section>
         </TabsContent>
 
         <TabsContent value="language" class="mt-4">

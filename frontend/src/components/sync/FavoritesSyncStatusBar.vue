@@ -3,9 +3,9 @@ import { computed } from "vue";
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleStop,
   Clock3,
   FolderSync,
-  Square,
 } from "lucide-vue-next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,7 +99,7 @@ const phaseVariant = computed(() => {
           :disabled="stopping"
           @click="emit('stop')"
         >
-          <Square class="h-3.5 w-3.5" />
+          <CircleStop class="h-3.5 w-3.5" />
           {{ stopping ? t("sync.stopping") : t("sync.stop") }}
         </Button>
         <Button v-else size="sm" variant="outline" @click="emit('dismiss')">

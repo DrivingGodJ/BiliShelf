@@ -185,6 +185,8 @@ type TagEnrichmentErrorItem = {
 type TagEnrichmentMeta = {
   phase: TagEnrichmentPhase;
   paused: boolean;
+  batchSize: number;
+  intervalSeconds: number;
   cursorAfterVideoId: number;
   total: number;
   totalMissing: number;
@@ -455,8 +457,15 @@ const BACKUP_REMINDER_NOTIFICATION_ID = "bilishelf-backup-reminder";
 const BACKUP_REMINDER_STORAGE_KEY = "bilishelf-backup-reminder-v1";
 const BACKUP_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const BACKUP_REMINDER_CHECK_INTERVAL_MINUTES = 60;
-const TAG_ENRICH_BATCH_SIZE = 5;
-const TAG_ENRICH_BATCH_DELAY_MIN_MS = 20_000;
+const TAG_ENRICH_BATCH_SIZE_MIN = 1;
+const TAG_ENRICH_BATCH_SIZE_DEFAULT = 5;
+const TAG_ENRICH_BATCH_SIZE_MAX = 10;
+const TAG_ENRICH_INTERVAL_SECONDS_MIN = 20;
+const TAG_ENRICH_INTERVAL_SECONDS_DEFAULT = 20;
+const TAG_ENRICH_INTERVAL_SECONDS_MAX = 300;
+// Kept as named defaults for compatibility with existing task diagnostics/tests.
+const TAG_ENRICH_BATCH_SIZE = TAG_ENRICH_BATCH_SIZE_DEFAULT;
+const TAG_ENRICH_BATCH_DELAY_MIN_MS = TAG_ENRICH_INTERVAL_SECONDS_DEFAULT * 1000;
 const TAG_ENRICH_BATCH_DELAY_JITTER_MS = 10_000;
 const TAG_ENRICH_RESTORE_DELAY_MS = 5_000;
 const AI_ORGANIZER_TASK_KEY = "ai-organizer-task-v1";
@@ -659,6 +668,8 @@ type CookiesApi = {
 const defaultTagEnrichmentMeta = (): TagEnrichmentMeta => ({
   phase: "idle",
   paused: false,
+  batchSize: TAG_ENRICH_BATCH_SIZE_DEFAULT,
+  intervalSeconds: TAG_ENRICH_INTERVAL_SECONDS_DEFAULT,
   cursorAfterVideoId: 0,
   total: 0,
   totalMissing: 0,
@@ -740,6 +751,20 @@ function normalizeTagEnrichmentMeta(raw: unknown): TagEnrichmentMeta {
   return {
     phase: normalizeTagEnrichmentPhase(source.phase, paused),
     paused,
+    batchSize: Math.min(
+      TAG_ENRICH_BATCH_SIZE_MAX,
+      Math.max(
+        TAG_ENRICH_BATCH_SIZE_MIN,
+        toInt(source.batchSize, TAG_ENRICH_BATCH_SIZE_DEFAULT),
+      ),
+    ),
+    intervalSeconds: Math.min(
+      TAG_ENRICH_INTERVAL_SECONDS_MAX,
+      Math.max(
+        TAG_ENRICH_INTERVAL_SECONDS_MIN,
+        toInt(source.intervalSeconds, TAG_ENRICH_INTERVAL_SECONDS_DEFAULT),
+      ),
+    ),
     cursorAfterVideoId: Math.max(0, toInt(source.cursorAfterVideoId)),
     total: Math.max(processed + totalMissing, Math.max(0, toInt(source.total))),
     totalMissing,
@@ -5283,12 +5308,27 @@ function bindSystemTagsToVideo(state: LocalState, videoId: number, tagNames: str
   return boundCount;
 }
 
+function resolveTagEnrichmentIntervalMs(meta: Pick<TagEnrichmentMeta, "intervalSeconds">) {
+  return Math.min(
+    TAG_ENRICH_INTERVAL_SECONDS_MAX,
+    Math.max(
+      TAG_ENRICH_INTERVAL_SECONDS_MIN,
+      toInt(meta.intervalSeconds, TAG_ENRICH_INTERVAL_SECONDS_DEFAULT),
+    ),
+  ) * 1000;
+}
+
 function resolveTagEnrichmentBatchNextRunAt(
   detectedAt = now(),
-  random: () => number = Math.random
+  random: () => number = Math.random,
+  intervalSeconds = TAG_ENRICH_INTERVAL_SECONDS_DEFAULT,
 ) {
   const sampled = Math.min(1, Math.max(0, Number(random()) || 0));
-  return detectedAt + TAG_ENRICH_BATCH_DELAY_MIN_MS +
+  const intervalMs = Math.min(
+    TAG_ENRICH_INTERVAL_SECONDS_MAX,
+    Math.max(TAG_ENRICH_INTERVAL_SECONDS_MIN, toInt(intervalSeconds, TAG_ENRICH_INTERVAL_SECONDS_DEFAULT)),
+  ) * 1000;
+  return detectedAt + intervalMs +
     Math.round(sampled * TAG_ENRICH_BATCH_DELAY_JITTER_MS);
 }
 
@@ -5343,7 +5383,7 @@ async function runTagEnrichmentBatch() {
       const meta = ensureTagEnrichmentMeta(state);
       if (!meta.paused && (meta.phase === "running" || meta.phase === "waiting")) {
         meta.phase = "waiting";
-        meta.nextRunAt = now() + TAG_ENRICH_BATCH_DELAY_MIN_MS;
+        meta.nextRunAt = now() + resolveTagEnrichmentIntervalMs(meta);
         meta.updatedAt = now();
       }
       return { ...meta };
@@ -5367,7 +5407,7 @@ async function runTagEnrichmentBatch() {
     );
     const batch = collectMissingSystemTagCandidateDtos(
       state,
-      TAG_ENRICH_BATCH_SIZE,
+      meta.batchSize,
       meta.cursorAfterVideoId,
       meta
     );
@@ -5508,7 +5548,11 @@ async function runTagEnrichmentBatch() {
     } else if (meta.totalMissing > 0) {
       meta.phase = "waiting";
       meta.paused = false;
-      meta.nextRunAt = resolveTagEnrichmentBatchNextRunAt(timestamp);
+      meta.nextRunAt = resolveTagEnrichmentBatchNextRunAt(
+        timestamp,
+        Math.random,
+        meta.intervalSeconds,
+      );
       meta.retryAttempt = resolveSuccessfulRetryAttempt(meta.retryAttempt);
       meta.riskCount = Math.max(0, meta.riskCount - 1);
       meta.lastError = batchErrors.length > 0
@@ -5618,7 +5662,11 @@ async function startTagEnrichmentTask(
       next.phase = "waiting";
       next.finishedAt = null;
       next.nextRunAt = options.immediate === false
-        ? resolveTagEnrichmentBatchNextRunAt(now())
+        ? resolveTagEnrichmentBatchNextRunAt(
+            now(),
+            Math.random,
+            next.intervalSeconds,
+          )
         : now() + 1000;
     }
     return { ...next };
@@ -5682,6 +5730,12 @@ function getTagEnrichmentStatus(state: LocalState) {
       phase: "paused" as const,
       paused: true,
       running: false,
+      batchSize: TAG_ENRICH_BATCH_SIZE_DEFAULT,
+      intervalSeconds: TAG_ENRICH_INTERVAL_SECONDS_DEFAULT,
+      batchSizeMin: TAG_ENRICH_BATCH_SIZE_MIN,
+      batchSizeMax: TAG_ENRICH_BATCH_SIZE_MAX,
+      intervalSecondsMin: TAG_ENRICH_INTERVAL_SECONDS_MIN,
+      intervalSecondsMax: TAG_ENRICH_INTERVAL_SECONDS_MAX,
       cursorAfterVideoId: 0,
       total: 0,
       totalMissing: 0,
@@ -5707,13 +5761,20 @@ function getTagEnrichmentStatus(state: LocalState) {
     };
   }
   const meta = ensureTagEnrichmentMeta(state);
+  const totalMissing = countMissingSystemTagVideos(state, meta);
   return {
     phase: meta.phase,
     paused: meta.paused,
     running: Boolean(tagEnrichmentTask) || meta.phase === "running",
+    batchSize: meta.batchSize,
+    intervalSeconds: meta.intervalSeconds,
+    batchSizeMin: TAG_ENRICH_BATCH_SIZE_MIN,
+    batchSizeMax: TAG_ENRICH_BATCH_SIZE_MAX,
+    intervalSecondsMin: TAG_ENRICH_INTERVAL_SECONDS_MIN,
+    intervalSecondsMax: TAG_ENRICH_INTERVAL_SECONDS_MAX,
     cursorAfterVideoId: meta.cursorAfterVideoId,
-    total: meta.total,
-    totalMissing: meta.totalMissing,
+    total: Math.max(meta.total, meta.processed + totalMissing),
+    totalMissing,
     processed: meta.processed,
     succeeded: meta.succeeded,
     empty: meta.empty,
@@ -5734,6 +5795,34 @@ function getTagEnrichmentStatus(state: LocalState) {
     lastError: meta.lastError,
     errors: meta.errors.slice(-20)
   };
+}
+
+async function updateTagEnrichmentSettings(payload: Record<string, unknown>) {
+  const meta = await withState((state) => {
+    const current = ensureTagEnrichmentMeta(state);
+    current.batchSize = Math.min(
+      TAG_ENRICH_BATCH_SIZE_MAX,
+      Math.max(TAG_ENRICH_BATCH_SIZE_MIN, toInt(payload.batchSize, current.batchSize)),
+    );
+    current.intervalSeconds = Math.min(
+      TAG_ENRICH_INTERVAL_SECONDS_MAX,
+      Math.max(
+        TAG_ENRICH_INTERVAL_SECONDS_MIN,
+        toInt(payload.intervalSeconds, current.intervalSeconds),
+      ),
+    );
+    if (current.phase === "waiting" && !current.paused) {
+      current.nextRunAt = resolveTagEnrichmentBatchNextRunAt(
+        now(),
+        Math.random,
+        current.intervalSeconds,
+      );
+    }
+    current.updatedAt = now();
+    return { ...current };
+  }, true);
+  scheduleTagEnrichment(meta);
+  return getTagEnrichmentStatus(await readState());
 }
 
 function scheduleStage3Reconcile(minutes: number) {
@@ -8585,6 +8674,11 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
       return ok(getTagEnrichmentStatus(snapshot));
     }
 
+    if (method === "GET" && path === "/sync/bilibili/tag-enrichment/settings") {
+      const snapshot = await readState();
+      return ok(getTagEnrichmentStatus(snapshot));
+    }
+
     if (method === "GET" && path === "/sync/bilibili/following-ups/status") {
       return ok(getFollowingUpImportStatus());
     }
@@ -8671,6 +8765,10 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
       }
       const snapshot = await readState();
       return ok(getTagEnrichmentStatus(snapshot));
+    }
+
+    if (method === "PATCH" && path === "/sync/bilibili/tag-enrichment/settings") {
+      return ok(await updateTagEnrichmentSettings(body));
     }
 
     if (method === "POST" && path === "/sync/bilibili/following-ups/start") {

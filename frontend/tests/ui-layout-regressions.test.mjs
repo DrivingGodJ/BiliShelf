@@ -75,7 +75,7 @@ test("unified settings navigates AI, listener, language, theme, and card size", 
   }
   assert.match(source, /emit\('setLocale'/);
   assert.match(source, /emit\('setTheme'/);
-  assert.match(source, /emit\("setVideoCardWidth", normalized\)/);
+  assert.match(source, /emit\("setVideoCardWidth", Number\(normalized\)\)/);
   assert.match(source, /emit\("setCommentCardWidth", Number\(normalized\)\)/);
   assert.match(source, /emit\("setArticleCardWidth", Number\(normalized\)\)/);
 });
@@ -211,35 +211,27 @@ test("sync settings dialog keeps one description source and drops the duplicated
   assert.doesNotMatch(source, /ShieldCheck/);
 });
 
-test("sync import dialog no longer embeds the stage 2 tag enrichment control panel", async () => {
+test("sync import dialog embeds an independently controllable stage 2 tag task", async () => {
   const source = await readComponentSource(["components", "dialogs", "SyncImportDialog.vue"]);
 
-  assert.doesNotMatch(source, /sync\.tagEnrichTitle/);
-  assert.doesNotMatch(source, /sync\.reloadTagEnrich/);
-  assert.doesNotMatch(source, /sync\.tagEnrichStatus/);
-  assert.doesNotMatch(source, /sync\.pauseTagEnrich/);
-  assert.doesNotMatch(source, /sync\.resumeTagEnrich/);
-  assert.doesNotMatch(source, /sync\.runTagEnrichNow/);
-  assert.doesNotMatch(source, /sync\.tagEnrichDisabledHint/);
-  assert.doesNotMatch(source, /CirclePause/);
-  assert.doesNotMatch(source, /WandSparkles/);
-  assert.doesNotMatch(source, /tagEnrichmentStatus/);
-  assert.doesNotMatch(source, /tagEnrichmentLoading/);
-  assert.doesNotMatch(source, /refresh-tag-enrichment/);
-  assert.doesNotMatch(source, /pause-tag-enrichment/);
-  assert.doesNotMatch(source, /resume-tag-enrichment/);
-  assert.doesNotMatch(source, /run-tag-enrichment/);
+  assert.match(source, /TagEnrichmentStatusBar/);
+  assert.match(source, /tagEnrichmentStatus/);
+  assert.match(source, /tagEnrichmentLoading/);
+  assert.match(source, /refresh-tag-enrichment/);
+  assert.match(source, /start-tag-enrichment/);
+  assert.match(source, /stop-tag-enrichment/);
+  assert.match(source, /run-tag-enrichment/);
 });
 
-test("app no longer passes embedded stage 2 tag enrichment wiring into the sync import dialog", async () => {
+test("app passes the persistent stage 2 tag task wiring into the sync import dialog", async () => {
   const source = await readComponentSource(["App.vue"]);
 
-  assert.doesNotMatch(source, /:tag-enrichment-status=/);
-  assert.doesNotMatch(source, /:tag-enrichment-loading=/);
-  assert.doesNotMatch(source, /@refresh-tag-enrichment=/);
-  assert.doesNotMatch(source, /@pause-tag-enrichment=/);
-  assert.doesNotMatch(source, /@resume-tag-enrichment=/);
-  assert.doesNotMatch(source, /@run-tag-enrichment=/);
+  assert.match(source, /:tag-enrichment-status=/);
+  assert.match(source, /:tag-enrichment-loading=/);
+  assert.match(source, /@refresh-tag-enrichment=/);
+  assert.match(source, /@start-tag-enrichment=/);
+  assert.match(source, /@stop-tag-enrichment=/);
+  assert.match(source, /@run-tag-enrichment=/);
 });
 
 test("app temporarily disables ai category entry points and background fetches", async () => {
