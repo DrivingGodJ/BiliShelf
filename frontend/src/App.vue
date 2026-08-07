@@ -1633,12 +1633,15 @@ async function handleStartFolderPlayback(folderId: number) {
       folderId,
       q: globalKeyword || undefined,
       filters,
+      openTab: true,
     });
     if (!result.firstItem?.url) {
       throw new Error("No playable videos in the current folder scope.");
     }
 
-    window.open(result.firstItem.url, "_blank", "noopener,noreferrer");
+    if (!result.opened) {
+      throw new Error("The browser could not open the playback tab.");
+    }
     notifySuccess(
       t("toast.playbackStarted"),
       t("toast.playbackStartedDesc", { count: result.playable })

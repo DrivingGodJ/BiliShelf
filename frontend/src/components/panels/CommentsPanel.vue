@@ -330,13 +330,17 @@ function handlePageSizeChange(value: string | number) {
 <style scoped>
 .content-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--content-card-width)), 1fr));
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(min(100%, var(--content-card-width)), var(--content-card-width))
+  );
+  justify-content: start;
   align-items: start;
 }
 
 @media (max-width: 639px) {
   .content-card-grid {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, min(100%, var(--content-card-width)));
   }
 }
 </style>

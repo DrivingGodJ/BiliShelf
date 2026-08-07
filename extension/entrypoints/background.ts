@@ -416,6 +416,7 @@ type FolderPlaybackRequest = {
   q?: unknown;
   tags?: unknown;
   filters?: unknown;
+  openTab?: unknown;
 };
 
 type FolderPlaybackCursor = {
@@ -8683,16 +8684,32 @@ async function handleApi(request: LocalApiRequest): Promise<ApiResult> {
     if (method === "POST" && path === "/playback/folder-session") {
       try {
         const state = await readState();
+        const request = body as FolderPlaybackRequest;
         const payload = buildFolderPlaybackSessionFromState(
           state,
-          body as FolderPlaybackRequest
+          request
         );
         if (payload.session) {
           await setStoredFolderPlaybackSession(payload.session);
         } else {
           await clearStoredFolderPlaybackSession();
         }
-        return ok(payload);
+        let opened = false;
+        if (
+          request.openTab === true &&
+          payload.firstItem?.url &&
+          chrome.tabs?.create
+        ) {
+          try {
+            await chrome.tabs.create({ url: payload.firstItem.url });
+            opened = true;
+          } catch (error) {
+            // The queue is already persisted; report the tab failure without
+            // turning a valid playback session into a failed request.
+            console.warn("[BiliShelf] failed to open playback tab", error);
+          }
+        }
+        return ok({ ...payload, opened });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return fail(400, message);

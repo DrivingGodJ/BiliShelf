@@ -45,6 +45,10 @@ test("video, comment, and article layouts use independent card widths", async ()
   assert.match(articles, /cardWidth: number/);
   assert.match(comments, /--content-card-width/);
   assert.match(articles, /--content-card-width/);
+  assert.match(comments, /minmax\(min\(100%, var\(--content-card-width\)\), var\(--content-card-width\)\)/);
+  assert.match(articles, /minmax\(min\(100%, var\(--content-card-width\)\), var\(--content-card-width\)\)/);
+  assert.match(comments, /minmax\(0, min\(100%, var\(--content-card-width\)\)\)/);
+  assert.match(articles, /minmax\(0, min\(100%, var\(--content-card-width\)\)\)/);
   assert.match(settings, /localVideoCardWidth/);
   assert.match(i18n, /分别调整卡片宽度/);
 });

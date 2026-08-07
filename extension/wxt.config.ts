@@ -6,7 +6,7 @@ export default defineConfig({
     name: "__MSG_extensionName__",
     short_name: "__MSG_extensionShortName__",
     description: "__MSG_extensionDescription__",
-    version: "0.1.21",
+    version: "0.1.22",
     permissions: [
       "storage",
       "activeTab",

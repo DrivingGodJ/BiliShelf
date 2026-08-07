@@ -37,7 +37,9 @@ test("app wiring calls a folder playback start helper from the sidebar", async (
   assert.match(source, /async function handleStartFolderPlayback\(folderId: number\)/);
   assert.match(source, /const \{ extracted, globalKeyword \} = parseKeywordFromUtils\(keyword\.value\);/);
   assert.match(source, /await startFolderPlaybackSession\(/);
-  assert.match(source, /window\.open\(result\.firstItem\.url, "_blank", "noopener,noreferrer"\);/);
+  assert.match(source, /openTab: true/);
+  assert.match(source, /if \(!result\.opened\)/);
+  assert.doesNotMatch(source, /window\.open\(result\.firstItem\.url/);
   assert.match(source, /@start-playback="handleStartFolderPlayback"/);
 });
 
@@ -46,4 +48,5 @@ test("api module exposes a folder playback session start function", async () => 
 
   assert.match(source, /export async function startFolderPlaybackSession\(/);
   assert.match(source, /"\/playback\/folder-session"/);
+  assert.match(source, /openTab\?: boolean/);
 });

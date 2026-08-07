@@ -79,5 +79,7 @@ test("video card width is adjustable, persisted, and drives an auto-fill grid", 
   assert.match(settings, /emit\("setCommentCardWidth", Number\(normalized\)\)/);
   assert.match(settings, /emit\("setArticleCardWidth", Number\(normalized\)\)/);
   assert.match(grid, /--video-card-width/);
-  assert.match(grid, /repeat\(auto-fill, minmax\(min\(100%, var\(--video-card-width\)\), 1fr\)\)/);
+  assert.match(grid, /minmax\(min\(100%, var\(--video-card-width\)\), var\(--video-card-width\)\)/);
+  assert.match(grid, /minmax\(0, min\(100%, var\(--video-card-width\)\)\)/);
+  assert.match(grid, /justify-content: start/);
 });

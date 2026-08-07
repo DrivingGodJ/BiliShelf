@@ -455,6 +455,7 @@ export type StartFolderPlaybackResult = {
   playable: number;
   skippedInvalid: number;
   truncated: boolean;
+  opened: boolean;
 };
 
 export async function startFolderPlaybackSession(payload: {
@@ -462,6 +463,7 @@ export async function startFolderPlaybackSession(payload: {
   q?: string;
   tags?: string[];
   filters?: VideoFilter;
+  openTab?: boolean;
 }) {
   return request<StartFolderPlaybackResult>("/playback/folder-session", {
     method: "POST",
