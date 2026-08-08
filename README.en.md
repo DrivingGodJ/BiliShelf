@@ -40,7 +40,6 @@ BiliShelf is mainly built to solve these common problems:
 - Batch operations: move, copy, and delete videos
 - Floating favorite panel: save videos directly from Bilibili video pages into local folders
 - Quick favorite shortcut: default is `Ctrl+Alt+1`, then press `Enter` to confirm
-- Uncheck to remove: uncheck a folder in the favorite panel and confirm to remove that favorite relation
 - Folder playlist playback: open playable videos from the current folder in sequence
 - Followed UPs: batch import the current account's followed creators and quickly search / jump to their spaces inside the extension
 - Sync import:
