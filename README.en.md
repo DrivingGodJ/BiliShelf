@@ -40,9 +40,7 @@ BiliShelf is mainly built to solve these common problems:
 - Batch operations: move, copy, and delete videos
 - Floating favorite panel: save videos directly from Bilibili video pages into local folders
 - Quick favorite shortcut: default is `Ctrl+Alt+1`, then press `Enter` to confirm
-- Clear already-favorited feedback: when favoriting the same video again, you can immediately see which folders it is already checked into
 - Uncheck to remove: uncheck a folder in the favorite panel and confirm to remove that favorite relation
-- Remember the last-used folder: convenient for repeated high-frequency organization
 - Folder playlist playback: open playable videos from the current folder in sequence
 - Followed UPs: batch import the current account's followed creators and quickly search / jump to their spaces inside the extension
 - Sync import:
@@ -51,7 +49,6 @@ BiliShelf is mainly built to solve these common problems:
   - supports resume, automatic cooldown, and throttling strategies that try to reduce risk-control triggers
 - Favorite-action listener: enabled by default; watches favorite actions on Bilibili and reconciles them back into local data
 - Video detail cards for saved videos, reducing the "I know I saved something, but I no longer know what it was" problem after invalidation
-- Invalid-video recovery: try to recover title, cover, and description for unavailable videos
 - Import / export: supports `JSON` / `CSV`
 - WebDAV backup: it is recommended to create the target directory in advance; supports configuration, connectivity testing, backup upload, download, and restore
 - Management-center experience: supports dark / light themes and CN / EN switching
