@@ -53,6 +53,7 @@ The installed web app uses the Shiguang icon and opens in its own window. Remove
 - Preserve metadata for unavailable or previously synced videos
 - Installable Home Screen experience with a dedicated app icon
 - Responsive layouts for phones and desktop browsers
+- Automatically follows the system light or dark appearance
 
 ## Data and privacy
 

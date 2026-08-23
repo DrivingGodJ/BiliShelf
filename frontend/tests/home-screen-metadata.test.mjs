@@ -41,3 +41,21 @@ test("publishes iPhone and installable web app metadata", async () => {
     height: 512,
   });
 });
+
+test("memory web follows the system light and dark color scheme", async () => {
+  const html = await readFile(new URL("index.html", frontendRoot), "utf8");
+  const css = await readFile(new URL("src/memory/memory.css", frontendRoot), "utf8");
+
+  assert.match(
+    html,
+    /name="theme-color" content="#efe9dc" media="\(prefers-color-scheme: light\)"/,
+  );
+  assert.match(
+    html,
+    /name="theme-color" content="#171a17" media="\(prefers-color-scheme: dark\)"/,
+  );
+  assert.match(css, /color-scheme: light dark/);
+  assert.match(css, /@media \(prefers-color-scheme: dark\)/);
+  assert.match(css, /\.filter-panel \{[\s\S]*background: rgba\(29, 33, 28, 0\.88\)/);
+  assert.match(css, /\.memory-card \{[\s\S]*background: rgba\(41, 45, 39, 0\.95\)/);
+});
