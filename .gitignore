@@ -1,5 +1,8 @@
 node_modules/
 dist/
+frontend/dist-memory/
+worker/dist/
+worker/.wrangler/
 .DS_Store
 *.log
 .env

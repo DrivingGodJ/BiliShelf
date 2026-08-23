@@ -1,5 +1,8 @@
 {
 	"scripts": {
+		"web:dev": "pnpm --dir frontend run dev:memory",
+		"web:build": "pnpm --dir frontend run build:memory",
+		"web:check": "pnpm --dir frontend run check",
 		"ext:dev": "pnpm --dir extension run dev",
 		"ext:build:all": "pnpm --dir extension run build:all",
 		"ext:zip:all": "pnpm --dir extension run zip:all",

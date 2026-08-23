@@ -255,7 +255,7 @@ test("app temporarily disables ai category entry points and background fetches",
 
 test("manager toasts use structured copy and the shared BiliShelf status treatment", async () => {
   const [mainSource, toastSource, messageSource, styleSource] = await Promise.all([
-    readComponentSource(["main.ts"]),
+    readComponentSource(["manager-main.ts"]),
     readComponentSource(["composables", "use-app-toast.ts"]),
     readComponentSource(["components", "feedback", "AppToastMessage.vue"]),
     readComponentSource(["style.css"]),
