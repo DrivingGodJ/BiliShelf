@@ -62,21 +62,25 @@ pnpm --dir worker exec wrangler deploy
 
 ## Mac 常驻服务
 
-这台 Mac 已配置两个登录级 LaunchAgent：
+这台 Mac 已配置三个登录级 LaunchAgent：
 
 - `com.drivinggodj.bilishelf-mac-proxy`：启动本地只读代理。
-- `com.drivinggodj.bilishelf-tunnel`：建立到 Workers VPC 的出站 Tunnel。
+- `com.drivinggodj.bilishelf-tunnel`：通过 HTTP/2 建立到 Workers VPC 的出站 Tunnel。
+- `com.drivinggodj.bilishelf-watchdog`：每两分钟检查公网健康状态，连续失败两次才重启 Tunnel，并设置十分钟重启冷却。
 
 登录 Mac 后它们会自动启动，异常退出时也会自动重启。查看状态或手动重启：
 
 ```bash
 launchctl print gui/$(id -u)/com.drivinggodj.bilishelf-mac-proxy
 launchctl print gui/$(id -u)/com.drivinggodj.bilishelf-tunnel
+launchctl print gui/$(id -u)/com.drivinggodj.bilishelf-watchdog
 launchctl kickstart -k gui/$(id -u)/com.drivinggodj.bilishelf-mac-proxy
 launchctl kickstart -k gui/$(id -u)/com.drivinggodj.bilishelf-tunnel
+launchctl kickstart -k gui/$(id -u)/com.drivinggodj.bilishelf-watchdog
 ```
 
 日志位于 `~/Library/Logs/BiliShelf/`。本地代理仅监听 `127.0.0.1`，家庭路由器无需开放端口。
+守护脚本源码位于 `worker/scripts/tunnel-watchdog.sh`，本机运行副本安装在 `~/Library/Application Support/BiliShelf/`，避免 macOS 登录项无法读取“文稿”目录。
 
 Mac 必须处于已登录、联网且未睡眠状态；关机、退出登录或睡眠期间，网页仍能打开，但新的收藏同步会暂时失败。访客已存入自己浏览器的数据仍可离线检索。
 
