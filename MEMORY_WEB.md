@@ -18,7 +18,7 @@ GitHub Pages 前端
 
 网页不会接收或保存 B站 Cookie，也不会移动、删除或新增 B站收藏。私密收藏夹不能仅凭链接读取，第一版只支持公开收藏夹。
 
-Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。生产接口使用自定义域名，避免部分网络无法连接公共 `workers.dev` 域名；它不使用 Browser Rendering 时长。
+Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。生产接口使用自定义域名并保留备用入口；它不使用 Browser Rendering 时长。
 
 ## 本地运行
 
@@ -98,6 +98,8 @@ BILI_MEMORY_PROXY_URL=https://api.drivinggodj.dpdns.org
 4. 运行 `Deploy Memory Web to GitHub Pages` 工作流，或推送到 `main`。
 
 部署完成后，访客只需输入 UID 并选择收藏夹，也可以直接粘贴公开收藏夹链接。收藏夹 ID 和已经同步的视频保存在访问者自己的浏览器里；再次打开网页会自动恢复，并在数据超过 30 分钟未刷新时检查最新收藏。
+
+网页同时发布 `apple-touch-icon.png` 和 `manifest.webmanifest`。iPhone 添加到主屏幕时优先使用 180×180 的 Apple Touch Icon，其他支持安装网页应用的浏览器可使用 Manifest 中的 192×192 和 512×512 PNG 图标。
 
 ## 同步策略
 

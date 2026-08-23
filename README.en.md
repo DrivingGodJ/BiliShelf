@@ -1,220 +1,105 @@
 <p align="right"><a href="./README.md">中文</a></p>
 
-# <p align="center">BiliShelf</p>
+# Shiguang · Bilibili Favorites Time Machine
 
-<p align="center"><em style="font-size:0.2rem;">Introduction, what I want to say:</em></p>
 <p align="center">
-Have you ever felt frustrated by Bilibili's favorites limits or the weak search experience? I don't know how many people feel the same way I do, but I kept running into the same problems: I could remember keywords from a video I had watched before, yet still couldn't find it again. And once the favorite-folder limit was reached, people were forced into awkward workarounds: saving things in browser bookmarks on desktop, relying on screenshots on mobile, or even deleting old favorites they still cared about.
+  Turn your favorites into a searchable timeline you can revisit by date or rediscover at random.
 </p>
 
----
+<p align="center">
+  <a href="https://drivinggodj.github.io/BiliShelf/"><strong>Open Shiguang</strong></a>
+</p>
 
-- A local-first browser extension for managing Bilibili favorites.
-- It stores video metadata, folder relations, and tags locally, solves the limits of native Bilibili favorites and their weak search experience, and provides more flexible organization, search, sync, and backup workflows than the default Bilibili experience.
-- Please read all notes carefully.
+## What it is
 
-<img width="2226" height="1244" alt="81ff08f39016bb45b874f38d14e1dff8" src="https://github.com/user-attachments/assets/f1a1cd67-65ab-4caf-8ad0-a23bb4ca7d27" />
+Shiguang reads publicly accessible Bilibili favorite folders and builds a local index from the original favorite timestamps. It lets you return to a year, month, or day, search old favorites, browse a timeline, and open a random memory.
 
-## What It Solves
+It requires no extension or Bilibili login and never modifies a favorite folder.
 
-BiliShelf is mainly built to solve these common problems:
+## Getting started
 
-- Native Bilibili favorites have limited quantity, hierarchy, and management flexibility
-- You may want to search videos more precisely by title, uploader, description, tags, or date range
-- A single video may belong to multiple organization dimensions and needs to be managed across folders
-- When a video becomes unavailable, you may be left with only a dead link and no title, cover, or context
-- You may want to keep your favorite data locally for the long term, with export, backup, and restore support
+1. Open the [Shiguang web app](https://drivinggodj.github.io/BiliShelf/).
+2. Enter a Bilibili UID or profile URL and select a public favorite folder.
+3. Alternatively, expand link import and paste a public favorite-folder URL.
+4. Keep the page open for the first full sync, then browse by date or search.
 
-## Current Features
+The selected folder and synced metadata are stored in the current browser. Opening the site again in the same browser restores that collection automatically.
 
-- Local-first: data is stored locally in the browser by default
-- Folder management: create, rename, sort, describe, delete, and restore from trash
-- AI organization: generate a classification plan for a selected scope from natural-language requirements, review it before applying, and retain snapshots for undo
-- Article favorites: save content from Bilibili article pages and organize it with article folders that are separate from video folders
-- Comment favorites: save comments from video pages, Watch Later pages, and article pages, including comment images and original-comment links
-- Custom tags: manage tags and use existing tags for autocomplete / selection while favoriting
-- Search capabilities:
-  - global keyword search
-  - filter by title, uploader, description, Bilibili tags, and custom tags
-  - filter by date range
-- Batch operations: move, copy, and delete videos
-- Floating favorite panel: save videos directly from Bilibili video pages into local folders
-- Quick favorite shortcut: default is `Ctrl+Alt+1`, then press `Enter` to confirm
-- Folder playlist playback: open playable videos from the current folder in sequence
-- Followed UPs: batch import the current account's followed creators and quickly search / jump to their spaces inside the extension
-- Sync import:
-  - supports selecting Bilibili favorite folders and syncing them into local storage
-  - processes folders one by one in the current list order instead of sending all requests at once
-  - supports resume, automatic cooldown, and throttling strategies that try to reduce risk-control triggers
-- Favorite-action listener: enabled by default; watches favorite actions on Bilibili and reconciles them back into local data
-- Video detail cards for saved videos, reducing the "I know I saved something, but I no longer know what it was" problem after invalidation
-- Import / export: supports `JSON` / `CSV`
-- WebDAV backup: it is recommended to create the target directory in advance; supports configuration, connectivity testing, backup upload, download, and restore
-- Management-center experience: supports dark / light themes and CN / EN switching
+### Add it to your Home Screen
 
-## Installation
+- iPhone: open the site in Safari, tap Share, then choose **Add to Home Screen**.
+- Android: use **Add to Home screen** or **Install app** in a supported browser.
 
-### Method 1: Regular Users
+The installed web app uses the Shiguang icon and opens in its own window. Remove and re-add an older shortcut if it was created before the icon was available.
 
-1. Download:
-   Store versions usually lag behind GitHub Releases.
+## Features
 
-   Extension stores:
+- Filter favorites by year, month, or exact date
+- Discover public favorite folders from a UID
+- Search titles, uploaders, descriptions, and BV IDs
+- Timeline and grid views
+- Random Memory and On This Day
+- Reconcile videos removed from the remote folder during refresh
+- Preserve metadata for unavailable or previously synced videos
+- Installable Home Screen experience with a dedicated app icon
+- Responsive layouts for phones and desktop browsers
 
-   - Edge: `[https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/](https://microsoftedge.microsoft.com/addons/detail/bilishelf-manager/cnenidkjccfkjjbkcmkkbgjilhohpjbi)`
-   - Firefox: `https://addons.mozilla.org/en-GB/firefox/addon/bilishelf/`
+## Data and privacy
 
-   GitHub Releases:
+- Folder information, video metadata, and sync timestamps stay in browser IndexedDB.
+- The service does not maintain a central database of visitors' favorites.
+- It does not accept, store, or forward Bilibili cookies.
+- It reads only folders available without signing in.
+- It exposes no favorite create, move, or delete operations.
+- Clearing site data also removes the local index from that browser.
 
-   - `https://github.com/TLRKFXE/BiliShelf/releases`
-
-   After downloading the package, unzip it and install it from your browser's extension manager:
-
-   - Chromium-based browsers (Chrome / Edge / Brave / Arc, etc.): enable Developer Mode, then choose `Load unpacked` and point it to the extension directory
-   - Firefox: install it through `about:debugging` or `Install Add-on From File`
-
-2. Open any Bilibili video page and start saving with the floating panel or shortcut
-3. Click the extension entry in the browser toolbar to open the management center
-
-### Method 2: Development / Build
-
-Install root dependencies:
-
-```bash
-pnpm install
-```
-
-Install frontend and extension dependencies:
-
-```bash
-pnpm --dir frontend install
-pnpm --dir extension install
-```
-
-Start extension dev mode:
-
-```bash
-pnpm ext:dev
-```
-
-Build all three browser targets:
-
-```bash
-pnpm ext:build:all
-```
-
-Package all three browser targets:
-
-```bash
-pnpm ext:zip:all
-```
-
-## Release Summary
-
-### v1.0
-
-Added:
-
-1. Custom card sizes
-2. AI organization
-3. Article favorites
-4. Comment favorites on video, Watch Later, and article pages
-5. Scheduled backup reminders
-6. Check for updates
-
-Improved:
-
-1. Runtime performance and the efficiency of video and tag synchronization
-2. Overall UI/UX
-3. Favorite-action listening is now enabled by default
-
-Fixed:
-
-1. Folder navigation and video content now scroll independently instead of moving together
-
-### v0.1.5
-
-- Added batch import for followed UPs and a dedicated "Followed UPs" page
-- Fixed the issue where tags from deleted videos still remained in exports
-- Fixed some basic WebDAV issues
-- Improved the base styling of the management center
-- Improved custom-tag selection when favoriting
-
-### v0.1.4
-
-- Added select-all support for sync import
-- After syncing, folder lists now follow the original Bilibili folder order
-- Added `folderCount` to exports
-- Added invalid-video lookup / recovery support
-- Added a quick favorite shortcut
-- Added playlist playback for folders
-- Added the ability to remove favorite relations by unchecking and confirming
-- Added last-used folder memory
-- Optimized export field order and kept compatibility with older imports
-- Improved Toast feedback, favorite feedback, and overall UI/UX
-- Removed the standalone backend and kept only the extension-embedded implementation
-
-### v0.1.3
-
-- Fixed the unusable unbranded Firefox build
-- Releases started expanding to more browser channels
-
-### v0.1.2
-
-- Improved sync strategies for very large favorite libraries and reduced the chance of triggering risk control
-- Added page-number jump input
-- Added WebDAV support
-- Added Bilibili favorite-action listening with automatic sync into the management center
-- Fixed floating-panel position memory
-- Fixed overlap between the batch bar and pagination bar
-- Fixed fullscreen layering issues
-- Fixed the missing floating button on Watch Later pages
-
-### v0.1.1
-
-- Improved exported information, including upload date and favorite date
-- Video detail cards added:
-  - uploader space links
-  - manual completion / editing of video details
-
-### v0.1.0
-
-- First public release
-
-## ⚠️ Notes
-
-- Sync import can still be affected by Bilibili risk control, so a 100% trigger-free experience cannot be guaranteed
-- If you encounter `412`:
-  - first make sure you do not have duplicate manager tabs, multiple browser profiles, or stale extension instances still running
-  - close those related pages, wait a moment, then reopen the extension and try again
-- If WebDAV connectivity testing returns `409`:
-  - it usually means the target path already exists but is not the expected directory structure, or the server does not allow the current write pattern
-  - make sure you entered a directory path rather than a file path, and confirm that the account has permission to create and delete probe files in that location
-- Regular exports are recommended to avoid accidental local data loss
-- Pure local storage: personal favorite data is not uploaded, so privacy risk is relatively low
-- If you run into problems, please open an `Issue`. Contributions through `PR`s are also welcome
-
-## Project Structure
+## How it works
 
 ```text
-bili-like/
-├─ frontend/                 # Management center frontend (Vue 3 + Vite)
-├─ extension/                # Browser extension (WXT)
-├─ README.md
-└─ README.en.md
+GitHub Pages web app
+  -> https://api.drivinggodj.dpdns.org
+  -> read-only Cloudflare gateway and Tunnel
+  -> local read-only service on the Mac
+  -> Bilibili public favorites API
+  -> IndexedDB in the visitor's browser
 ```
 
-## Tech Stack
+The gateway accepts only fixed read-only routes and validated identifiers. It applies caching, request queues, and rate limits. Each browser keeps its own local collection data.
 
-- Frontend (`frontend/`): Vue 3, TypeScript, Vite, Pinia, Vue Router, Tailwind CSS, shadcn-vue, vue-toastification
-- Extension (`extension/`): WXT (Chrome / Edge MV3 + Firefox MV2 builds), Background + IndexedDB local data layer, Content / Popup (TS / JS)
-- Build and tooling: pnpm, tsup, tsx, Vite, WXT
+## Older favorite dates
 
-## Thank you for your support
+Bilibili returns original favorite timestamps for most items. Some favorites from around July 2020 or earlier may share a migration timestamp in the current API data. Shiguang displays the returned value and does not invent a more precise date.
 
-<img width="360" height="540" alt="3fe7edd8edbedf9cd0bd527376cf265e" src="https://github.com/user-attachments/assets/fe14c07b-8a25-4a8f-9872-7e2d8cb547a6" />
-<img width="371" height="505" alt="41e01d51624c86f8b998a15284a7ed48" src="https://github.com/user-attachments/assets/61db8e6c-4f8d-4259-8349-dbcb50a870a3" />
+## Limitations
 
-## License
+- Private favorite folders cannot be read without authentication.
+- Large folders require a paginated first sync.
+- New synchronization pauses while the local service is unavailable, but already indexed items remain searchable.
+- Browser data does not synchronize automatically between devices.
 
-MIT © TLRK
+## Local development
+
+Node.js 22+ and pnpm are recommended.
+
+```bash
+pnpm --dir worker install
+pnpm --dir frontend install
+pnpm --dir worker start:local
+pnpm web:dev
+```
+
+Open `http://localhost:5173`. For checks and builds:
+
+```bash
+pnpm --dir worker test
+pnpm web:check
+pnpm web:build
+```
+
+See [MEMORY_WEB.md](./MEMORY_WEB.md) for the complete self-hosting notes. Never commit account tokens, Tunnel credentials, cookies, or other secrets.
+
+## Upstream and license
+
+This project is based on [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) and retains its MIT License and original copyright notice.
+
+[MIT License](./LICENSE)
