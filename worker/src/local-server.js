@@ -107,8 +107,10 @@ async function bufferWebResponse(webResponse) {
   };
 }
 
-function isFavoritesRequest(url, method) {
-  return method === "GET" && url.pathname === "/api/favorites";
+function isBilibiliReadRequest(url, method) {
+  return method === "GET" && (
+    url.pathname === "/api/favorites" || url.pathname === "/api/folders"
+  );
 }
 
 function clientIpFrom(headers) {
@@ -126,8 +128,8 @@ async function handleNodeRequest(nodeRequest) {
   }
 
   const cacheKey = `${url.pathname}${url.search}`;
-  const favoriteRequest = isFavoritesRequest(url, method);
-  if (favoriteRequest) {
+  const bilibiliReadRequest = isBilibiliReadRequest(url, method);
+  if (bilibiliReadRequest) {
     const cached = readCachedResponse(cacheKey);
     if (cached) return { ...cached, headers: { ...cached.headers, "X-Mac-Cache": "HIT" } };
 
@@ -141,12 +143,12 @@ async function handleNodeRequest(nodeRequest) {
   }
 
   const request = new Request(url, { method, headers });
-  const webResponse = favoriteRequest
+  const webResponse = bilibiliReadRequest
     ? await scheduleUpstream(() => handleRequest(request, { ALLOWED_ORIGINS }, {}))
     : await handleRequest(request, { ALLOWED_ORIGINS }, {});
   const response = await bufferWebResponse(webResponse);
   response.headers["X-Mac-Cache"] = "MISS";
-  if (favoriteRequest && response.status >= 200 && response.status < 300) {
+  if (bilibiliReadRequest && response.status >= 200 && response.status < 300) {
     cacheResponse(cacheKey, response);
   }
   return response;

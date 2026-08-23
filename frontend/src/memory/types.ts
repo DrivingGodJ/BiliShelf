@@ -25,9 +25,29 @@ export type MemorySettings = {
   mediaId: number;
   folderTitle: string;
   ownerName: string;
+  ownerMid: number;
   mediaCount: number;
   proxyBaseUrl: string;
   lastSyncAt: number | null;
+};
+
+export type BilibiliFavoriteFolder = {
+  id: number;
+  fid?: number;
+  mid?: number;
+  title?: string;
+  attr?: number;
+  fav_state?: number;
+  media_count?: number;
+};
+
+export type BilibiliFavoriteFoldersResponse = {
+  code: number;
+  message?: string;
+  data?: {
+    count?: number;
+    list?: BilibiliFavoriteFolder[] | null;
+  } | null;
 };
 
 export type BilibiliFavoriteMedia = {
@@ -56,6 +76,7 @@ export type BilibiliFavoritesResponse = {
       title?: string;
       media_count?: number;
       upper?: {
+        mid?: number;
         name?: string;
       } | null;
     } | null;

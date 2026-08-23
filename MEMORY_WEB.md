@@ -1,6 +1,6 @@
 # 拾光 · B站收藏时光机
 
-这是 BiliShelf 的 GitHub Pages 网页版实验入口。它读取公开的 B站收藏夹，把收藏时间、标题、UP 主、简介和封面保存到当前浏览器的 IndexedDB，并提供年月日筛选、关键词搜索、时间轴、随机回忆和“那年今日”。
+这是 BiliShelf 的 GitHub Pages 网页版实验入口。它可以根据 UID 查询账号下无需登录即可访问的收藏夹，也支持直接粘贴收藏夹链接；随后把收藏时间、标题、UP 主、简介和封面保存到当前浏览器的 IndexedDB，并提供年月日筛选、关键词搜索、时间轴、随机回忆和“那年今日”。
 
 ## 工作方式
 
@@ -45,9 +45,10 @@ pnpm web:dev
 
 ## 当前线上部署
 
-线上入口是 `https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev`，只开放两个 GET 路由：
+线上入口是 `https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev`，只开放三个 GET 路由：
 
 - `/api/health`（也兼容 `/health`）
+- `/api/folders?uid=...`
 - `/api/favorites?mediaId=...&page=...&pageSize=40`
 
 它不能转发任意 URL，也不接受写请求。收藏页在 Mac 上缓存 5 分钟；未命中缓存的请求会排队、限速，并按访客 IP 限制频率，降低公共服务被滥用后触发 B站风控的风险。
@@ -96,7 +97,7 @@ BILI_MEMORY_PROXY_URL=https://你的-worker.workers.dev
 
 4. 运行 `Deploy Memory Web to GitHub Pages` 工作流，或推送到 `main`。
 
-部署完成后，访客只需粘贴公开收藏夹链接。收藏夹 ID 和已经同步的视频保存在访问者自己的浏览器里；再次打开网页会自动恢复，并在数据超过 30 分钟未刷新时检查最新收藏。
+部署完成后，访客只需输入 UID 并选择收藏夹，也可以直接粘贴公开收藏夹链接。收藏夹 ID 和已经同步的视频保存在访问者自己的浏览器里；再次打开网页会自动恢复，并在数据超过 30 分钟未刷新时检查最新收藏。
 
 ## 同步策略
 

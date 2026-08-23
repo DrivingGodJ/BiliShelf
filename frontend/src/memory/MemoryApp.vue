@@ -6,6 +6,7 @@ import {
   Clock3,
   Database,
   Dice5,
+  FolderOpen,
   Grid2X2,
   Heart,
   History,
@@ -18,9 +19,10 @@ import {
   Shuffle,
   Sparkles,
   Square,
+  UserRoundSearch,
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { fetchFavoritePage, mapFavoriteMedia } from "./api";
+import { fetchFavoriteFolders, fetchFavoritePage, mapFavoriteMedia } from "./api";
 import {
   markMissingVideosInactive,
   readSettings,
@@ -29,7 +31,11 @@ import {
   writeSettings,
 } from "./db";
 import { formatCount, formatFavoriteDate } from "./format";
-import { normalizeProxyBaseUrl, parseFavoriteMediaId } from "./favorite-link.js";
+import {
+  normalizeProxyBaseUrl,
+  parseBilibiliUid,
+  parseFavoriteMediaId,
+} from "./favorite-link.js";
 import {
   filterMemories,
   memoriesOnThisDay,
@@ -42,6 +48,7 @@ import MemoryVideoCard from "./components/MemoryVideoCard.vue";
 import RandomMemoryDialog from "./components/RandomMemoryDialog.vue";
 import type {
   BilibiliFavoritesResponse,
+  BilibiliFavoriteFolder,
   MemorySettings,
   MemoryVideo,
   SyncProgress,
@@ -53,6 +60,7 @@ const DEFAULT_SETTINGS: MemorySettings = {
   mediaId: 0,
   folderTitle: "",
   ownerName: "",
+  ownerMid: 0,
   mediaCount: 0,
   proxyBaseUrl: "",
   lastSyncAt: null,
@@ -68,6 +76,10 @@ const videos = ref<MemoryVideo[]>([]);
 const loading = ref(true);
 const setupMode = ref(true);
 const linkInput = ref("");
+const uidInput = ref("");
+const folders = ref<BilibiliFavoriteFolder[]>([]);
+const folderLoading = ref(false);
+const linkPanelOpen = ref(false);
 const proxyInput = ref(environmentProxy || localProxy);
 const proxyPanelOpen = ref(false);
 const syncing = ref(false);
@@ -221,6 +233,7 @@ function updateSettingsFromResponse(
     proxyBaseUrl,
     folderTitle: info?.title || previous.folderTitle || "默认收藏夹",
     ownerName: info?.upper?.name || previous.ownerName || "",
+    ownerMid: info?.upper?.mid ?? previous.ownerMid ?? 0,
     mediaCount: info?.media_count ?? previous.mediaCount,
   };
 }
@@ -378,6 +391,55 @@ async function connectCollection() {
   });
 }
 
+async function findFavoriteFolders() {
+  clearMessages();
+  const uid = parseBilibiliUid(uidInput.value);
+  if (!uid) {
+    errorMessage.value = "请输入有效的 B站 UID，或粘贴 space.bilibili.com 开头的个人空间链接。";
+    return;
+  }
+
+  const proxyBaseUrl = normalizeProxyBaseUrl(proxyInput.value);
+  if (!proxyBaseUrl) {
+    proxyPanelOpen.value = true;
+    errorMessage.value = "请先填写已经部署好的只读数据代理地址。";
+    return;
+  }
+
+  folderLoading.value = true;
+  folders.value = [];
+  try {
+    folders.value = await fetchFavoriteFolders({ proxyBaseUrl, uid });
+    if (!folders.value.length) {
+      errorMessage.value = "没有找到可公开读取的收藏夹，请检查 UID 是否正确。";
+      return;
+    }
+    noticeMessage.value = `找到 ${folders.value.length} 个收藏夹，请选择一个导入。`;
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "收藏夹查询失败，请稍后再试";
+  } finally {
+    folderLoading.value = false;
+  }
+}
+
+async function connectFavoriteFolder(folder: BilibiliFavoriteFolder) {
+  if (!folder.id) return;
+  const proxyBaseUrl = normalizeProxyBaseUrl(proxyInput.value);
+  if (!proxyBaseUrl) {
+    proxyPanelOpen.value = true;
+    errorMessage.value = "请先填写已经部署好的只读数据代理地址。";
+    return;
+  }
+  const collectionUrl = canonicalCollectionUrl(folder.id);
+  linkInput.value = collectionUrl;
+  await syncCollection({
+    mediaId: folder.id,
+    collectionUrl,
+    proxyBaseUrl,
+    mode: "full",
+  });
+}
+
 async function refreshCurrent(mode: "full" | "quick") {
   if (!settings.value.mediaId) return;
   const proxyBaseUrl = normalizeProxyBaseUrl(proxyInput.value || settings.value.proxyBaseUrl);
@@ -401,6 +463,8 @@ function stopSync() {
 function openSetup() {
   setupMode.value = true;
   linkInput.value = settings.value.collectionUrl;
+  uidInput.value = settings.value.ownerMid ? String(settings.value.ownerMid) : "";
+  folders.value = [];
   proxyInput.value = settings.value.proxyBaseUrl || environmentProxy || localProxy;
   clearMessages();
 }
@@ -488,8 +552,11 @@ onMounted(async () => {
   window.addEventListener("keydown", handleKeydown);
   try {
     const stored = await readSettings();
-    settings.value = stored ?? { ...DEFAULT_SETTINGS, proxyBaseUrl: environmentProxy || localProxy };
+    settings.value = stored
+      ? { ...DEFAULT_SETTINGS, ...stored }
+      : { ...DEFAULT_SETTINGS, proxyBaseUrl: environmentProxy || localProxy };
     linkInput.value = settings.value.collectionUrl;
+    uidInput.value = settings.value.ownerMid ? String(settings.value.ownerMid) : "";
     proxyInput.value = settings.value.proxyBaseUrl || environmentProxy || localProxy;
     setupMode.value = !settings.value.mediaId;
     if (settings.value.mediaId) {
@@ -532,29 +599,84 @@ onBeforeUnmount(() => {
       <section v-if="setupMode" class="setup-stage">
         <div class="setup-stage__copy">
           <p class="kicker"><Sparkles :size="16" /> 把收藏变成可以重访的时间</p>
-          <h1>从一个收藏夹链接<br />开始保存过去。</h1>
+          <h1>输入你的 UID，<br />找到收藏的过去。</h1>
           <p class="setup-stage__lead">
-            粘贴公开的 B站收藏夹链接。拾光会按收藏日期建立索引，数据只留在当前浏览器。
+            不用在手机里翻收藏夹链接。输入 B站 UID，选择一个可访问的收藏夹，拾光会按收藏日期建立本地索引。
           </p>
 
-          <form class="setup-form" @submit.prevent="connectCollection">
-            <label for="collection-link">收藏夹链接</label>
-            <div class="setup-form__row">
-              <span class="input-icon"><Link2 :size="19" /></span>
-              <input
-                id="collection-link"
-                v-model="linkInput"
-                type="text"
-                autocomplete="off"
-                placeholder="https://www.bilibili.com/list/ml…"
-                :disabled="syncing"
-              />
-              <button type="submit" class="button button--primary" :disabled="syncing">
-                <LoaderCircle v-if="syncing" class="spin" :size="17" />
-                <Clock3 v-else :size="17" />
-                {{ syncing ? "正在建立" : "建立时光机" }}
+          <div class="setup-form">
+            <form class="setup-method" @submit.prevent="findFavoriteFolders">
+              <label for="account-uid">B站 UID 或个人空间链接</label>
+              <div class="setup-form__row">
+                <span class="input-icon"><UserRoundSearch :size="19" /></span>
+                <input
+                  id="account-uid"
+                  v-model="uidInput"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  placeholder="例如 220174771"
+                  :disabled="syncing || folderLoading"
+                />
+                <button type="submit" class="button button--primary" :disabled="syncing || folderLoading">
+                  <LoaderCircle v-if="folderLoading" class="spin" :size="17" />
+                  <Search v-else :size="17" />
+                  {{ folderLoading ? "正在查找" : "查找收藏夹" }}
+                </button>
+              </div>
+            </form>
+
+            <section v-if="folders.length" class="folder-picker" aria-live="polite">
+              <div class="folder-picker__header">
+                <span><FolderOpen :size="16" /> 选择要导入的收藏夹</span>
+                <small>{{ folders.length }} 个</small>
+              </div>
+              <div class="folder-picker__list">
+                <button
+                  v-for="folder in folders"
+                  :key="folder.id"
+                  type="button"
+                  class="folder-choice"
+                  :disabled="syncing"
+                  @click="connectFavoriteFolder(folder)"
+                >
+                  <FolderOpen :size="18" />
+                  <span class="folder-choice__copy">
+                    <strong>{{ folder.title || "未命名收藏夹" }}</strong>
+                    <small>{{ formatCount(folder.media_count || 0) }} 条视频</small>
+                  </span>
+                  <span class="folder-choice__action">导入</span>
+                </button>
+              </div>
+            </section>
+
+            <div class="setup-divider">
+              <span />
+              <button type="button" @click="linkPanelOpen = !linkPanelOpen">
+                {{ linkPanelOpen ? "收起链接导入" : "也可以直接使用收藏夹链接" }}
               </button>
+              <span />
             </div>
+
+            <form v-if="linkPanelOpen" class="setup-method link-import-panel" @submit.prevent="connectCollection">
+              <label for="collection-link">收藏夹链接</label>
+              <div class="setup-form__row">
+                <span class="input-icon"><Link2 :size="19" /></span>
+                <input
+                  id="collection-link"
+                  v-model="linkInput"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="https://www.bilibili.com/list/ml…"
+                  :disabled="syncing"
+                />
+                <button type="submit" class="button button--quiet" :disabled="syncing">
+                  <LoaderCircle v-if="syncing" class="spin" :size="17" />
+                  <Clock3 v-else :size="17" />
+                  {{ syncing ? "正在建立" : "直接导入" }}
+                </button>
+              </div>
+            </form>
 
             <button
               type="button"
@@ -589,7 +711,7 @@ onBeforeUnmount(() => {
             >
               返回当前收藏夹
             </button>
-          </form>
+          </div>
 
           <div v-if="syncProgress" class="sync-progress setup-progress">
             <div class="sync-progress__copy">
@@ -626,7 +748,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="collection-header__actions">
             <button type="button" class="button button--quiet" :disabled="syncing" @click="openSetup">
-              <Link2 :size="16" /> 更换链接
+              <FolderOpen :size="16" /> 更换收藏夹
             </button>
             <button type="button" class="button button--quiet" :disabled="syncing" @click="refreshCurrent('full')">
               <Database :size="16" /> 完整同步

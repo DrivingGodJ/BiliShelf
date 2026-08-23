@@ -1,5 +1,11 @@
-import { buildFavoriteApiUrl, normalizeProxyBaseUrl } from "./favorite-link.js";
+import {
+  buildFavoriteApiUrl,
+  buildFavoriteFoldersApiUrl,
+  normalizeProxyBaseUrl,
+} from "./favorite-link.js";
 import type {
+  BilibiliFavoriteFolder,
+  BilibiliFavoriteFoldersResponse,
   BilibiliFavoriteMedia,
   BilibiliFavoritesResponse,
   MemoryVideo,
@@ -49,6 +55,37 @@ export async function fetchFavoritePage(options: {
   }
   if (!payload.data?.info) throw new FavoriteApiError("没有找到这个收藏夹");
   return payload;
+}
+
+export async function fetchFavoriteFolders(options: {
+  proxyBaseUrl: string;
+  uid: number;
+  signal?: AbortSignal;
+}): Promise<BilibiliFavoriteFolder[]> {
+  const proxyBaseUrl = normalizeProxyBaseUrl(options.proxyBaseUrl);
+  if (!proxyBaseUrl) throw new FavoriteApiError("请先配置有效的只读数据代理地址");
+
+  const response = await fetch(buildFavoriteFoldersApiUrl(proxyBaseUrl, options.uid), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    if (response.status === 429 || response.status === 412) {
+      throw new FavoriteApiError("B站暂时限制了查询请求，请稍后再试", response.status);
+    }
+    throw new FavoriteApiError(`收藏夹查询失败（${response.status}）`, response.status);
+  }
+
+  const payload = (await response.json()) as BilibiliFavoriteFoldersResponse;
+  if (payload.code !== 0) {
+    throw new FavoriteApiError(payload.message || `B站接口返回错误 ${payload.code}`, payload.code);
+  }
+
+  return (payload.data?.list ?? []).filter(
+    (folder) => Number.isSafeInteger(folder.id) && folder.id > 0,
+  );
 }
 
 function secureImageUrl(value: string | undefined): string {

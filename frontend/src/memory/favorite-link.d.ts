@@ -1,4 +1,5 @@
 export function parseFavoriteMediaId(input: unknown): number | null;
+export function parseBilibiliUid(input: unknown): number | null;
 export function normalizeProxyBaseUrl(input: unknown): string;
 export function buildFavoriteApiUrl(
   proxyBaseUrl: string,
@@ -6,3 +7,4 @@ export function buildFavoriteApiUrl(
   page: number,
   pageSize?: number,
 ): string;
+export function buildFavoriteFoldersApiUrl(proxyBaseUrl: string, uid: number): string;

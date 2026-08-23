@@ -1,4 +1,5 @@
 const BILIBILI_FAVORITES_API = "https://api.bilibili.com/x/v3/fav/resource/list";
+const BILIBILI_FOLDERS_API = "https://api.bilibili.com/x/v3/fav/folder/created/list-all";
 const MAX_PAGE = 2500;
 const MAX_PAGE_SIZE = 40;
 
@@ -41,6 +42,18 @@ export function buildUpstreamUrl(requestUrl) {
   return upstream;
 }
 
+export function buildFoldersUpstreamUrl(requestUrl) {
+  const incoming = new URL(requestUrl);
+  const uid = parsePositiveInteger(incoming.searchParams.get("uid"), {
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (!uid) throw new Error("uid 必须是有效的 B站数字 UID");
+
+  const upstream = new URL(BILIBILI_FOLDERS_API);
+  upstream.searchParams.set("up_mid", String(uid));
+  return upstream;
+}
+
 function resolveAllowedOrigin(request, env) {
   const requestOrigin = request.headers.get("Origin") || "";
   const configured = String(env?.ALLOWED_ORIGINS || "*")
@@ -69,6 +82,8 @@ async function forwardRequestToMac(request, env) {
     privateUrl.searchParams.set("mediaId", incoming.searchParams.get("mediaId"));
     privateUrl.searchParams.set("page", incoming.searchParams.get("page") || "1");
     privateUrl.searchParams.set("pageSize", incoming.searchParams.get("pageSize") || "40");
+  } else if (incoming.pathname === "/api/folders") {
+    privateUrl.searchParams.set("uid", incoming.searchParams.get("uid"));
   }
   const headers = new Headers({ Accept: "application/json" });
   const origin = request.headers.get("Origin");
@@ -121,7 +136,7 @@ export async function handleRequest(request, env = {}, context = {}) {
     );
   }
 
-  if (url.pathname !== "/api/favorites") {
+  if (url.pathname !== "/api/favorites" && url.pathname !== "/api/folders") {
     return json(
       { code: -404, message: "Not found" },
       { status: 404, headers: corsHeaders(allowedOrigin) },
@@ -130,7 +145,9 @@ export async function handleRequest(request, env = {}, context = {}) {
 
   let upstreamUrl;
   try {
-    upstreamUrl = buildUpstreamUrl(request.url);
+    upstreamUrl = url.pathname === "/api/folders"
+      ? buildFoldersUpstreamUrl(request.url)
+      : buildUpstreamUrl(request.url);
   } catch (error) {
     return json(
       { code: -400, message: error instanceof Error ? error.message : "参数错误" },
@@ -164,7 +181,7 @@ export async function handleRequest(request, env = {}, context = {}) {
         });
   } catch (error) {
     console.error(JSON.stringify({
-      message: "Favorites upstream request failed",
+      message: "Bilibili upstream request failed",
       error: error instanceof Error ? error.message : String(error),
     }));
     return json(
@@ -179,7 +196,9 @@ export async function handleRequest(request, env = {}, context = {}) {
     headers: {
       ...corsHeaders(allowedOrigin),
       "Content-Type": contentType,
-      "Cache-Control": "public, max-age=30, s-maxage=60",
+      "Cache-Control": url.pathname === "/api/folders"
+        ? "public, max-age=60, s-maxage=300"
+        : "public, max-age=30, s-maxage=60",
       "X-Content-Type-Options": "nosniff",
       "X-Memory-Cache": "MISS",
     },

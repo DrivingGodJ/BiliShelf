@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildUpstreamUrl, handleRequest, parsePositiveInteger } from "../src/index.js";
+import {
+  buildFoldersUpstreamUrl,
+  buildUpstreamUrl,
+  handleRequest,
+  parsePositiveInteger,
+} from "../src/index.js";
 
 test("validates positive integers and limits", () => {
   assert.equal(parsePositiveInteger("40", { max: 40 }), 40);
@@ -19,6 +24,20 @@ test("builds only the fixed Bilibili favorites endpoint", () => {
   assert.equal(url.searchParams.get("pn"), "3");
   assert.equal(url.searchParams.get("ps"), "40");
   assert.equal(url.searchParams.has("url"), false);
+});
+
+test("builds only the fixed Bilibili folder-list endpoint", () => {
+  const url = buildFoldersUpstreamUrl(
+    "https://memory.example/api/folders?uid=220174771&url=https://evil.example",
+  );
+  assert.equal(url.origin, "https://api.bilibili.com");
+  assert.equal(url.pathname, "/x/v3/fav/folder/created/list-all");
+  assert.equal(url.searchParams.get("up_mid"), "220174771");
+  assert.equal(url.searchParams.has("url"), false);
+  assert.throws(
+    () => buildFoldersUpstreamUrl("https://memory.example/api/folders?uid=not-a-number"),
+    /uid/,
+  );
 });
 
 test("rejects write methods before contacting upstream", async () => {
@@ -74,4 +93,36 @@ test("forwards only validated favorite requests through the Mac VPC binding", as
   );
   assert.equal(forwardedRequest.headers.get("Origin"), "https://example.github.io");
   assert.equal(forwardedRequest.headers.get("X-Forwarded-Client-IP"), "203.0.113.9");
+});
+
+test("forwards only a validated UID for folder discovery through the Mac VPC binding", async () => {
+  let forwardedRequest;
+  const response = await handleRequest(
+    new Request(
+      "https://memory.example/api/folders?uid=220174771&url=https://evil.example",
+      {
+        headers: {
+          Origin: "https://example.github.io",
+          "CF-Connecting-IP": "203.0.113.10",
+        },
+      },
+    ),
+    {
+      ALLOWED_ORIGINS: "https://example.github.io",
+      MAC_PROXY: {
+        async fetch(request) {
+          forwardedRequest = request;
+          return Response.json({ code: 0, data: { count: 1, list: [] } });
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).code, 0);
+  assert.equal(
+    forwardedRequest.url,
+    "http://bilishelf-mac.local/api/folders?uid=220174771",
+  );
+  assert.equal(forwardedRequest.headers.get("X-Forwarded-Client-IP"), "203.0.113.10");
 });
