@@ -16,6 +16,16 @@ Shiguang reads publicly accessible Bilibili favorite folders and builds a local 
 
 It requires no extension or Bilibili login and never modifies a favorite folder.
 
+## Screenshots
+
+### Random Memory and On This Day
+
+![Shiguang Random Memory and On This Day](./docs/images/shiguang-random-and-on-this-day.jpg)
+
+### Date search and timeline
+
+![Shiguang date search and timeline](./docs/images/shiguang-date-timeline.jpg)
+
 ## Getting started
 
 1. Open the [Shiguang web app](https://drivinggodj.github.io/BiliShelf/).

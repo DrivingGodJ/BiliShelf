@@ -16,6 +16,16 @@
 
 它不需要安装扩展，不要求登录 B站，也不会修改你的收藏夹。
 
+## 界面预览
+
+### 随机回忆与那年今日
+
+![拾光的随机回忆与那年今日界面](./docs/images/shiguang-random-and-on-this-day.jpg)
+
+### 日期检索与时间轴
+
+![拾光的日期检索与时间轴界面](./docs/images/shiguang-date-timeline.jpg)
+
 ## 开始使用
 
 1. 打开 [拾光网页版](https://drivinggodj.github.io/BiliShelf/)。
