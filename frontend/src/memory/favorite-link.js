@@ -3,6 +3,10 @@ const MEDIA_ID_PATTERNS = [
   /[?&#](?:fid|media_id)=(\d+)(?:&|#|$)/i,
 ];
 
+const LEGACY_OFFICIAL_PROXY_BASE_URLS = new Set([
+  "https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev",
+]);
+
 function positiveSafeInteger(value) {
   if (!/^\d{1,20}$/.test(String(value ?? ""))) return null;
   const number = Number(value);
@@ -72,6 +76,12 @@ export function normalizeProxyBaseUrl(input) {
   } catch {
     return "";
   }
+}
+
+export function migrateLegacyOfficialProxyBaseUrl(input, replacement) {
+  const current = normalizeProxyBaseUrl(input);
+  if (!LEGACY_OFFICIAL_PROXY_BASE_URLS.has(current)) return String(input ?? "").trim();
+  return normalizeProxyBaseUrl(replacement) || current;
 }
 
 export function buildFavoriteApiUrl(proxyBaseUrl, mediaId, page, pageSize = 40, fresh = false) {

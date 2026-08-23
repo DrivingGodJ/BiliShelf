@@ -32,6 +32,7 @@ import {
 } from "./db";
 import { formatCount, formatFavoriteDate } from "./format";
 import {
+  migrateLegacyOfficialProxyBaseUrl,
   normalizeProxyBaseUrl,
   parseBilibiliUid,
   parseFavoriteMediaId,
@@ -604,6 +605,14 @@ onMounted(async () => {
     settings.value = stored
       ? { ...DEFAULT_SETTINGS, ...stored }
       : { ...DEFAULT_SETTINGS, proxyBaseUrl: environmentProxy || localProxy };
+    const migratedProxyBaseUrl = migrateLegacyOfficialProxyBaseUrl(
+      settings.value.proxyBaseUrl,
+      environmentProxy,
+    );
+    if (migratedProxyBaseUrl !== settings.value.proxyBaseUrl) {
+      settings.value = { ...settings.value, proxyBaseUrl: migratedProxyBaseUrl };
+      await writeSettings(settings.value);
+    }
     linkInput.value = settings.value.collectionUrl;
     uidInput.value = settings.value.ownerMid ? String(settings.value.ownerMid) : "";
     proxyInput.value = settings.value.proxyBaseUrl || environmentProxy || localProxy;

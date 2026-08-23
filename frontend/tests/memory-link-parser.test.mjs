@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildFavoriteApiUrl,
   buildFavoriteFoldersApiUrl,
+  migrateLegacyOfficialProxyBaseUrl,
   normalizeProxyBaseUrl,
   parseBilibiliUid,
   parseFavoriteMediaId,
@@ -50,5 +51,20 @@ test("normalizes secure proxy URLs and creates a fixed route", () => {
   assert.equal(
     buildFavoriteFoldersApiUrl("https://worker.example.dev", 220174771),
     "https://worker.example.dev/api/folders?uid=220174771",
+  );
+});
+
+test("migrates only the retired official workers.dev proxy", () => {
+  const oldOfficialProxy = "https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev/";
+  const newOfficialProxy = "https://api.drivinggodj.dpdns.org";
+
+  assert.equal(migrateLegacyOfficialProxyBaseUrl(oldOfficialProxy, newOfficialProxy), newOfficialProxy);
+  assert.equal(
+    migrateLegacyOfficialProxyBaseUrl("https://self-hosted.example.com", newOfficialProxy),
+    "https://self-hosted.example.com",
+  );
+  assert.equal(
+    migrateLegacyOfficialProxyBaseUrl(oldOfficialProxy, ""),
+    "https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev",
   );
 });
