@@ -112,6 +112,6 @@ BILI_MEMORY_PROXY_URL=https://api.drivinggodj.dpdns.org
 
 ## 开源来源与新增内容
 
-拾光最初从 [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) 的开源分支发展而来。仓库保留了其浏览器扩展源码，并沿用了 Vue/Vite 工程配置、B站收藏夹列表与收藏内容接口的适配方式。
+拾光最初从 [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) 的开源分支发展而来，早期沿用了其 Vue/Vite 工程组织和 B站收藏夹接口适配方式。当前独立仓库只保留拾光网页、数据层与只读代理实现，原扩展和收藏管理中心源码已经移除。
 
-收藏日期检索、时间线、随机回忆、那年今日、UID 导入、PWA、本地 IndexedDB 数据结构以及只读数据代理由拾光新增实现。项目继续遵守仓库内的 MIT License，并保留原作者版权声明。
+收藏日期检索、时间线、随机回忆、那年今日、UID 导入、PWA、本地 IndexedDB 数据结构以及只读数据代理由拾光新增实现。项目继续遵守仓库内的 MIT License，并保留原作者版权声明与来源说明。

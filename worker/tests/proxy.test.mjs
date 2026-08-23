@@ -96,7 +96,7 @@ test("forwards only validated favorite requests through the Mac VPC binding", as
   assert.equal((await response.json()).code, 0);
   assert.equal(
     forwardedRequest.url,
-    "http://bilishelf-mac.local/api/favorites?mediaId=987654321&page=61&pageSize=40",
+    "http://shiguang-mac.local/api/favorites?mediaId=987654321&page=61&pageSize=40",
   );
   assert.equal(forwardedRequest.headers.get("Origin"), "https://example.github.io");
   assert.equal(forwardedRequest.headers.get("X-Forwarded-Client-IP"), "203.0.113.9");
@@ -125,7 +125,7 @@ test("bypasses both cache layers only for an explicit fresh favorite request", a
   assert.equal(response.headers.get("X-Memory-Cache"), "BYPASS");
   assert.equal(
     forwardedRequest.url,
-    "http://bilishelf-mac.local/api/favorites?mediaId=987654321&page=2&pageSize=40&fresh=1",
+    "http://shiguang-mac.local/api/favorites?mediaId=987654321&page=2&pageSize=40&fresh=1",
   );
 });
 
@@ -168,7 +168,7 @@ test("forwards only a validated UID for folder discovery through the Mac VPC bin
   assert.equal((await response.json()).code, 0);
   assert.equal(
     forwardedRequest.url,
-    "http://bilishelf-mac.local/api/folders?uid=123456789",
+    "http://shiguang-mac.local/api/folders?uid=123456789",
   );
   assert.equal(forwardedRequest.headers.get("X-Forwarded-Client-IP"), "203.0.113.10");
 });

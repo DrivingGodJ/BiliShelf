@@ -183,7 +183,7 @@ const server = http.createServer(async (nodeRequest, nodeResponse) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(JSON.stringify({ message: "BiliShelf Mac proxy listening", host: HOST, port: PORT }));
+  console.log(JSON.stringify({ message: "Shiguang Mac proxy listening", host: HOST, port: PORT }));
 });
 
 function shutdown() {

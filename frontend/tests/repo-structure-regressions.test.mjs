@@ -25,6 +25,14 @@ test("repo no longer includes the local backend project", async () => {
   assert.equal(await repoPathExists("backend"), false);
 });
 
+test("repo contains only the Shiguang web app, not the old extension or manager", async () => {
+  assert.equal(await repoPathExists("extension"), false);
+  assert.equal(await repoPathExists("frontend", "src", "manager-main.ts"), false);
+  assert.equal(await repoPathExists("frontend", "src", "components"), false);
+  assert.equal(await repoPathExists("frontend", "src", "stores"), false);
+  assert.equal(await repoPathExists("frontend", "src", "memory", "MemoryApp.vue"), true);
+});
+
 test("frontend dev config no longer defaults to the removed local backend proxy", async () => {
   const viteConfigSource = await readRepoText("frontend", "vite.config.ts");
 
@@ -34,15 +42,11 @@ test("frontend dev config no longer defaults to the removed local backend proxy"
 test("current readmes no longer tell contributors to run backend commands", async () => {
   const readmeZh = await readRepoText("README.md");
   const readmeEn = await readRepoText("README.en.md");
-  const extensionReadme = (await repoPathExists("extension", "README.md"))
-    ? await readRepoText("extension", "README.md")
-    : "";
 
   assert.doesNotMatch(readmeZh, /pnpm --dir backend/);
   assert.doesNotMatch(readmeZh, /backend\/\s+#/);
   assert.doesNotMatch(readmeEn, /pnpm --dir backend/);
   assert.doesNotMatch(readmeEn, /backend\/\s+# API service/);
-  assert.doesNotMatch(extensionReadme, /`backend\/`/);
 });
 
 test("public docs use only the custom production endpoint and neutral folder examples", async () => {

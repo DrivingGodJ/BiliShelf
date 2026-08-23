@@ -987,7 +987,7 @@ onBeforeUnmount(() => {
     </template>
 
     <footer class="site-footer">
-      <span>拾光沿用了 <a href="https://github.com/TLRKFXE/BiliShelf" target="_blank" rel="noreferrer">BiliShelf</a> 的 Vue/Vite 工程配置与 B站收藏接口适配；日期检索、随机回忆、那年今日、PWA 与代理为本项目新增实现。</span>
+      <span>拾光的 B站收藏接口适配源自 <a href="https://github.com/TLRKFXE/BiliShelf" target="_blank" rel="noreferrer">BiliShelf</a> 的开源实践；当前网页、数据层与代理为拾光独立实现。</span>
       <span>收藏数据属于你，也只留在你这里。</span>
     </footer>
 

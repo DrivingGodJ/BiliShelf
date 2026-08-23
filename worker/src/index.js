@@ -83,7 +83,7 @@ function corsHeaders(origin) {
 
 async function forwardRequestToMac(request, env) {
   const incoming = new URL(request.url);
-  const privateUrl = new URL(`http://bilishelf-mac.local${incoming.pathname}`);
+  const privateUrl = new URL(`http://shiguang-mac.local${incoming.pathname}`);
   if (incoming.pathname === "/api/favorites") {
     privateUrl.searchParams.set("mediaId", incoming.searchParams.get("mediaId"));
     privateUrl.searchParams.set("page", incoming.searchParams.get("page") || "1");
@@ -134,13 +134,13 @@ export async function handleRequest(request, env = {}, context = {}) {
           error: error instanceof Error ? error.message : String(error),
         }));
         return json(
-          { ok: false, service: "bilishelf-memory-proxy", message: "Mac 代理当前不可用" },
+          { ok: false, service: "shiguang-memory-proxy", message: "Mac 代理当前不可用" },
           { status: 503, headers: { ...corsHeaders(allowedOrigin), "Cache-Control": "no-store" } },
         );
       }
     }
     return json(
-      { ok: true, service: "bilishelf-memory-mac-proxy" },
+      { ok: true, service: "shiguang-memory-mac-proxy" },
       { headers: { ...corsHeaders(allowedOrigin), "Cache-Control": "no-store" } },
     );
   }

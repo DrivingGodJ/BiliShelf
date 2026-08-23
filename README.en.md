@@ -111,8 +111,8 @@ See [MEMORY_WEB.md](./MEMORY_WEB.md) for the complete self-hosting notes. Never 
 
 ## Open-source lineage and new work
 
-Shiguang originated as an open-source fork of [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf). This repository retains its browser-extension source and reuses its Vue/Vite project configuration and its adaptation of Bilibili's favorite-folder and favorite-item APIs.
+Shiguang originated as an open-source fork of [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf), initially carrying forward its Vue/Vite project structure and its adaptation of Bilibili's favorite-folder APIs. This standalone repository now contains only the Shiguang web app, local data layer, and read-only proxy; the original extension and collection manager source have been removed.
 
-The Shiguang web app's date search, timeline, random memories, On This Day view, UID import, PWA support, local IndexedDB schema, and read-only data proxy were added in this project. The repository continues to follow the MIT License and retains the original copyright notice.
+The Shiguang web app's date search, timeline, random memories, On This Day view, UID import, PWA support, local IndexedDB schema, and read-only data proxy were added in this project. The repository continues to follow the MIT License and retains the original copyright and lineage notices.
 
 [MIT License](./LICENSE)
