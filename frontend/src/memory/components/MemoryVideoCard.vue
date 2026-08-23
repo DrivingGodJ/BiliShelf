@@ -8,10 +8,6 @@ const props = defineProps<{
   video: MemoryVideo;
 }>();
 
-const emit = defineEmits<{
-  remember: [MemoryVideo];
-}>();
-
 const coverUrl = computed(() => props.video.coverUrl || "");
 
 function handleImageError(event: Event) {
@@ -23,11 +19,12 @@ function handleImageError(event: Event) {
 
 <template>
 <article class="memory-card">
-  <button
-    type="button"
+  <a
     class="memory-card__cover"
-    :aria-label="`回忆 ${video.title}`"
-    @click="emit('remember', video)"
+    :href="video.videoUrl"
+    target="_blank"
+    rel="noreferrer"
+    :aria-label="`打开 ${video.title}`"
   >
     <img
       v-if="coverUrl"
@@ -39,7 +36,7 @@ function handleImageError(event: Event) {
     />
     <span v-if="video.duration" class="memory-card__duration">{{ formatDuration(video.duration) }}</span>
     <span class="memory-card__date-stamp">{{ formatFavoriteDate(video.favoriteAt) }}</span>
-  </button>
+  </a>
 
   <div class="memory-card__body">
     <div class="memory-card__eyebrow">

@@ -18,4 +18,10 @@ export function pickRandomMemory(
   previousKey?: string,
   random?: () => number,
 ): MemoryVideo | null;
+export function pickRandomMemories(
+  items: MemoryVideo[],
+  count?: number,
+  excludedKeys?: string[],
+  random?: () => number,
+): MemoryVideo[];
 export function memoriesOnThisDay(items: MemoryVideo[], now?: number): MemoryVideo[];

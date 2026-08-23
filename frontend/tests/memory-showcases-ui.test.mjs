@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const frontendRoot = new URL("../", import.meta.url);
+
+test("memory home renders a full random page with one whole-page refresh action", async () => {
+  const source = await readFile(new URL("src/memory/MemoryApp.vue", frontendRoot), "utf8");
+
+  assert.match(source, /const RANDOM_MEMORY_PAGE_SIZE = 4/);
+  assert.match(source, /v-for="video in randomMemories"/);
+  assert.match(source, /@click="refreshRandomMemories\(\)"/);
+  assert.match(source, />\s*换一组\s*</);
+  assert.doesNotMatch(source, /randomFromCurrent|RandomMemoryDialog/);
+});
+
+test("on-this-day memories render every matching year and every item in that year", async () => {
+  const source = await readFile(new URL("src/memory/MemoryApp.vue", frontendRoot), "utf8");
+
+  assert.match(source, /v-for="group in todayMemoryGroups"/);
+  assert.match(source, /v-for="video in group\.items"/);
+  assert.match(source, /\{\{ group\.year \}\}/);
+  assert.match(source, /已按年份全部展开/);
+});
+
+test("visible memory covers open Bilibili directly instead of a detail dialog", async () => {
+  const card = await readFile(
+    new URL("src/memory/components/MemoryVideoCard.vue", frontendRoot),
+    "utf8",
+  );
+
+  assert.match(card, /<a\s+[\s\S]*:href="video\.videoUrl"/);
+  assert.doesNotMatch(card, /emit\('remember'/);
+});

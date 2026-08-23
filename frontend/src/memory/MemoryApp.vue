@@ -40,7 +40,7 @@ import {
 import {
   filterMemories,
   memoriesOnThisDay,
-  pickRandomMemory,
+  pickRandomMemories,
   shanghaiDateKey,
   shanghaiDateParts,
 } from "./memory-filters.js";
@@ -50,7 +50,6 @@ import {
   shouldReconcileFavoriteSync,
 } from "./sync-pagination.js";
 import MemoryVideoCard from "./components/MemoryVideoCard.vue";
-import RandomMemoryDialog from "./components/RandomMemoryDialog.vue";
 import type {
   BilibiliFavoritesResponse,
   BilibiliFavoriteFolder,
@@ -98,14 +97,32 @@ const selectedMonth = ref(0);
 const selectedDay = ref(0);
 const viewMode = ref<"timeline" | "grid">("timeline");
 const visibleCount = ref(60);
-const randomVideo = ref<MemoryVideo | null>(null);
-const randomSourceLabel = ref("从全部收藏中随机抽取");
-const previousRandomKey = ref("");
-const randomPoolMode = ref<"current" | "today">("current");
+const randomMemories = ref<MemoryVideo[]>([]);
+const randomPage = ref(0);
 let syncController: AbortController | null = null;
 
+const RANDOM_MEMORY_PAGE_SIZE = 4;
+const today = shanghaiDateParts(Date.now());
+
 const activeVideos = computed(() => videos.value.filter((item) => item.active));
-const archivedCount = computed(() => videos.value.length - activeVideos.value.length);
+const todayLabel = `${today.month} 月 ${today.day} 日`;
+
+const todayMemoryGroups = computed(() => {
+  const groups = new Map<number, MemoryVideo[]>();
+  for (const video of memoriesOnThisDay(activeVideos.value)) {
+    const year = shanghaiDateParts(video.favoriteAt).year;
+    const items = groups.get(year) ?? [];
+    items.push(video);
+    groups.set(year, items);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => right - left)
+    .map(([year, items]) => ({ year, items }));
+});
+
+const todayMemoryCount = computed(() =>
+  todayMemoryGroups.value.reduce((total, group) => total + group.items.length, 0),
+);
 
 const years = computed(() => {
   const result = new Set<number>();
@@ -195,6 +212,20 @@ watch(selectedMonth, () => {
 watch([query, selectedYear, selectedMonth, selectedDay, viewMode], () => {
   visibleCount.value = 60;
 });
+
+watch(
+  () => activeVideos.value.map((video) => video.key).join("|"),
+  () => {
+    const activeKeys = new Set(activeVideos.value.map((video) => video.key));
+    if (
+      !randomMemories.value.length ||
+      randomMemories.value.some((video) => !activeKeys.has(video.key))
+    ) {
+      refreshRandomMemories(true);
+    }
+  },
+  { immediate: true },
+);
 
 function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -544,62 +575,25 @@ function resetFilters() {
   selectedDay.value = 0;
 }
 
-function showRandom(video: MemoryVideo, sourceLabel: string) {
-  randomVideo.value = video;
-  previousRandomKey.value = video.key;
-  randomSourceLabel.value = sourceLabel;
-}
-
-function randomFromCurrent() {
-  const pool = filteredVideos.value.length ? filteredVideos.value : activeVideos.value;
-  const video = pickRandomMemory(pool, previousRandomKey.value);
-  if (!video) {
-    errorMessage.value = "还没有可以抽取的收藏，请先同步。";
+function refreshRandomMemories(resetPage = false) {
+  if (!activeVideos.value.length) {
+    randomMemories.value = [];
+    randomPage.value = 0;
     return;
   }
-  randomPoolMode.value = "current";
-  showRandom(video, filteredVideos.value.length === activeVideos.value.length
-    ? "从全部收藏中随机抽取"
-    : `从“${filterDescription.value}”中随机抽取`);
-}
-
-function randomOnThisDay() {
-  const pool = memoriesOnThisDay(activeVideos.value);
-  if (!pool.length) {
-    noticeMessage.value = "往年的今天没有收藏记录，替你从全部时光里抽了一段。";
-    randomFromCurrent();
-    return;
-  }
-  const video = pickRandomMemory(pool, previousRandomKey.value);
-  if (video) {
-    randomPoolMode.value = "today";
-    showRandom(video, `那年今日 · 共找到 ${pool.length} 段回忆`);
-  }
-}
-
-function rememberVideo(video: MemoryVideo) {
-  randomPoolMode.value = "current";
-  showRandom(video, "你从时间轴中翻到的回忆");
-}
-
-function randomAgain() {
-  if (randomPoolMode.value === "today") {
-    randomOnThisDay();
-    return;
-  }
-  randomFromCurrent();
+  randomMemories.value = pickRandomMemories(
+    activeVideos.value,
+    RANDOM_MEMORY_PAGE_SIZE,
+    resetPage ? [] : randomMemories.value.map((video) => video.key),
+  );
+  randomPage.value = resetPage ? 1 : randomPage.value + 1;
 }
 
 function loadMore() {
   visibleCount.value += 60;
 }
 
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") randomVideo.value = null;
-}
-
 onMounted(async () => {
-  window.addEventListener("keydown", handleKeydown);
   try {
     const stored = await readSettings();
     settings.value = stored
@@ -630,7 +624,6 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleKeydown);
   syncController?.abort();
 });
 </script>
@@ -830,26 +823,70 @@ onBeforeUnmount(() => {
         <p v-if="errorMessage" class="message message--error">{{ errorMessage }}</p>
         <p v-if="noticeMessage" class="message message--notice">{{ noticeMessage }}</p>
 
-        <section class="memory-hero">
-          <div class="memory-hero__copy">
-            <p class="kicker"><Sparkles :size="16" /> 今天想回到什么时候？</p>
-            <h2>抽一段过去，<br />看看当时的你喜欢什么。</h2>
-            <p>随机不是漫无目的，它只是替你打开一扇很久没碰过的门。</p>
-            <div class="memory-hero__actions">
-              <button type="button" class="button button--memory" @click="randomFromCurrent">
-                <Dice5 :size="19" /> 随机回忆
-              </button>
-              <button type="button" class="button button--quiet-on-dark" @click="randomOnThisDay">
-                <CalendarClock :size="18" /> 那年今日
-              </button>
+        <div class="memory-showcases">
+          <section class="memory-showcase memory-showcase--random" aria-labelledby="random-memories-title">
+            <header class="memory-showcase__header">
+              <div class="memory-showcase__heading">
+                <span class="memory-showcase__icon"><Dice5 :size="22" /></span>
+                <div>
+                  <p class="kicker">从 {{ formatCount(activeVideos.length) }} 段收藏中抽取</p>
+                  <h2 id="random-memories-title">随机回忆</h2>
+                  <p>一次翻出一整组，换组时尽量不重复上一页。</p>
+                </div>
+              </div>
+              <div class="memory-showcase__actions">
+                <span v-if="randomPage">第 {{ randomPage }} 组</span>
+                <button type="button" class="button button--memory" @click="refreshRandomMemories()">
+                  <RefreshCcw :size="17" /> 换一组
+                </button>
+              </div>
+            </header>
+
+            <div v-if="randomMemories.length" class="memory-showcase__grid">
+              <MemoryVideoCard
+                v-for="video in randomMemories"
+                :key="video.key"
+                :video="video"
+              />
             </div>
-          </div>
-          <div class="memory-hero__numbers">
-            <div><strong>{{ formatCount(activeVideos.length) }}</strong><span>段仍在收藏的记忆</span></div>
-            <div><strong>{{ years.length }}</strong><span>个年份可以重访</span></div>
-            <div v-if="archivedCount"><strong>{{ archivedCount }}</strong><span>段已取消但仍留档</span></div>
-          </div>
-        </section>
+            <div v-else class="memory-showcase__empty">同步收藏后，这里会直接排出一组随机回忆。</div>
+          </section>
+
+          <section class="memory-showcase memory-showcase--today" aria-labelledby="today-memories-title">
+            <header class="memory-showcase__header">
+              <div class="memory-showcase__heading">
+                <span class="memory-showcase__icon"><CalendarClock :size="22" /></span>
+                <div>
+                  <p class="kicker">{{ todayLabel }}</p>
+                  <h2 id="today-memories-title">那年今日</h2>
+                  <p v-if="todayMemoryCount">
+                    {{ todayMemoryGroups.length }} 个年份·{{ formatCount(todayMemoryCount) }} 段回忆，已按年份全部展开。
+                  </p>
+                  <p v-else>往年的今天还没有收藏记录。</p>
+                </div>
+              </div>
+            </header>
+
+            <div v-if="todayMemoryGroups.length" class="today-memory-years">
+              <section v-for="group in todayMemoryGroups" :key="group.year" class="today-memory-year">
+                <div class="today-memory-year__label">
+                  <strong>{{ group.year }}</strong>
+                  <span>{{ group.items.length }} 段</span>
+                </div>
+                <div class="memory-showcase__grid">
+                  <MemoryVideoCard
+                    v-for="video in group.items"
+                    :key="video.key"
+                    :video="video"
+                  />
+                </div>
+              </section>
+            </div>
+            <div v-else class="memory-showcase__empty">
+              到了有记录的日子，不同年份的同一天会一起出现在这里。
+            </div>
+          </section>
+        </div>
 
         <section class="filter-panel">
           <div class="search-field">
@@ -913,7 +950,6 @@ onBeforeUnmount(() => {
               v-for="video in visibleVideos"
               :key="video.key"
               :video="video"
-              @remember="rememberVideo"
             />
           </div>
 
@@ -929,7 +965,6 @@ onBeforeUnmount(() => {
                   v-for="video in group.items"
                   :key="video.key"
                   :video="video"
-                  @remember="rememberVideo"
                 />
               </div>
             </section>
@@ -956,12 +991,5 @@ onBeforeUnmount(() => {
       <span>收藏数据属于你，也只留在你这里。</span>
     </footer>
 
-    <RandomMemoryDialog
-      v-if="randomVideo"
-      :video="randomVideo"
-      :source-label="randomSourceLabel"
-      @close="randomVideo = null"
-      @again="randomAgain"
-    />
   </main>
 </template>

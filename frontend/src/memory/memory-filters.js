@@ -61,6 +61,38 @@ export function pickRandomMemory(items, previousKey = "", random = Math.random) 
   return pool[index] ?? null;
 }
 
+export function pickRandomMemories(
+  items,
+  count = 4,
+  excludedKeys = [],
+  random = Math.random,
+) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const limit = Math.max(0, Math.min(items.length, Math.floor(Number(count) || 0)));
+  if (!limit) return [];
+
+  const seenKeys = new Set();
+  const uniqueItems = items.filter((item) => {
+    if (!item?.key || seenKeys.has(item.key)) return false;
+    seenKeys.add(item.key);
+    return true;
+  });
+  const excluded = new Set(excludedKeys);
+
+  function shuffled(values) {
+    const result = [...values];
+    for (let index = result.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.min(index, Math.floor(random() * (index + 1)));
+      [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+    }
+    return result;
+  }
+
+  const fresh = shuffled(uniqueItems.filter((item) => !excluded.has(item.key)));
+  const previous = shuffled(uniqueItems.filter((item) => excluded.has(item.key)));
+  return [...fresh, ...previous].slice(0, limit);
+}
+
 export function memoriesOnThisDay(items, now = Date.now()) {
   const today = shanghaiDateParts(now);
   return items.filter((item) => {

@@ -4,6 +4,7 @@ import {
   filterMemories,
   memoriesOnThisDay,
   pickRandomMemory,
+  pickRandomMemories,
   shanghaiDateKey,
 } from "../src/memory/memory-filters.js";
 
@@ -53,6 +54,19 @@ test("uses Asia/Shanghai rather than UTC for date keys", () => {
 test("random memory avoids the previous item when alternatives exist", () => {
   assert.equal(pickRandomMemory(items.slice(0, 2), "one", () => 0)?.key, "two");
   assert.equal(pickRandomMemory([], "", () => 0), null);
+});
+
+test("random memory pages replace the whole visible group before repeating", () => {
+  const memories = Array.from({ length: 8 }, (_, index) => ({ key: `memory-${index + 1}` }));
+  const firstPage = pickRandomMemories(memories, 4, [], () => 0);
+  const secondPage = pickRandomMemories(memories, 4, firstPage.map((item) => item.key), () => 0);
+
+  assert.equal(firstPage.length, 4);
+  assert.equal(secondPage.length, 4);
+  assert.deepEqual(
+    secondPage.filter((item) => firstPage.some((previous) => previous.key === item.key)),
+    [],
+  );
 });
 
 test("finds memories from the same month and day in earlier years", () => {
