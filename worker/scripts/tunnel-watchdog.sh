@@ -2,7 +2,7 @@
 
 set -u
 
-HEALTH_URL="https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev/api/health"
+HEALTH_URL="https://api.drivinggodj.dpdns.org/api/health"
 ALLOWED_ORIGIN="https://drivinggodj.github.io"
 TUNNEL_LABEL="com.drivinggodj.bilishelf-tunnel"
 RESTART_COOLDOWN_SECONDS=600

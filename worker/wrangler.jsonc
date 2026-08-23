@@ -2,7 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "bilishelf-memory-proxy",
   "main": "src/index.js",
-  "workers_dev": true,
+  "workers_dev": false,
+  "preview_urls": false,
   "compatibility_date": "2026-08-23",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {

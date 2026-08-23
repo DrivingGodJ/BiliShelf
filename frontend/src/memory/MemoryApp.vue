@@ -673,7 +673,7 @@ onBeforeUnmount(() => {
                   type="text"
                   inputmode="numeric"
                   autocomplete="off"
-                  placeholder="例如 220174771"
+                  placeholder="输入数字 UID"
                   :disabled="syncing || folderLoading"
                 />
                 <button type="submit" class="button button--primary" :disabled="syncing || folderLoading">
@@ -752,7 +752,7 @@ onBeforeUnmount(() => {
                   id="proxy-url"
                   v-model="proxyInput"
                   type="url"
-                  placeholder="https://your-worker.workers.dev"
+                  placeholder="https://api.example.com"
                   :disabled="syncing"
                 />
                 <button type="button" class="button button--quiet" @click="saveProxy">保存</button>

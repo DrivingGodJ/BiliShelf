@@ -18,7 +18,7 @@ GitHub Pages 前端
 
 网页不会接收或保存 B站 Cookie，也不会移动、删除或新增 B站收藏。私密收藏夹不能仅凭链接读取，第一版只支持公开收藏夹。
 
-Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。生产接口使用自定义域名并保留备用入口；它不使用 Browser Rendering 时长。
+Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。生产接口仅使用自定义域名；它不使用 Browser Rendering 时长。
 
 ## 本地运行
 
@@ -45,7 +45,7 @@ pnpm web:dev
 
 ## 当前线上部署
 
-线上主入口是 `https://api.drivinggodj.dpdns.org`，并保留 `https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev` 作为备用。两个入口都只开放三个 GET 路由：
+线上唯一入口是 `https://api.drivinggodj.dpdns.org`，只开放三个 GET 路由：
 
 - `/api/health`（也兼容 `/health`）
 - `/api/folders?uid=...`
