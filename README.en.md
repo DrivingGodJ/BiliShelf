@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://drivinggodj.github.io/BiliShelf/"><strong>Open Shiguang</strong></a>
+  <a href="https://drivinggodj.github.io/shiguang-memory/"><strong>Open Shiguang</strong></a>
 </p>
 
 ## What it is
@@ -28,7 +28,7 @@ It requires no extension or Bilibili login and never modifies a favorite folder.
 
 ## Getting started
 
-1. Open the [Shiguang web app](https://drivinggodj.github.io/BiliShelf/).
+1. Open the [Shiguang web app](https://drivinggodj.github.io/shiguang-memory/).
 2. Enter a Bilibili UID or profile URL and select a public favorite folder.
 3. Alternatively, expand link import and paste a public favorite-folder URL.
 4. Keep the page open for the first full sync, then browse by date or search.

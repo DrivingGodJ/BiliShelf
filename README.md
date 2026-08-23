@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://drivinggodj.github.io/BiliShelf/"><strong>立即打开拾光</strong></a>
+  <a href="https://drivinggodj.github.io/shiguang-memory/"><strong>立即打开拾光</strong></a>
 </p>
 
 ## 这是什么
@@ -28,7 +28,7 @@
 
 ## 开始使用
 
-1. 打开 [拾光网页版](https://drivinggodj.github.io/BiliShelf/)。
+1. 打开 [拾光网页版](https://drivinggodj.github.io/shiguang-memory/)。
 2. 输入 B站 UID（也支持个人空间链接），点击“查找收藏夹”。
 3. 从账号下可公开访问的收藏夹中选择一个导入。也可以展开“链接导入”，粘贴任意公开收藏夹链接（格式：`https://www.bilibili.com/list/ml{收藏夹ID}`）。
 4. 等待第一次完整同步，然后按年份、月份或日期开始回看。
