@@ -29,6 +29,7 @@ export type MemorySettings = {
   mediaCount: number;
   proxyBaseUrl: string;
   lastSyncAt: number | null;
+  removalSyncVersion: number;
 };
 
 export type BilibiliFavoriteFolder = {

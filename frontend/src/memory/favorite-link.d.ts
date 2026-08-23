@@ -6,5 +6,6 @@ export function buildFavoriteApiUrl(
   mediaId: number,
   page: number,
   pageSize?: number,
+  fresh?: boolean,
 ): string;
 export function buildFavoriteFoldersApiUrl(proxyBaseUrl: string, uid: number): string;

@@ -44,6 +44,10 @@ test("normalizes secure proxy URLs and creates a fixed route", () => {
     "https://worker.example.dev/api/favorites?mediaId=47438371&page=2&pageSize=40",
   );
   assert.equal(
+    buildFavoriteApiUrl("https://worker.example.dev", 47438371, 2, 40, true),
+    "https://worker.example.dev/api/favorites?mediaId=47438371&page=2&pageSize=40&fresh=1",
+  );
+  assert.equal(
     buildFavoriteFoldersApiUrl("https://worker.example.dev", 220174771),
     "https://worker.example.dev/api/folders?uid=220174771",
   );

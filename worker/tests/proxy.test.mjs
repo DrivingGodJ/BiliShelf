@@ -4,6 +4,7 @@ import {
   buildFoldersUpstreamUrl,
   buildUpstreamUrl,
   handleRequest,
+  parseFreshFlag,
   parsePositiveInteger,
 } from "../src/index.js";
 
@@ -12,6 +13,12 @@ test("validates positive integers and limits", () => {
   assert.equal(parsePositiveInteger("41", { max: 40 }), null);
   assert.equal(parsePositiveInteger("1.5"), null);
   assert.equal(parsePositiveInteger("-1"), null);
+});
+
+test("accepts only the explicit cache-bypass flag", () => {
+  assert.equal(parseFreshFlag(null), false);
+  assert.equal(parseFreshFlag("1"), true);
+  assert.throws(() => parseFreshFlag("true"), /fresh/);
 });
 
 test("builds only the fixed Bilibili favorites endpoint", () => {
@@ -93,6 +100,45 @@ test("forwards only validated favorite requests through the Mac VPC binding", as
   );
   assert.equal(forwardedRequest.headers.get("Origin"), "https://example.github.io");
   assert.equal(forwardedRequest.headers.get("X-Forwarded-Client-IP"), "203.0.113.9");
+});
+
+test("bypasses both cache layers only for an explicit fresh favorite request", async () => {
+  let forwardedRequest;
+  const response = await handleRequest(
+    new Request(
+      "https://memory.example/api/favorites?mediaId=47438371&page=2&pageSize=40&fresh=1&url=https://evil.example",
+      { headers: { Origin: "https://example.github.io" } },
+    ),
+    {
+      ALLOWED_ORIGINS: "https://example.github.io",
+      MAC_PROXY: {
+        async fetch(request) {
+          forwardedRequest = request;
+          return Response.json({ code: 0, data: { medias: [] } });
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.equal(response.headers.get("X-Memory-Cache"), "BYPASS");
+  assert.equal(
+    forwardedRequest.url,
+    "http://bilishelf-mac.local/api/favorites?mediaId=47438371&page=2&pageSize=40&fresh=1",
+  );
+});
+
+test("rejects malformed cache-bypass flags", async () => {
+  const response = await handleRequest(
+    new Request(
+      "https://memory.example/api/favorites?mediaId=47438371&fresh=true",
+      { headers: { Origin: "https://example.github.io" } },
+    ),
+    { ALLOWED_ORIGINS: "https://example.github.io" },
+  );
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).message, /fresh/);
 });
 
 test("forwards only a validated UID for folder discovery through the Mac VPC binding", async () => {

@@ -16,6 +16,12 @@ export function parsePositiveInteger(value, { min = 1, max = Number.MAX_SAFE_INT
   return number;
 }
 
+export function parseFreshFlag(value) {
+  if (value === null || value === undefined || value === "") return false;
+  if (value === "1") return true;
+  throw new Error("fresh 只允许使用值 1");
+}
+
 export function buildUpstreamUrl(requestUrl) {
   const incoming = new URL(requestUrl);
   const mediaId = parsePositiveInteger(incoming.searchParams.get("mediaId"), {
@@ -82,6 +88,9 @@ async function forwardRequestToMac(request, env) {
     privateUrl.searchParams.set("mediaId", incoming.searchParams.get("mediaId"));
     privateUrl.searchParams.set("page", incoming.searchParams.get("page") || "1");
     privateUrl.searchParams.set("pageSize", incoming.searchParams.get("pageSize") || "40");
+    if (incoming.searchParams.get("fresh") === "1") {
+      privateUrl.searchParams.set("fresh", "1");
+    }
   } else if (incoming.pathname === "/api/folders") {
     privateUrl.searchParams.set("uid", incoming.searchParams.get("uid"));
   }
@@ -144,10 +153,14 @@ export async function handleRequest(request, env = {}, context = {}) {
   }
 
   let upstreamUrl;
+  let bypassCache = false;
   try {
     upstreamUrl = url.pathname === "/api/folders"
       ? buildFoldersUpstreamUrl(request.url)
       : buildUpstreamUrl(request.url);
+    bypassCache = url.pathname === "/api/favorites"
+      ? parseFreshFlag(url.searchParams.get("fresh"))
+      : false;
   } catch (error) {
     return json(
       { code: -400, message: error instanceof Error ? error.message : "参数错误" },
@@ -155,7 +168,7 @@ export async function handleRequest(request, env = {}, context = {}) {
     );
   }
 
-  const cache = globalThis.caches?.default;
+  const cache = bypassCache ? null : globalThis.caches?.default;
   const cacheKey = new Request(request.url, { method: "GET" });
   const cached = cache ? await cache.match(cacheKey) : null;
   if (cached) {
@@ -196,11 +209,13 @@ export async function handleRequest(request, env = {}, context = {}) {
     headers: {
       ...corsHeaders(allowedOrigin),
       "Content-Type": contentType,
-      "Cache-Control": url.pathname === "/api/folders"
-        ? "public, max-age=60, s-maxage=300"
-        : "public, max-age=30, s-maxage=60",
+      "Cache-Control": bypassCache
+        ? "no-store"
+        : url.pathname === "/api/folders"
+          ? "public, max-age=60, s-maxage=300"
+          : "public, max-age=30, s-maxage=60",
       "X-Content-Type-Options": "nosniff",
-      "X-Memory-Cache": "MISS",
+      "X-Memory-Cache": bypassCache ? "BYPASS" : "MISS",
     },
   });
 

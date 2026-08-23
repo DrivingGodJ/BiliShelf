@@ -85,7 +85,7 @@ export async function upsertVideos(items: MemoryVideo[]): Promise<void> {
   await transactionDone(transaction);
 }
 
-export async function markMissingVideosInactive(mediaId: number, seenKeys: Set<string>): Promise<void> {
+export async function markMissingVideosInactive(mediaId: number, seenKeys: Set<string>): Promise<number> {
   const database = await openMemoryDatabase();
   const readTransaction = database.transaction(VIDEO_STORE, "readonly");
   const existing = await requestResult(
@@ -93,7 +93,7 @@ export async function markMissingVideosInactive(mediaId: number, seenKeys: Set<s
   );
 
   const missing = existing.filter((item) => item.active && !seenKeys.has(item.key));
-  if (!missing.length) return;
+  if (!missing.length) return 0;
 
   const writeTransaction = database.transaction(VIDEO_STORE, "readwrite");
   const store = writeTransaction.objectStore(VIDEO_STORE);
@@ -102,6 +102,7 @@ export async function markMissingVideosInactive(mediaId: number, seenKeys: Set<s
     store.put({ ...item, active: false, lastSeenAt: now });
   }
   await transactionDone(writeTransaction);
+  return missing.length;
 }
 
 export async function clearCollection(mediaId: number): Promise<void> {

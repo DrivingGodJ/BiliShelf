@@ -27,12 +27,19 @@ export async function fetchFavoritePage(options: {
   proxyBaseUrl: string;
   mediaId: number;
   page: number;
+  fresh?: boolean;
   signal?: AbortSignal;
 }): Promise<BilibiliFavoritesResponse> {
   const proxyBaseUrl = normalizeProxyBaseUrl(options.proxyBaseUrl);
   if (!proxyBaseUrl) throw new FavoriteApiError("请先配置有效的只读数据代理地址");
 
-  const url = buildFavoriteApiUrl(proxyBaseUrl, options.mediaId, options.page, PAGE_SIZE);
+  const url = buildFavoriteApiUrl(
+    proxyBaseUrl,
+    options.mediaId,
+    options.page,
+    PAGE_SIZE,
+    options.fresh,
+  );
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "application/json" },

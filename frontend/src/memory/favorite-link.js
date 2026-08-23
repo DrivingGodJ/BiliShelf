@@ -74,7 +74,7 @@ export function normalizeProxyBaseUrl(input) {
   }
 }
 
-export function buildFavoriteApiUrl(proxyBaseUrl, mediaId, page, pageSize = 40) {
+export function buildFavoriteApiUrl(proxyBaseUrl, mediaId, page, pageSize = 40, fresh = false) {
   const base = normalizeProxyBaseUrl(proxyBaseUrl);
   if (!base) throw new Error("请先配置只读数据代理地址");
 
@@ -84,6 +84,7 @@ export function buildFavoriteApiUrl(proxyBaseUrl, mediaId, page, pageSize = 40) 
   url.searchParams.set("mediaId", String(mediaId));
   url.searchParams.set("page", String(page));
   url.searchParams.set("pageSize", String(pageSize));
+  if (fresh) url.searchParams.set("fresh", "1");
   return url.pathname.startsWith("/api/") && base.startsWith("/")
     ? `${url.pathname}${url.search}`
     : url.toString();

@@ -43,7 +43,11 @@ import {
   shanghaiDateKey,
   shanghaiDateParts,
 } from "./memory-filters.js";
-import { shouldContinueFavoriteSync } from "./sync-pagination.js";
+import {
+  FAVORITE_REMOVAL_SYNC_VERSION,
+  shouldContinueFavoriteSync,
+  shouldReconcileFavoriteSync,
+} from "./sync-pagination.js";
 import MemoryVideoCard from "./components/MemoryVideoCard.vue";
 import RandomMemoryDialog from "./components/RandomMemoryDialog.vue";
 import type {
@@ -64,6 +68,7 @@ const DEFAULT_SETTINGS: MemorySettings = {
   mediaCount: 0,
   proxyBaseUrl: "",
   lastSyncAt: null,
+  removalSyncVersion: 0,
 };
 
 const environmentProxy = String(import.meta.env.VITE_PUBLIC_PROXY_URL || "").trim();
@@ -255,10 +260,16 @@ async function syncCollection(options: {
   const seenKeys = new Set<string>();
   const firstSync = existing.length === 0;
   const effectiveMode = firstSync ? "full" : options.mode;
+  const previousSettings = { ...settings.value };
+  const needsRemovalBaseline = previousSettings.removalSyncVersion
+    < FAVORITE_REMOVAL_SYNC_VERSION;
   let page = 1;
   let fetched = 0;
   let total = settings.value.mediaCount || 0;
+  const previousRemoteCount = total;
   let nextSettings = { ...settings.value };
+  let reconcilingRemovals = false;
+  let removedCount = 0;
 
   try {
     while (true) {
@@ -274,6 +285,7 @@ async function syncCollection(options: {
         proxyBaseUrl: options.proxyBaseUrl,
         mediaId: options.mediaId,
         page,
+        fresh: !firstSync,
         signal,
       });
 
@@ -289,7 +301,7 @@ async function syncCollection(options: {
         settings.value = nextSettings;
         setupMode.value = false;
         linkInput.value = nextSettings.collectionUrl;
-        await writeSettings(nextSettings);
+        if (firstSync) await writeSettings(nextSettings);
       }
 
       const rawItems = payload.data?.medias ?? [];
@@ -329,23 +341,50 @@ async function syncCollection(options: {
       });
       const reachedKnownHistory =
         effectiveMode === "quick" &&
+        !reconcilingRemovals &&
         page >= 2 &&
         rawItems.length > 0 &&
         unchangedOnPage === rawItems.length;
 
-      if (!hasMore || reachedKnownHistory) break;
+      const needsReconciliation = shouldReconcileFavoriteSync({
+        mode: effectiveMode,
+        previousRemoteCount,
+        remoteCount: total,
+        removalSyncVersion: previousSettings.removalSyncVersion,
+      });
+
+      if (!hasMore) {
+        if (needsReconciliation) reconcilingRemovals = true;
+        break;
+      }
+      if (reachedKnownHistory) {
+        if (!needsReconciliation) break;
+        reconcilingRemovals = true;
+        syncProgress.value = {
+          mode: effectiveMode,
+          page,
+          fetched,
+          total,
+          message: needsRemovalBaseline
+            ? "正在首次核对已取消的收藏…"
+            : "发现收藏数量变化，正在核对已取消的收藏…",
+        };
+      }
       page += 1;
-      await wait(effectiveMode === "full" ? 720 : 520, signal);
+      await wait(effectiveMode === "full" || reconcilingRemovals ? 720 : 520, signal);
     }
 
-    if (effectiveMode === "full") {
-      await markMissingVideosInactive(options.mediaId, seenKeys);
+    if (effectiveMode === "full" || reconcilingRemovals) {
+      removedCount = await markMissingVideosInactive(options.mediaId, seenKeys);
     }
 
     nextSettings = {
       ...nextSettings,
       lastSyncAt: Date.now(),
       proxyBaseUrl: options.proxyBaseUrl,
+      removalSyncVersion: effectiveMode === "full" || reconcilingRemovals
+        ? FAVORITE_REMOVAL_SYNC_VERSION
+        : nextSettings.removalSyncVersion,
     };
     settings.value = nextSettings;
     proxyInput.value = nextSettings.proxyBaseUrl;
@@ -353,13 +392,23 @@ async function syncCollection(options: {
     await loadLocalCollection(options.mediaId);
     noticeMessage.value = effectiveMode === "full"
       ? `完整同步完成，共保存 ${formatCount(activeVideos.value.length)} 条收藏。`
-      : `已检查最新收藏，本地共有 ${formatCount(activeVideos.value.length)} 条记录。`;
+      : reconcilingRemovals && removedCount > 0
+        ? `刷新完成，已隐藏 ${formatCount(removedCount)} 条取消收藏的视频。`
+        : reconcilingRemovals
+          ? `刷新完成，已核对全部收藏，本地共有 ${formatCount(activeVideos.value.length)} 条记录。`
+          : `已检查最新收藏，本地共有 ${formatCount(activeVideos.value.length)} 条记录。`;
   } catch (error) {
+    const fallbackMediaId = !firstSync && previousSettings.mediaId
+      ? previousSettings.mediaId
+      : options.mediaId;
     if (error instanceof DOMException && error.name === "AbortError") {
+      if (!firstSync) settings.value = previousSettings;
       noticeMessage.value = "同步已暂停，已经读到本地的数据会保留。";
-      await loadLocalCollection(options.mediaId);
+      await loadLocalCollection(fallbackMediaId);
     } else {
+      if (!firstSync) settings.value = previousSettings;
       errorMessage.value = error instanceof Error ? error.message : "同步失败，请稍后再试";
+      if (!firstSync) await loadLocalCollection(fallbackMediaId);
     }
   } finally {
     syncing.value = false;

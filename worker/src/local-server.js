@@ -129,9 +129,14 @@ async function handleNodeRequest(nodeRequest) {
 
   const cacheKey = `${url.pathname}${url.search}`;
   const bilibiliReadRequest = isBilibiliReadRequest(url, method);
+  const bypassCache = method === "GET"
+    && url.pathname === "/api/favorites"
+    && url.searchParams.get("fresh") === "1";
   if (bilibiliReadRequest) {
-    const cached = readCachedResponse(cacheKey);
-    if (cached) return { ...cached, headers: { ...cached.headers, "X-Mac-Cache": "HIT" } };
+    if (!bypassCache) {
+      const cached = readCachedResponse(cacheKey);
+      if (cached) return { ...cached, headers: { ...cached.headers, "X-Mac-Cache": "HIT" } };
+    }
 
     if (!allowClientRequest(clientIpFrom(headers))) {
       return jsonResponse(
@@ -147,8 +152,8 @@ async function handleNodeRequest(nodeRequest) {
     ? await scheduleUpstream(() => handleRequest(request, { ALLOWED_ORIGINS }, {}))
     : await handleRequest(request, { ALLOWED_ORIGINS }, {});
   const response = await bufferWebResponse(webResponse);
-  response.headers["X-Mac-Cache"] = "MISS";
-  if (bilibiliReadRequest && response.status >= 200 && response.status < 300) {
+  response.headers["X-Mac-Cache"] = bypassCache ? "BYPASS" : "MISS";
+  if (!bypassCache && bilibiliReadRequest && response.status >= 200 && response.status < 300) {
     cacheResponse(cacheKey, response);
   }
   return response;
