@@ -1115,6 +1115,7 @@ a {
   display: -webkit-box;
   overflow: hidden;
   margin: 0;
+  color: var(--ink);
   font-family: "Songti SC", "STSong", serif;
   font-size: 17px;
   font-weight: 700;
