@@ -1,6 +1,6 @@
 # 拾光 · B站收藏时光机
 
-这是 BiliShelf 的 GitHub Pages 网页版实验入口。它可以根据 UID 查询账号下无需登录即可访问的收藏夹，也支持直接粘贴收藏夹链接；随后把收藏时间、标题、UP 主、简介和封面保存到当前浏览器的 IndexedDB，并提供年月日筛选、关键词搜索、时间轴、随机回忆和“那年今日”。
+这是拾光的 GitHub Pages 网页入口。它可以根据 UID 查询账号下无需登录即可访问的收藏夹，也支持直接粘贴收藏夹链接；随后把收藏时间、标题、UP 主、简介和封面保存到当前浏览器的 IndexedDB，并提供年月日筛选、关键词搜索、时间轴、随机回忆和“那年今日”。
 
 ## 工作方式
 
@@ -110,6 +110,8 @@ BILI_MEMORY_PROXY_URL=https://api.drivinggodj.dpdns.org
 - “完整同步”会重新遍历全部页面，并把 B站中已经移除的条目标记为本地留档，而不是删除旧元数据。
 - B站约 2020 年 7 月以前的部分收藏可能共享一个迁移时间。网页会按接口原值显示，不推测不存在的精确日期。
 
-## 基于上游
+## 开源来源与新增内容
 
-本项目基于 [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) 修改，继续遵守仓库内的 MIT License 并保留原作者版权声明。
+拾光最初从 [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) 的开源分支发展而来。仓库保留了其浏览器扩展源码，并沿用了 Vue/Vite 工程配置、B站收藏夹列表与收藏内容接口的适配方式。
+
+收藏日期检索、时间线、随机回忆、那年今日、UID 导入、PWA、本地 IndexedDB 数据结构以及只读数据代理由拾光新增实现。项目继续遵守仓库内的 MIT License，并保留原作者版权声明。

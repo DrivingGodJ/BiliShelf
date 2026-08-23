@@ -189,7 +189,7 @@ export async function handleRequest(request, env = {}, context = {}) {
           headers: {
             Accept: "application/json, text/plain, */*",
             Referer: "https://www.bilibili.com/",
-            "User-Agent": "Mozilla/5.0 (compatible; BiliShelf-Memory/0.1; +https://github.com/TLRKFXE/BiliShelf)",
+            "User-Agent": "Mozilla/5.0 (compatible; Shiguang-Memory/1.0; +https://github.com/DrivingGodJ/shiguang-memory)",
           },
         });
   } catch (error) {

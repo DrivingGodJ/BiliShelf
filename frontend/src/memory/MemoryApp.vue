@@ -635,7 +635,7 @@ onBeforeUnmount(() => {
         <span class="brand__mark"><History :size="21" /></span>
         <span>
           <strong>拾光</strong>
-          <small>BiliShelf Memory</small>
+          <small>Shiguang Memory</small>
         </span>
       </a>
       <div class="site-header__note"><Heart :size="15" /> 本地保存，只读同步</div>
@@ -987,7 +987,7 @@ onBeforeUnmount(() => {
     </template>
 
     <footer class="site-footer">
-      <span>拾光是基于 <a href="https://github.com/TLRKFXE/BiliShelf" target="_blank" rel="noreferrer">BiliShelf</a> 的本地优先改造。</span>
+      <span>拾光沿用了 <a href="https://github.com/TLRKFXE/BiliShelf" target="_blank" rel="noreferrer">BiliShelf</a> 的 Vue/Vite 工程配置与 B站收藏接口适配；日期检索、随机回忆、那年今日、PWA 与代理为本项目新增实现。</span>
       <span>收藏数据属于你，也只留在你这里。</span>
     </footer>
 

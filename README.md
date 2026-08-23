@@ -135,12 +135,14 @@ frontend/                  拾光网页与本地数据层
 worker/                    只读同步网关和本地代理
 .github/workflows/         GitHub Pages 自动部署
 MEMORY_WEB.md              自托管与维护说明
-extension/                 上游 BiliShelf 扩展源码
+extension/                 从 BiliShelf 保留的浏览器扩展源码
 ```
 
-## 基于上游
+## 开源来源与新增内容
 
-本项目基于 [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) 修改，感谢原作者提供的基础代码与 MIT 开源许可。
+拾光最初从 [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) 的开源分支发展而来。当前仓库保留了其浏览器扩展源码，并沿用了 Vue/Vite 工程配置、B站收藏夹列表与收藏内容接口的适配方式。
+
+拾光网页版中的收藏日期检索、时间线、随机回忆、那年今日、UID 导入、PWA、本地 IndexedDB 数据结构以及只读数据代理由本项目新增实现。仓库继续遵守 MIT License，并保留原作者版权声明。
 
 ## 许可
 

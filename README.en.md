@@ -109,8 +109,10 @@ pnpm web:build
 
 See [MEMORY_WEB.md](./MEMORY_WEB.md) for the complete self-hosting notes. Never commit account tokens, Tunnel credentials, cookies, or other secrets.
 
-## Upstream and license
+## Open-source lineage and new work
 
-This project is based on [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf) and retains its MIT License and original copyright notice.
+Shiguang originated as an open-source fork of [TLRKFXE/BiliShelf](https://github.com/TLRKFXE/BiliShelf). This repository retains its browser-extension source and reuses its Vue/Vite project configuration and its adaptation of Bilibili's favorite-folder and favorite-item APIs.
+
+The Shiguang web app's date search, timeline, random memories, On This Day view, UID import, PWA support, local IndexedDB schema, and read-only data proxy were added in this project. The repository continues to follow the MIT License and retains the original copyright notice.
 
 [MIT License](./LICENSE)
