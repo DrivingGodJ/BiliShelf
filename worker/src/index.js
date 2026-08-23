@@ -62,6 +62,22 @@ function corsHeaders(origin) {
   };
 }
 
+async function forwardRequestToMac(request, env) {
+  const incoming = new URL(request.url);
+  const privateUrl = new URL(`http://bilishelf-mac.local${incoming.pathname}`);
+  if (incoming.pathname === "/api/favorites") {
+    privateUrl.searchParams.set("mediaId", incoming.searchParams.get("mediaId"));
+    privateUrl.searchParams.set("page", incoming.searchParams.get("page") || "1");
+    privateUrl.searchParams.set("pageSize", incoming.searchParams.get("pageSize") || "40");
+  }
+  const headers = new Headers({ Accept: "application/json" });
+  const origin = request.headers.get("Origin");
+  const clientIp = request.headers.get("CF-Connecting-IP");
+  if (origin) headers.set("Origin", origin);
+  if (clientIp) headers.set("X-Forwarded-Client-IP", clientIp);
+  return env.MAC_PROXY.fetch(new Request(privateUrl, { method: request.method, headers }));
+}
+
 export async function handleRequest(request, env = {}, context = {}) {
   const url = new URL(request.url);
   const allowedOrigin = resolveAllowedOrigin(request, env);
@@ -85,8 +101,22 @@ export async function handleRequest(request, env = {}, context = {}) {
   }
 
   if (url.pathname === "/health" || url.pathname === "/api/health") {
+    if (env?.MAC_PROXY) {
+      try {
+        return await forwardRequestToMac(request, env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          message: "Mac proxy health check failed",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        return json(
+          { ok: false, service: "bilishelf-memory-proxy", message: "Mac 代理当前不可用" },
+          { status: 503, headers: { ...corsHeaders(allowedOrigin), "Cache-Control": "no-store" } },
+        );
+      }
+    }
     return json(
-      { ok: true, service: "bilishelf-memory-proxy" },
+      { ok: true, service: "bilishelf-memory-mac-proxy" },
       { headers: { ...corsHeaders(allowedOrigin), "Cache-Control": "no-store" } },
     );
   }
@@ -122,19 +152,21 @@ export async function handleRequest(request, env = {}, context = {}) {
 
   let upstreamResponse;
   try {
-    upstreamResponse = await fetch(upstreamUrl, {
-      method: "GET",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        Referer: "https://www.bilibili.com/",
-        "User-Agent": "Mozilla/5.0 (compatible; BiliShelf-Memory/0.1; +https://github.com/TLRKFXE/BiliShelf)",
-      },
-      cf: {
-        cacheEverything: true,
-        cacheTtl: 30,
-      },
-    });
-  } catch {
+    upstreamResponse = env?.MAC_PROXY
+      ? await forwardRequestToMac(request, env)
+      : await fetch(upstreamUrl, {
+          method: "GET",
+          headers: {
+            Accept: "application/json, text/plain, */*",
+            Referer: "https://www.bilibili.com/",
+            "User-Agent": "Mozilla/5.0 (compatible; BiliShelf-Memory/0.1; +https://github.com/TLRKFXE/BiliShelf)",
+          },
+        });
+  } catch (error) {
+    console.error(JSON.stringify({
+      message: "Favorites upstream request failed",
+      error: error instanceof Error ? error.message : String(error),
+    }));
     return json(
       { code: -502, message: "暂时无法连接 B站，请稍后再试" },
       { status: 502, headers: corsHeaders(allowedOrigin) },

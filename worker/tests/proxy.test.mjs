@@ -42,3 +42,36 @@ test("restricts configured origins", async () => {
   );
   assert.equal(response.status, 403);
 });
+
+test("forwards only validated favorite requests through the Mac VPC binding", async () => {
+  let forwardedRequest;
+  const response = await handleRequest(
+    new Request(
+      "https://memory.example/api/favorites?mediaId=47438371&page=61&pageSize=40&url=https://evil.example",
+      {
+        headers: {
+          Origin: "https://example.github.io",
+          "CF-Connecting-IP": "203.0.113.9",
+        },
+      },
+    ),
+    {
+      ALLOWED_ORIGINS: "https://example.github.io",
+      MAC_PROXY: {
+        async fetch(request) {
+          forwardedRequest = request;
+          return Response.json({ code: 0, data: { medias: [] } });
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).code, 0);
+  assert.equal(
+    forwardedRequest.url,
+    "http://bilishelf-mac.local/api/favorites?mediaId=47438371&page=61&pageSize=40",
+  );
+  assert.equal(forwardedRequest.headers.get("Origin"), "https://example.github.io");
+  assert.equal(forwardedRequest.headers.get("X-Forwarded-Client-IP"), "203.0.113.9");
+});

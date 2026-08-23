@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "start:local": "node src/local-server.js",
     "test": "node --test tests/*.test.mjs"
   },
   "engines": {

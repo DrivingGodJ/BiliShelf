@@ -6,7 +6,10 @@
 
 ```text
 GitHub Pages 前端
-  -> 只读 Cloudflare Worker
+  -> 只读 Cloudflare Worker 固定入口
+  -> Workers VPC 私网服务
+  -> Cloudflare Tunnel
+  -> Mac 本地代理（127.0.0.1:8787）
   -> B站公开收藏接口
 
 浏览器 IndexedDB
@@ -14,6 +17,8 @@ GitHub Pages 前端
 ```
 
 网页不会接收或保存 B站 Cookie，也不会移动、删除或新增 B站收藏。私密收藏夹不能仅凭链接读取，第一版只支持公开收藏夹。
+
+Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。这个架构不需要购买域名，也不使用 Browser Rendering 时长。
 
 ## 本地运行
 
@@ -24,10 +29,10 @@ pnpm --dir worker install
 pnpm --dir frontend install
 ```
 
-终端一：
+终端一启动 Mac 本地代理：
 
 ```bash
-pnpm --dir worker dev
+pnpm --dir worker start:local
 ```
 
 终端二：
@@ -38,27 +43,42 @@ pnpm web:dev
 
 打开 `http://localhost:5173`。本地网页会默认使用 `http://localhost:8787` 代理。
 
-## 部署只读代理
+## 当前线上部署
 
-1. 注册或登录 Cloudflare，安装依赖后运行：
+线上入口是 `https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev`，只开放两个 GET 路由：
 
-```bash
-pnpm --dir worker deploy
-```
-
-2. 记下部署得到的 `https://...workers.dev` 地址。
-3. 为减少滥用，建议将 `worker/wrangler.toml` 中的 `ALLOWED_ORIGINS` 从 `*` 改成最终 GitHub Pages 地址，例如：
-
-```toml
-ALLOWED_ORIGINS = "https://your-name.github.io"
-```
-
-代理只开放两个 GET 路由：
-
-- `/api/health`
+- `/api/health`（也兼容 `/health`）
 - `/api/favorites?mediaId=...&page=...&pageSize=40`
 
-它不能转发任意 URL，也不接受写请求。
+它不能转发任意 URL，也不接受写请求。收藏页在 Mac 上缓存 5 分钟；未命中缓存的请求会排队、限速，并按访客 IP 限制频率，降低公共服务被滥用后触发 B站风控的风险。
+
+重新部署 Worker 网关：
+
+```bash
+pnpm --dir worker exec wrangler deploy
+```
+
+`worker/wrangler.jsonc` 已绑定现有的 Workers VPC 服务。若在新的 Cloudflare 账号重新部署，需要先创建 Tunnel、把 VPC 服务指向 Tunnel 的 `127.0.0.1:8787`，再把新服务 ID 写入配置。
+
+## Mac 常驻服务
+
+这台 Mac 已配置两个登录级 LaunchAgent：
+
+- `com.drivinggodj.bilishelf-mac-proxy`：启动本地只读代理。
+- `com.drivinggodj.bilishelf-tunnel`：建立到 Workers VPC 的出站 Tunnel。
+
+登录 Mac 后它们会自动启动，异常退出时也会自动重启。查看状态或手动重启：
+
+```bash
+launchctl print gui/$(id -u)/com.drivinggodj.bilishelf-mac-proxy
+launchctl print gui/$(id -u)/com.drivinggodj.bilishelf-tunnel
+launchctl kickstart -k gui/$(id -u)/com.drivinggodj.bilishelf-mac-proxy
+launchctl kickstart -k gui/$(id -u)/com.drivinggodj.bilishelf-tunnel
+```
+
+日志位于 `~/Library/Logs/BiliShelf/`。本地代理仅监听 `127.0.0.1`，家庭路由器无需开放端口。
+
+Mac 必须处于已登录、联网且未睡眠状态；关机、退出登录或睡眠期间，网页仍能打开，但新的收藏同步会暂时失败。访客已存入自己浏览器的数据仍可离线检索。
 
 ## 部署 GitHub Pages
 
