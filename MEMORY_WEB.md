@@ -18,7 +18,7 @@ GitHub Pages 前端
 
 网页不会接收或保存 B站 Cookie，也不会移动、删除或新增 B站收藏。私密收藏夹不能仅凭链接读取，第一版只支持公开收藏夹。
 
-Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。这个架构不需要购买域名，也不使用 Browser Rendering 时长。
+Cloudflare 只负责公网入口和私网转发，访问 B站接口的出口是这台 Mac 当前使用的家庭网络 IP。生产接口使用自定义域名，避免部分网络无法连接公共 `workers.dev` 域名；它不使用 Browser Rendering 时长。
 
 ## 本地运行
 
@@ -45,7 +45,7 @@ pnpm web:dev
 
 ## 当前线上部署
 
-线上入口是 `https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev`，只开放三个 GET 路由：
+线上主入口是 `https://api.drivinggodj.dpdns.org`，并保留 `https://bilishelf-memory-proxy.bilishelf-memory-proxy.workers.dev` 作为备用。两个入口都只开放三个 GET 路由：
 
 - `/api/health`（也兼容 `/health`）
 - `/api/folders?uid=...`
@@ -92,7 +92,7 @@ Mac 必须处于已登录、联网且未睡眠状态；关机、退出登录或�
 3. 在 `Settings -> Secrets and variables -> Actions -> Variables` 新建：
 
 ```text
-BILI_MEMORY_PROXY_URL=https://你的-worker.workers.dev
+BILI_MEMORY_PROXY_URL=https://api.drivinggodj.dpdns.org
 ```
 
 4. 运行 `Deploy Memory Web to GitHub Pages` 工作流，或推送到 `main`。

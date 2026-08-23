@@ -2,11 +2,18 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "bilishelf-memory-proxy",
   "main": "src/index.js",
+  "workers_dev": true,
   "compatibility_date": "2026-08-23",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "ALLOWED_ORIGINS": "https://drivinggodj.github.io"
   },
+  "routes": [
+    {
+      "pattern": "api.drivinggodj.dpdns.org",
+      "custom_domain": true
+    }
+  ],
   "vpc_services": [
     {
       "binding": "MAC_PROXY",
