@@ -821,13 +821,29 @@ onBeforeUnmount(() => {
 
       <template v-else>
         <section class="collection-header" aria-labelledby="collection-title">
-          <div>
+          <div class="collection-header__identity">
             <p class="kicker"><Database :size="15" /> 已保存在这台设备</p>
             <h1 id="collection-title">{{ settings.folderTitle || "我的收藏时光" }}</h1>
-            <p>
-              {{ settings.ownerName ? `${settings.ownerName} · ` : "" }}{{ formatCount(activeVideos.length) }} 条收藏
-              <span v-if="settings.lastSyncAt"> · 上次同步 {{ formatFavoriteDate(settings.lastSyncAt, true) }}</span>
-            </p>
+            <p class="collection-header__owner">{{ settings.ownerName || "私人馆藏" }}</p>
+            <dl class="collection-header__ledger" aria-label="收藏夹概况">
+              <div>
+                <dt>馆藏</dt>
+                <dd>{{ formatCount(activeVideos.length) }} 段</dd>
+              </div>
+              <div>
+                <dt>时间跨度</dt>
+                <dd v-if="earliestFavoriteAt && latestFavoriteAt">
+                  {{ shanghaiDateParts(earliestFavoriteAt).year }}—{{ shanghaiDateParts(latestFavoriteAt).year }}
+                </dd>
+                <dd v-else>等待同步</dd>
+              </div>
+              <div>
+                <dt>上次整理</dt>
+                <dd :title="settings.lastSyncAt ? formatFavoriteDate(settings.lastSyncAt, true) : undefined">
+                  {{ settings.lastSyncAt ? formatFavoriteDate(settings.lastSyncAt) : "尚未同步" }}
+                </dd>
+              </div>
+            </dl>
           </div>
           <div class="collection-header__actions">
             <button type="button" class="button button--quiet" :disabled="syncing" @click="openSetup">
@@ -876,14 +892,17 @@ onBeforeUnmount(() => {
 
         <nav class="memory-paths" aria-label="选择回忆方式">
           <a href="#random-memories">
+            <span class="memory-paths__index" aria-hidden="true">01</span>
             <span class="memory-paths__icon"><Dice5 :size="19" /></span>
             <span><strong>随机逛逛</strong><small>一次遇见 4 段回忆</small></span>
           </a>
           <a href="#today-memories">
+            <span class="memory-paths__index" aria-hidden="true">02</span>
             <span class="memory-paths__icon"><CalendarClock :size="19" /></span>
             <span><strong>那年今日</strong><small>{{ todayMemoryCount ? `${formatCount(todayMemoryCount)} 段往年今日` : "等待某个有记录的日子" }}</small></span>
           </a>
           <a href="#memory-finder">
+            <span class="memory-paths__index" aria-hidden="true">03</span>
             <span class="memory-paths__icon"><Search :size="19" /></span>
             <span><strong>按日期找</strong><small>搜索某年、某月、某日</small></span>
           </a>

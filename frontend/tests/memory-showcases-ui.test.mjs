@@ -41,6 +41,9 @@ test("the redesigned journey exposes all three memory paths and accessible filte
   assert.match(source, /href="#random-memories"/);
   assert.match(source, /href="#today-memories"/);
   assert.match(source, /href="#memory-finder"/);
+  assert.match(source, /class="memory-paths__index" aria-hidden="true">01</);
+  assert.match(source, /class="memory-paths__index" aria-hidden="true">03</);
+  assert.match(source, /class="collection-header__ledger" aria-label="收藏夹概况"/);
   assert.match(source, /class="filter-control__label">搜索收藏/);
   assert.match(source, /class="filter-control__label">按收藏日期/);
   assert.match(source, /:aria-pressed="viewMode === 'timeline'"/);
@@ -55,4 +58,11 @@ test("the redesigned journey exposes all three memory paths and accessible filte
     /@media \(max-width: 820px\)[\s\S]*\.filter-panel \{\s*position: sticky;\s*top: calc\(env\(safe-area-inset-top, 0px\) \+ 8px\)/,
   );
   assert.match(css, /\.memory-paths \{[\s\S]*margin-top: 20px/);
+  assert.match(css, /--surface-sticky:/);
+  assert.match(css, /--z-sticky: 20/);
+  assert.match(css, /\.filter-panel \{[\s\S]*z-index: var\(--z-sticky\)/);
+  assert.match(
+    css,
+    /@media \(max-width: 560px\)[\s\S]*\.memory-showcase \.memory-card \{\s*flex-direction: column/,
+  );
 });

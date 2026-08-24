@@ -56,8 +56,9 @@ test("memory web follows the system light and dark color scheme", async () => {
   );
   assert.match(css, /color-scheme: light dark/);
   assert.match(css, /@media \(prefers-color-scheme: dark\)/);
-  assert.match(css, /\.filter-panel \{[\s\S]*background: rgba\(29, 33, 28, 0\.88\)/);
-  assert.match(css, /\.memory-card \{[\s\S]*background: rgba\(41, 45, 39, 0\.95\)/);
+  assert.match(css, /--surface-sticky: rgba\(29, 33, 28, 0\.94\)/);
+  assert.match(css, /\.filter-panel \{[\s\S]*background: var\(--surface-sticky\)/);
+  assert.match(css, /\.memory-card \{[\s\S]*background: var\(--surface-raised\)/);
 });
 
 test("bundles the memory display font instead of relying on device fonts", async () => {
