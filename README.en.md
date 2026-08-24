@@ -18,13 +18,13 @@ It requires no extension or Bilibili login and never modifies a favorite folder.
 
 ## Screenshots
 
-### Random Memory and On This Day
+### Light mode
 
-![Shiguang Random Memory and On This Day](./docs/images/shiguang-random-and-on-this-day.jpg)
+![Shiguang's redesigned light interface showing DrivingGodJ's default favorites and Random Memory](./docs/images/shiguang-light-mode.jpg)
 
-### Date search and timeline
+### Dark mode
 
-![Shiguang date search and timeline](./docs/images/shiguang-date-timeline.jpg)
+![Shiguang's redesigned dark interface showing DrivingGodJ's default favorites and Random Memory](./docs/images/shiguang-dark-mode.jpg)
 
 ## Getting started
 

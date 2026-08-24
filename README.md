@@ -18,13 +18,13 @@
 
 ## 界面预览
 
-### 随机回忆与那年今日
+### 明亮模式
 
-![拾光的随机回忆与那年今日界面](./docs/images/shiguang-random-and-on-this-day.jpg)
+![拾光新版明亮模式界面，展示 DrivingGodJ 的默认收藏夹与随机回忆](./docs/images/shiguang-light-mode.jpg)
 
-### 日期检索与时间轴
+### 深色模式
 
-![拾光的日期检索与时间轴界面](./docs/images/shiguang-date-timeline.jpg)
+![拾光新版深色模式界面，展示 DrivingGodJ 的默认收藏夹与随机回忆](./docs/images/shiguang-dark-mode.jpg)
 
 ## 开始使用
 
