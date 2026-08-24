@@ -1,7 +1,7 @@
 :root {
   color-scheme: light dark;
   --font-ui: "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
-  --font-memory: "LXGW WenKai GB Screen", "Kaiti SC", "STKaiti", "Songti SC", serif;
+  --font-memory: "Noto Serif SC Variable", "Source Han Serif SC", "Songti SC", "STSong", serif;
   font-family: var(--font-ui);
   color: #25241f;
   background: #eee9de;
@@ -160,7 +160,7 @@ select:focus-visible {
 .brand strong {
   font-family: var(--font-memory);
   font-size: 22px;
-  font-weight: 400;
+  font-weight: 600;
   line-height: 1;
   letter-spacing: 0.16em;
 }
@@ -235,9 +235,9 @@ select:focus-visible {
   margin: 0;
   font-family: var(--font-memory);
   font-size: clamp(48px, 5vw, 76px);
-  font-weight: 400;
+  font-weight: 500;
   line-height: 1.08;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.02em;
 }
 
 .setup-stage__lead {
@@ -613,6 +613,7 @@ select:focus-visible {
   color: #fff9ef;
   font-family: var(--font-memory);
   font-size: 16px;
+  font-weight: 500;
   background: var(--red);
   border: 8px solid rgba(255, 246, 228, 0.08);
   border-radius: 50%;
@@ -747,8 +748,8 @@ select:focus-visible {
   margin: 0 0 8px;
   font-family: var(--font-memory);
   font-size: clamp(36px, 4vw, 58px);
-  font-weight: 400;
-  letter-spacing: -0.035em;
+  font-weight: 500;
+  letter-spacing: -0.018em;
 }
 
 .collection-header p:last-child {
@@ -815,7 +816,7 @@ select:focus-visible {
 .memory-paths strong {
   font-family: var(--font-memory);
   font-size: 16px;
-  font-weight: 400;
+  font-weight: 600;
 }
 
 .memory-paths small {
@@ -898,8 +899,8 @@ select:focus-visible {
   margin: 0;
   font-family: var(--font-memory);
   font-size: clamp(30px, 3vw, 44px);
-  font-weight: 400;
-  letter-spacing: -0.035em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
 }
 
 .memory-showcase__heading p:last-child {
@@ -1030,8 +1031,8 @@ select:focus-visible {
   margin: 0;
   font-family: var(--font-memory);
   font-size: clamp(30px, 3vw, 44px);
-  font-weight: 400;
-  letter-spacing: -0.03em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
 }
 
 .memory-finder__header > p {
@@ -1160,8 +1161,8 @@ select:focus-visible {
   margin: 0;
   font-family: var(--font-memory);
   font-size: clamp(31px, 3.3vw, 48px);
-  font-weight: 400;
-  letter-spacing: -0.03em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
 }
 
 .results-header p:last-child {
@@ -1329,7 +1330,7 @@ select:focus-visible {
   color: var(--ink);
   font-family: var(--font-memory);
   font-size: 17px;
-  font-weight: 400;
+  font-weight: 600;
   line-height: 1.5;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1478,7 +1479,7 @@ select:focus-visible {
   color: var(--ink);
   font-family: var(--font-memory);
   font-size: 22px;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .empty-state p {

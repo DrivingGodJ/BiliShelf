@@ -67,13 +67,13 @@ test("bundles the memory display font instead of relying on device fonts", async
   const main = await readFile(new URL("src/main.ts", frontendRoot), "utf8");
   const css = await readFile(new URL("src/memory/memory.css", frontendRoot), "utf8");
   const license = await readFile(
-    new URL("public/font-licenses/LXGW-WenKai-OFL.txt", frontendRoot),
+    new URL("public/font-licenses/Noto-Serif-SC-OFL.txt", frontendRoot),
     "utf8",
   );
 
-  assert.equal(packageJson.dependencies["lxgw-wenkai-screen-web"], "1.522.0");
-  assert.match(main, /lxgw-wenkai-screen-web\/lxgwwenkaigbscreen\/result\.css/);
-  assert.match(css, /--font-memory: "LXGW WenKai GB Screen"/);
+  assert.equal(packageJson.dependencies["@fontsource-variable/noto-serif-sc"], "5.3.0");
+  assert.match(main, /@fontsource-variable\/noto-serif-sc\/wght\.css/);
+  assert.match(css, /--font-memory: "Noto Serif SC Variable"/);
   assert.match(css, /\.memory-card h3 \{[\s\S]*font-family: var\(--font-memory\)/);
   assert.match(license, /SIL OPEN FONT LICENSE Version 1\.1/);
 });

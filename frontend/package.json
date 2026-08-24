@@ -12,8 +12,8 @@
     "check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource-variable/noto-serif-sc": "5.3.0",
     "lucide-vue-next": "^0.511.0",
-    "lxgw-wenkai-screen-web": "1.522.0",
     "vue": "^3.5.13"
   },
   "devDependencies": {

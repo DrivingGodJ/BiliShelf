@@ -8,12 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@fontsource-variable/noto-serif-sc':
+        specifier: 5.3.0
+        version: 5.3.0
       lucide-vue-next:
         specifier: ^0.511.0
         version: 0.511.0(vue@3.5.28(typescript@5.9.3))
-      lxgw-wenkai-screen-web:
-        specifier: 1.522.0
-        version: 1.522.0
       vue:
         specifier: ^3.5.13
         version: 3.5.28(typescript@5.9.3)
@@ -208,6 +208,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource-variable/noto-serif-sc@5.3.0':
+    resolution: {integrity: sha512-7LcN2NEf4HDjoSkGWc79WqDDyMK8JvSPdA/gsHjJpZ8l9A9mcK/GQTazp3klmkBwJooy0eqeNvlmaZFXPupHrA==}
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
@@ -550,9 +553,6 @@ packages:
     peerDependencies:
       vue: '>=3.0.1'
 
-  lxgw-wenkai-screen-web@1.522.0:
-    resolution: {integrity: sha512-LH1nDJz9prHgMYNKErg8XpDEIhs9+1bf6hPVKviy29be1r6Z4AXXbo9uuwmOH2hAzKMbe3kZ5+rzJ9zb/58+jw==}
-
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -752,6 +752,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.25.12':
     optional: true
+
+  '@fontsource-variable/noto-serif-sc@5.3.0': {}
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
@@ -1040,8 +1042,6 @@ snapshots:
   lucide-vue-next@0.511.0(vue@3.5.28(typescript@5.9.3)):
     dependencies:
       vue: 3.5.28(typescript@5.9.3)
-
-  lxgw-wenkai-screen-web@1.522.0: {}
 
   magic-string@0.30.21:
     dependencies:

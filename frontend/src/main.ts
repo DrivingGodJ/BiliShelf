@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 import MemoryApp from "./memory/MemoryApp.vue";
-import "lxgw-wenkai-screen-web/lxgwwenkaigbscreen/result.css";
+import "@fontsource-variable/noto-serif-sc/wght.css";
 import "./memory/memory.css";
 
 document.documentElement.lang = "zh-CN";

@@ -1,7 +1,4 @@
-Copyright 2021-2026 LXGW (https://github.com/lxgw/LxgwWenKai-Screen)
-Copyright 2021-2026 LXGW (https://github.com/lxgw/LxgwWenKai), with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'.
-Copyright 2022-2026 LXGW (https://github.com/lxgw/LxgwWenKaiGB), with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'.
-Copyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)
+Google Inc.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -80,8 +77,7 @@ remain under this license does not apply to any document created using
 the Font Software.
 
 TERMINATION
-This license becomes null and void if any of the above conditions are
-not met.
+This license becomes null and void if the above conditions are not met.
 
 DISCLAIMER
 THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
