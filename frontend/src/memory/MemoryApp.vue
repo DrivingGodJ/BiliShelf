@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CalendarDays,
   ChevronDown,
+  CircleAlert,
   Clock3,
   Database,
   Dice5,
@@ -20,6 +21,7 @@ import {
   Sparkles,
   Square,
   UserRoundSearch,
+  WifiOff,
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { fetchFavoriteFolders, fetchFavoritePage, mapFavoriteMedia } from "./api";
@@ -99,6 +101,7 @@ const viewMode = ref<"timeline" | "grid">("timeline");
 const visibleCount = ref(60);
 const randomMemories = ref<MemoryVideo[]>([]);
 const randomPage = ref(0);
+const online = ref(navigator.onLine);
 let syncController: AbortController | null = null;
 
 const RANDOM_MEMORY_PAGE_SIZE = 4;
@@ -282,6 +285,10 @@ async function syncCollection(options: {
   mode: "full" | "quick";
 }) {
   if (syncing.value) return;
+  if (!online.value) {
+    errorMessage.value = "当前没有网络。已保存在本机的收藏仍可浏览，联网后再同步。";
+    return;
+  }
   clearMessages();
   syncing.value = true;
   syncController = new AbortController();
@@ -593,7 +600,17 @@ function loadMore() {
   visibleCount.value += 60;
 }
 
+function updateOnlineState() {
+  online.value = navigator.onLine;
+  if (online.value && errorMessage.value.startsWith("当前没有网络")) {
+    errorMessage.value = "";
+    noticeMessage.value = "网络已恢复，可以继续同步。";
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener("online", updateOnlineState);
+  window.addEventListener("offline", updateOnlineState);
   try {
     const stored = await readSettings();
     settings.value = stored
@@ -625,11 +642,14 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   syncController?.abort();
+  window.removeEventListener("online", updateOnlineState);
+  window.removeEventListener("offline", updateOnlineState);
 });
 </script>
 
 <template>
-  <main class="memory-shell">
+  <div class="memory-shell">
+    <a class="skip-link" href="#memory-content">跳到主要内容</a>
     <header class="site-header">
       <a class="brand" href="./" aria-label="拾光首页">
         <span class="brand__mark"><History :size="21" /></span>
@@ -640,6 +660,12 @@ onBeforeUnmount(() => {
       </a>
       <div class="site-header__note"><Heart :size="15" /> 本地保存，只读同步</div>
     </header>
+
+    <main id="memory-content" class="memory-content">
+      <div v-if="!online" class="connection-banner" role="status">
+        <WifiOff :size="17" />
+        <span><strong>当前离线</strong> · 已保存的收藏仍可浏览，联网后再同步。</span>
+      </div>
 
     <section v-if="loading" class="loading-stage">
       <LoaderCircle class="spin" :size="28" />
@@ -667,9 +693,9 @@ onBeforeUnmount(() => {
                   inputmode="numeric"
                   autocomplete="off"
                   placeholder="输入数字 UID"
-                  :disabled="syncing || folderLoading"
+                  :disabled="syncing || folderLoading || !online"
                 />
-                <button type="submit" class="button button--primary" :disabled="syncing || folderLoading">
+                <button type="submit" class="button button--primary" :disabled="syncing || folderLoading || !online">
                   <LoaderCircle v-if="folderLoading" class="spin" :size="17" />
                   <Search v-else :size="17" />
                   {{ folderLoading ? "正在查找" : "查找收藏夹" }}
@@ -688,7 +714,7 @@ onBeforeUnmount(() => {
                   :key="folder.id"
                   type="button"
                   class="folder-choice"
-                  :disabled="syncing"
+                  :disabled="syncing || !online"
                   @click="connectFavoriteFolder(folder)"
                 >
                   <FolderOpen :size="18" />
@@ -719,9 +745,9 @@ onBeforeUnmount(() => {
                   type="text"
                   autocomplete="off"
                   placeholder="https://www.bilibili.com/list/ml…"
-                  :disabled="syncing"
+                  :disabled="syncing || !online"
                 />
-                <button type="submit" class="button button--quiet" :disabled="syncing">
+                <button type="submit" class="button button--quiet" :disabled="syncing || !online">
                   <LoaderCircle v-if="syncing" class="spin" :size="17" />
                   <Clock3 v-else :size="17" />
                   {{ syncing ? "正在建立" : "直接导入" }}
@@ -764,7 +790,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-if="syncProgress" class="sync-progress setup-progress">
+          <div v-if="syncProgress" class="sync-progress setup-progress" role="status" aria-live="polite">
             <div class="sync-progress__copy">
               <span>{{ syncProgress.message }}</span>
               <span>{{ syncPercent }}%</span>
@@ -773,8 +799,14 @@ onBeforeUnmount(() => {
             <button type="button" class="button button--text" @click="stopSync"><Square :size="13" /> 暂停同步</button>
           </div>
 
-          <p v-if="errorMessage" class="message message--error">{{ errorMessage }}</p>
-          <p v-if="noticeMessage" class="message message--notice">{{ noticeMessage }}</p>
+          <div v-if="errorMessage" class="message message--error" role="alert">
+            <CircleAlert :size="17" />
+            <span>{{ errorMessage }}</span>
+          </div>
+          <div v-if="noticeMessage" class="message message--notice" role="status" aria-live="polite">
+            <Database :size="17" />
+            <span>{{ noticeMessage }}</span>
+          </div>
         </div>
 
         <aside class="setup-stage__preview" aria-hidden="true">
@@ -788,10 +820,10 @@ onBeforeUnmount(() => {
       </section>
 
       <template v-else>
-        <section class="collection-header">
+        <section class="collection-header" aria-labelledby="collection-title">
           <div>
             <p class="kicker"><Database :size="15" /> 已保存在这台设备</p>
-            <h1>{{ settings.folderTitle || "我的收藏时光" }}</h1>
+            <h1 id="collection-title">{{ settings.folderTitle || "我的收藏时光" }}</h1>
             <p>
               {{ settings.ownerName ? `${settings.ownerName} · ` : "" }}{{ formatCount(activeVideos.length) }} 条收藏
               <span v-if="settings.lastSyncAt"> · 上次同步 {{ formatFavoriteDate(settings.lastSyncAt, true) }}</span>
@@ -801,10 +833,16 @@ onBeforeUnmount(() => {
             <button type="button" class="button button--quiet" :disabled="syncing" @click="openSetup">
               <FolderOpen :size="16" /> 更换收藏夹
             </button>
-            <button type="button" class="button button--quiet" :disabled="syncing" @click="refreshCurrent('full')">
+            <button
+              type="button"
+              class="button button--quiet"
+              :disabled="syncing || !online"
+              title="重新核对整个收藏夹，也会隐藏已经取消收藏的视频"
+              @click="refreshCurrent('full')"
+            >
               <Database :size="16" /> 完整同步
             </button>
-            <button type="button" class="button button--primary" :disabled="syncing" @click="refreshCurrent('quick')">
+            <button type="button" class="button button--primary" :disabled="syncing || !online" @click="refreshCurrent('quick')">
               <LoaderCircle v-if="syncing" class="spin" :size="16" />
               <RefreshCcw v-else :size="16" />
               {{ syncing ? "同步中" : "刷新最新" }}
@@ -812,7 +850,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <div v-if="syncProgress" class="sync-progress">
+        <div v-if="syncProgress" class="sync-progress" role="status" aria-live="polite">
           <div class="sync-progress__copy">
             <span>{{ syncProgress.message }}</span>
             <span>{{ syncProgress.mode === "full" ? `${syncPercent}%` : `第 ${syncProgress.page} 页` }}</span>
@@ -820,11 +858,39 @@ onBeforeUnmount(() => {
           <div class="sync-progress__track"><span :style="{ width: `${syncProgress.mode === 'full' ? syncPercent : 100}%` }" /></div>
           <button type="button" class="button button--text" @click="stopSync"><Square :size="13" /> 暂停</button>
         </div>
-        <p v-if="errorMessage" class="message message--error">{{ errorMessage }}</p>
-        <p v-if="noticeMessage" class="message message--notice">{{ noticeMessage }}</p>
+        <div v-if="errorMessage" class="message message--error message--with-action" role="alert">
+          <span><CircleAlert :size="17" /> {{ errorMessage }}</span>
+          <button
+            v-if="settings.mediaId && online && !syncing"
+            type="button"
+            class="button button--text"
+            @click="refreshCurrent('quick')"
+          >
+            <RefreshCcw :size="14" /> 重试刷新
+          </button>
+        </div>
+        <div v-if="noticeMessage" class="message message--notice" role="status" aria-live="polite">
+          <Database :size="17" />
+          <span>{{ noticeMessage }}</span>
+        </div>
+
+        <nav class="memory-paths" aria-label="选择回忆方式">
+          <a href="#random-memories">
+            <span class="memory-paths__icon"><Dice5 :size="19" /></span>
+            <span><strong>随机逛逛</strong><small>一次遇见 4 段回忆</small></span>
+          </a>
+          <a href="#today-memories">
+            <span class="memory-paths__icon"><CalendarClock :size="19" /></span>
+            <span><strong>看看今天</strong><small>{{ todayMemoryCount ? `${formatCount(todayMemoryCount)} 段往年今日` : "等待某个有记录的日子" }}</small></span>
+          </a>
+          <a href="#memory-finder">
+            <span class="memory-paths__icon"><Search :size="19" /></span>
+            <span><strong>按日期找</strong><small>搜索某年、某月、某日</small></span>
+          </a>
+        </nav>
 
         <div class="memory-showcases">
-          <section class="memory-showcase memory-showcase--random" aria-labelledby="random-memories-title">
+          <section id="random-memories" class="memory-showcase memory-showcase--random" aria-labelledby="random-memories-title">
             <header class="memory-showcase__header">
               <div class="memory-showcase__heading">
                 <span class="memory-showcase__icon"><Dice5 :size="22" /></span>
@@ -835,8 +901,8 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div class="memory-showcase__actions">
-                <span v-if="randomPage">第 {{ randomPage }} 组</span>
-                <button type="button" class="button button--memory" @click="refreshRandomMemories()">
+                <span v-if="randomPage" aria-live="polite">第 {{ randomPage }} 组</span>
+                <button type="button" class="button button--memory" aria-label="换一组随机回忆" @click="refreshRandomMemories()">
                   <RefreshCcw :size="17" /> 换一组
                 </button>
               </div>
@@ -850,9 +916,17 @@ onBeforeUnmount(() => {
               />
             </div>
             <div v-else class="memory-showcase__empty">同步收藏后，这里会直接排出一组随机回忆。</div>
+            <button
+              v-if="randomMemories.length"
+              type="button"
+              class="button button--memory memory-showcase__repeat"
+              @click="refreshRandomMemories()"
+            >
+              <RefreshCcw :size="16" /> 看完了，换一组
+            </button>
           </section>
 
-          <section class="memory-showcase memory-showcase--today" aria-labelledby="today-memories-title">
+          <section id="today-memories" class="memory-showcase memory-showcase--today" aria-labelledby="today-memories-title">
             <header class="memory-showcase__header">
               <div class="memory-showcase__heading">
                 <span class="memory-showcase__icon"><CalendarClock :size="22" /></span>
@@ -888,51 +962,69 @@ onBeforeUnmount(() => {
           </section>
         </div>
 
-        <section class="filter-panel">
-          <div class="search-field">
-            <Search :size="18" />
-            <input v-model="query" type="search" placeholder="搜索标题、UP主、简介或 BV号" />
+        <section id="memory-finder" class="memory-finder" aria-labelledby="memory-finder-title">
+          <header class="memory-finder__header">
+            <div>
+              <p class="kicker"><Search :size="15" /> 搜索与日期</p>
+              <h2 id="memory-finder-title">回到某一天</h2>
+            </div>
+            <p>先选年份，再逐步缩小到月份和日期；也可以直接搜索标题、UP主、简介或 BV号。</p>
+          </header>
+
+          <div class="filter-panel">
+            <label class="filter-control filter-control--search">
+              <span class="filter-control__label">搜索收藏</span>
+              <span class="search-field">
+                <Search :size="18" />
+                <input v-model="query" type="search" autocomplete="off" placeholder="输入标题、UP主、简介或 BV号" />
+              </span>
+            </label>
+            <fieldset class="filter-control filter-control--date">
+              <legend class="filter-control__label">按收藏日期</legend>
+              <div class="date-selectors">
+                <label>
+                  <span>年</span>
+                  <select v-model.number="selectedYear" aria-label="收藏年份">
+                    <option :value="0">全部年份</option>
+                    <option v-for="year in years" :key="year" :value="year">{{ year }} 年</option>
+                  </select>
+                </label>
+                <label>
+                  <span>月</span>
+                  <select v-model.number="selectedMonth" aria-label="收藏月份" :disabled="!selectedYear">
+                    <option :value="0">全部月份</option>
+                    <option v-for="month in months" :key="month" :value="month">{{ month }} 月</option>
+                  </select>
+                </label>
+                <label>
+                  <span>日</span>
+                  <select v-model.number="selectedDay" aria-label="收藏日期" :disabled="!selectedMonth">
+                    <option :value="0">全部日期</option>
+                    <option v-for="day in days" :key="day" :value="day">{{ day }} 日</option>
+                  </select>
+                </label>
+              </div>
+            </fieldset>
+            <button v-if="query || selectedYear" type="button" class="button button--text filter-panel__clear" @click="resetFilters">
+              清除筛选
+            </button>
           </div>
-          <div class="date-selectors">
-            <label>
-              <span>年</span>
-              <select v-model.number="selectedYear" aria-label="收藏年份">
-                <option :value="0">全部年份</option>
-                <option v-for="year in years" :key="year" :value="year">{{ year }} 年</option>
-              </select>
-            </label>
-            <label>
-              <span>月</span>
-              <select v-model.number="selectedMonth" aria-label="收藏月份" :disabled="!selectedYear">
-                <option :value="0">全部月份</option>
-                <option v-for="month in months" :key="month" :value="month">{{ month }} 月</option>
-              </select>
-            </label>
-            <label>
-              <span>日</span>
-              <select v-model.number="selectedDay" aria-label="收藏日期" :disabled="!selectedMonth">
-                <option :value="0">全部日期</option>
-                <option v-for="day in days" :key="day" :value="day">{{ day }} 日</option>
-              </select>
-            </label>
-          </div>
-          <button v-if="query || selectedYear" type="button" class="button button--text" @click="resetFilters">清除筛选</button>
         </section>
 
-        <section class="results-section">
+        <section class="results-section" aria-labelledby="results-title">
           <div class="results-header">
             <div>
               <p class="kicker"><CalendarDays :size="15" /> {{ filterDescription }}</p>
-              <h2>找到 {{ formatCount(filteredVideos.length) }} 段回忆</h2>
+              <h2 id="results-title">找到 {{ formatCount(filteredVideos.length) }} 段回忆</h2>
               <p v-if="earliestFavoriteAt && latestFavoriteAt">
                 {{ formatFavoriteDate(earliestFavoriteAt) }} — {{ formatFavoriteDate(latestFavoriteAt) }}
               </p>
             </div>
-            <div class="view-toggle" aria-label="视图切换">
-              <button type="button" :class="{ active: viewMode === 'timeline' }" @click="viewMode = 'timeline'">
+            <div class="view-toggle" role="group" aria-label="视图切换">
+              <button type="button" :class="{ active: viewMode === 'timeline' }" :aria-pressed="viewMode === 'timeline'" @click="viewMode = 'timeline'">
                 <ListTree :size="16" /> 时间轴
               </button>
-              <button type="button" :class="{ active: viewMode === 'grid' }" @click="viewMode = 'grid'">
+              <button type="button" :class="{ active: viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" @click="viewMode = 'grid'">
                 <Grid2X2 :size="16" /> 网格
               </button>
             </div>
@@ -986,10 +1078,12 @@ onBeforeUnmount(() => {
       </template>
     </template>
 
+    </main>
+
     <footer class="site-footer">
       <span>拾光的 B站收藏接口适配源自 <a href="https://github.com/TLRKFXE/BiliShelf" target="_blank" rel="noreferrer">BiliShelf</a> 的开源实践；当前网页、数据层与代理为拾光独立实现。</span>
       <span>收藏数据属于你，也只留在你这里。</span>
     </footer>
 
-  </main>
+  </div>
 </template>

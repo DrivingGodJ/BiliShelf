@@ -43,7 +43,9 @@ function handleImageError(event: Event) {
       <span><CalendarDays :size="14" /> 收藏于 {{ formatFavoriteDate(video.favoriteAt) }}</span>
       <span v-if="video.isInvalid" class="memory-card__invalid"><CircleAlert :size="14" /> 已失效</span>
     </div>
-    <h3>{{ video.title }}</h3>
+    <h3>
+      <a :href="video.videoUrl" target="_blank" rel="noreferrer">{{ video.title }}</a>
+    </h3>
     <p class="memory-card__description">{{ video.description || "当时没有留下简介，但这段收藏还在。" }}</p>
     <div class="memory-card__footer">
       <span class="memory-card__uploader"><UserRound :size="14" /> {{ video.uploader }}</span>

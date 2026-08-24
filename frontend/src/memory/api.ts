@@ -23,6 +23,25 @@ export class FavoriteApiError extends Error {
   }
 }
 
+async function fetchFromProxy(
+  url: string,
+  signal: AbortSignal | undefined,
+  action: "同步" | "查询",
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new FavoriteApiError(
+      `${action}失败：无法连接数据代理，请检查网络后重试。`,
+    );
+  }
+}
+
 export async function fetchFavoritePage(options: {
   proxyBaseUrl: string;
   mediaId: number;
@@ -40,11 +59,7 @@ export async function fetchFavoritePage(options: {
     PAGE_SIZE,
     options.fresh,
   );
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-    signal: options.signal,
-  });
+  const response = await fetchFromProxy(url, options.signal, "同步");
 
   if (!response.ok) {
     if (response.status === 429 || response.status === 412) {
@@ -72,11 +87,11 @@ export async function fetchFavoriteFolders(options: {
   const proxyBaseUrl = normalizeProxyBaseUrl(options.proxyBaseUrl);
   if (!proxyBaseUrl) throw new FavoriteApiError("请先配置有效的只读数据代理地址");
 
-  const response = await fetch(buildFavoriteFoldersApiUrl(proxyBaseUrl, options.uid), {
-    method: "GET",
-    headers: { Accept: "application/json" },
-    signal: options.signal,
-  });
+  const response = await fetchFromProxy(
+    buildFavoriteFoldersApiUrl(proxyBaseUrl, options.uid),
+    options.signal,
+    "查询",
+  );
 
   if (!response.ok) {
     if (response.status === 429 || response.status === 412) {

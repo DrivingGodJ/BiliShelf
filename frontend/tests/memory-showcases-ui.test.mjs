@@ -32,3 +32,16 @@ test("visible memory covers open Bilibili directly instead of a detail dialog", 
   assert.match(card, /<a\s+[\s\S]*:href="video\.videoUrl"/);
   assert.doesNotMatch(card, /emit\('remember'/);
 });
+
+test("the redesigned journey exposes all three memory paths and accessible filter state", async () => {
+  const source = await readFile(new URL("src/memory/MemoryApp.vue", frontendRoot), "utf8");
+
+  assert.match(source, /class="memory-paths" aria-label="选择回忆方式"/);
+  assert.match(source, /href="#random-memories"/);
+  assert.match(source, /href="#today-memories"/);
+  assert.match(source, /href="#memory-finder"/);
+  assert.match(source, /class="filter-control__label">搜索收藏/);
+  assert.match(source, /class="filter-control__label">按收藏日期/);
+  assert.match(source, /:aria-pressed="viewMode === 'timeline'"/);
+  assert.match(source, /class="connection-banner" role="status"/);
+});
