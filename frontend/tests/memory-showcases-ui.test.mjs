@@ -50,5 +50,9 @@ test("the redesigned journey exposes all three memory paths and accessible filte
     /<section id="memory-finder"[\s\S]*<section class="results-section"[\s\S]*<\/section>\s*<\/section>\s*<p class="legacy-note"/,
   );
   assert.match(css, /\.filter-panel \{[\s\S]*position: sticky/);
+  assert.match(
+    css,
+    /@media \(max-width: 820px\)[\s\S]*\.filter-panel \{\s*position: sticky;\s*top: calc\(env\(safe-area-inset-top, 0px\) \+ 8px\)/,
+  );
   assert.match(css, /\.memory-paths \{[\s\S]*margin-top: 20px/);
 });

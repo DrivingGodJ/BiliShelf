@@ -1600,8 +1600,8 @@ select:focus-visible {
   }
 
   .filter-panel {
-    position: relative;
-    top: auto;
+    position: sticky;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
     grid-template-columns: 1fr;
   }
 
