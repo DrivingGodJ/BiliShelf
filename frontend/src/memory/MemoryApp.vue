@@ -881,7 +881,7 @@ onBeforeUnmount(() => {
           </a>
           <a href="#today-memories">
             <span class="memory-paths__icon"><CalendarClock :size="19" /></span>
-            <span><strong>看看今天</strong><small>{{ todayMemoryCount ? `${formatCount(todayMemoryCount)} 段往年今日` : "等待某个有记录的日子" }}</small></span>
+            <span><strong>那年今日</strong><small>{{ todayMemoryCount ? `${formatCount(todayMemoryCount)} 段往年今日` : "等待某个有记录的日子" }}</small></span>
           </a>
           <a href="#memory-finder">
             <span class="memory-paths__icon"><Search :size="19" /></span>
