@@ -838,10 +838,8 @@ onBeforeUnmount(() => {
                 <dd v-else>等待同步</dd>
               </div>
               <div>
-                <dt>上次整理</dt>
-                <dd :title="settings.lastSyncAt ? formatFavoriteDate(settings.lastSyncAt, true) : undefined">
-                  {{ settings.lastSyncAt ? formatFavoriteDate(settings.lastSyncAt) : "尚未同步" }}
-                </dd>
+                <dt>最近收藏</dt>
+                <dd>{{ latestFavoriteAt ? formatFavoriteDate(latestFavoriteAt) : "等待同步" }}</dd>
               </div>
             </dl>
           </div>

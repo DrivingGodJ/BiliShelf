@@ -44,6 +44,8 @@ test("the redesigned journey exposes all three memory paths and accessible filte
   assert.match(source, /class="memory-paths__index" aria-hidden="true">01</);
   assert.match(source, /class="memory-paths__index" aria-hidden="true">03</);
   assert.match(source, /class="collection-header__ledger" aria-label="收藏夹概况"/);
+  assert.match(source, /<dt>最近收藏<\/dt>/);
+  assert.doesNotMatch(source, /<dt>上次整理<\/dt>/);
   assert.match(source, /class="filter-control__label">搜索收藏/);
   assert.match(source, /class="filter-control__label">按收藏日期/);
   assert.match(source, /:aria-pressed="viewMode === 'timeline'"/);
