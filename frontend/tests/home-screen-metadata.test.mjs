@@ -59,3 +59,21 @@ test("memory web follows the system light and dark color scheme", async () => {
   assert.match(css, /\.filter-panel \{[\s\S]*background: rgba\(29, 33, 28, 0\.88\)/);
   assert.match(css, /\.memory-card \{[\s\S]*background: rgba\(41, 45, 39, 0\.95\)/);
 });
+
+test("bundles the memory display font instead of relying on device fonts", async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL("package.json", frontendRoot), "utf8"),
+  );
+  const main = await readFile(new URL("src/main.ts", frontendRoot), "utf8");
+  const css = await readFile(new URL("src/memory/memory.css", frontendRoot), "utf8");
+  const license = await readFile(
+    new URL("public/font-licenses/LXGW-WenKai-OFL.txt", frontendRoot),
+    "utf8",
+  );
+
+  assert.equal(packageJson.dependencies["lxgw-wenkai-screen-web"], "1.522.0");
+  assert.match(main, /lxgw-wenkai-screen-web\/lxgwwenkaigbscreen\/result\.css/);
+  assert.match(css, /--font-memory: "LXGW WenKai GB Screen"/);
+  assert.match(css, /\.memory-card h3 \{[\s\S]*font-family: var\(--font-memory\)/);
+  assert.match(license, /SIL OPEN FONT LICENSE Version 1\.1/);
+});
