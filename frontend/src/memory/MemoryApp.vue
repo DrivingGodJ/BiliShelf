@@ -1009,67 +1009,67 @@ onBeforeUnmount(() => {
               清除筛选
             </button>
           </div>
-        </section>
 
-        <section class="results-section" aria-labelledby="results-title">
-          <div class="results-header">
-            <div>
-              <p class="kicker"><CalendarDays :size="15" /> {{ filterDescription }}</p>
-              <h2 id="results-title">找到 {{ formatCount(filteredVideos.length) }} 段回忆</h2>
-              <p v-if="earliestFavoriteAt && latestFavoriteAt">
-                {{ formatFavoriteDate(earliestFavoriteAt) }} — {{ formatFavoriteDate(latestFavoriteAt) }}
-              </p>
-            </div>
-            <div class="view-toggle" role="group" aria-label="视图切换">
-              <button type="button" :class="{ active: viewMode === 'timeline' }" :aria-pressed="viewMode === 'timeline'" @click="viewMode = 'timeline'">
-                <ListTree :size="16" /> 时间轴
-              </button>
-              <button type="button" :class="{ active: viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" @click="viewMode = 'grid'">
-                <Grid2X2 :size="16" /> 网格
-              </button>
-            </div>
-          </div>
-
-          <div v-if="!filteredVideos.length" class="empty-state">
-            <CalendarDays :size="31" />
-            <h3>这一天暂时没有收藏</h3>
-            <p>换个日期，或者让随机回忆替你选。</p>
-            <button type="button" class="button button--primary" @click="resetFilters">查看全部收藏</button>
-          </div>
-
-          <div v-else-if="viewMode === 'grid'" class="memory-grid">
-            <MemoryVideoCard
-              v-for="video in visibleVideos"
-              :key="video.key"
-              :video="video"
-            />
-          </div>
-
-          <div v-else class="timeline">
-            <section v-for="group in timelineGroups" :key="group.key" class="timeline-day">
-              <div class="timeline-day__label">
-                <span class="timeline-day__dot" />
-                <time>{{ group.key }}</time>
-                <small>{{ group.items.length }} 段</small>
+          <section class="results-section" aria-labelledby="results-title">
+            <div class="results-header">
+              <div>
+                <p class="kicker"><CalendarDays :size="15" /> {{ filterDescription }}</p>
+                <h2 id="results-title">找到 {{ formatCount(filteredVideos.length) }} 段回忆</h2>
+                <p v-if="earliestFavoriteAt && latestFavoriteAt">
+                  {{ formatFavoriteDate(earliestFavoriteAt) }} — {{ formatFavoriteDate(latestFavoriteAt) }}
+                </p>
               </div>
-              <div class="memory-grid">
-                <MemoryVideoCard
-                  v-for="video in group.items"
-                  :key="video.key"
-                  :video="video"
-                />
+              <div class="view-toggle" role="group" aria-label="视图切换">
+                <button type="button" :class="{ active: viewMode === 'timeline' }" :aria-pressed="viewMode === 'timeline'" @click="viewMode = 'timeline'">
+                  <ListTree :size="16" /> 时间轴
+                </button>
+                <button type="button" :class="{ active: viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" @click="viewMode = 'grid'">
+                  <Grid2X2 :size="16" /> 网格
+                </button>
               </div>
-            </section>
-          </div>
+            </div>
 
-          <button
-            v-if="visibleCount < filteredVideos.length"
-            type="button"
-            class="button button--load-more"
-            @click="loadMore"
-          >
-            再往前翻 60 段
-          </button>
+            <div v-if="!filteredVideos.length" class="empty-state">
+              <CalendarDays :size="31" />
+              <h3>这一天暂时没有收藏</h3>
+              <p>换个日期，或者让随机回忆替你选。</p>
+              <button type="button" class="button button--primary" @click="resetFilters">查看全部收藏</button>
+            </div>
+
+            <div v-else-if="viewMode === 'grid'" class="memory-grid">
+              <MemoryVideoCard
+                v-for="video in visibleVideos"
+                :key="video.key"
+                :video="video"
+              />
+            </div>
+
+            <div v-else class="timeline">
+              <section v-for="group in timelineGroups" :key="group.key" class="timeline-day">
+                <div class="timeline-day__label">
+                  <span class="timeline-day__dot" />
+                  <time>{{ group.key }}</time>
+                  <small>{{ group.items.length }} 段</small>
+                </div>
+                <div class="memory-grid">
+                  <MemoryVideoCard
+                    v-for="video in group.items"
+                    :key="video.key"
+                    :video="video"
+                  />
+                </div>
+              </section>
+            </div>
+
+            <button
+              v-if="visibleCount < filteredVideos.length"
+              type="button"
+              class="button button--load-more"
+              @click="loadMore"
+            >
+              再往前翻 60 段
+            </button>
+          </section>
         </section>
 
         <p class="legacy-note">

@@ -764,6 +764,7 @@ select:focus-visible {
 .memory-paths {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 20px;
   overflow: hidden;
   background: rgba(255, 253, 248, 0.58);
   border: 1px solid var(--line);
