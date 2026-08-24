@@ -4,9 +4,9 @@ set -u
 
 HEALTH_URL="https://api.drivinggodj.dpdns.org/api/health"
 ALLOWED_ORIGIN="https://drivinggodj.github.io"
-TUNNEL_LABEL="com.drivinggodj.bilishelf-tunnel"
+TUNNEL_LABEL="com.drivinggodj.shiguang-memory-tunnel"
 RESTART_COOLDOWN_SECONDS=600
-STATE_FILE="${TMPDIR:-/tmp}/com.drivinggodj.bilishelf-watchdog.last-restart"
+STATE_FILE="${TMPDIR:-/tmp}/com.drivinggodj.shiguang-memory-watchdog.last-restart"
 
 is_healthy() {
   /usr/bin/curl \

@@ -69,6 +69,16 @@ test("restricts configured origins", async () => {
   assert.equal(response.status, 403);
 });
 
+test("does not expose the Mac-only UID statistics route through the public Worker", async () => {
+  const response = await handleRequest(
+    new Request("https://memory.example/local/uid-stats", {
+      headers: { Origin: "https://example.github.io" },
+    }),
+    { ALLOWED_ORIGINS: "https://example.github.io" },
+  );
+  assert.equal(response.status, 404);
+});
+
 test("forwards only validated favorite requests through the Mac VPC binding", async () => {
   let forwardedRequest;
   const response = await handleRequest(

@@ -110,6 +110,8 @@ pnpm --dir frontend install
 pnpm --dir worker start:local
 ```
 
+本地代理运行后，可在 `http://127.0.0.1:8787/local/uid-stats` 查看仅保存在这台 Mac 的 UID 请求统计，包括最近 100 次可识别请求及每个 UID 的累计次数。统计不记录访客 IP、Cookie 或收藏内容，公网 Worker 也不会转发该页面。
+
 另开一个终端启动网页：
 
 ```bash

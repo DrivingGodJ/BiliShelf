@@ -27,5 +27,7 @@ test("the tunnel watchdog checks the custom production endpoint", async () => {
   );
 
   assert.match(script, /HEALTH_URL="https:\/\/api\.drivinggodj\.dpdns\.org\/api\/health"/);
+  assert.match(script, /TUNNEL_LABEL="com\.drivinggodj\.shiguang-memory-tunnel"/);
   assert.doesNotMatch(script, /workers\.dev/);
+  assert.doesNotMatch(script, /bilishelf/);
 });

@@ -1,5 +1,12 @@
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { handleRequest } from "./index.js";
+import {
+  createUidRequestLog,
+  extractUidFromFavoriteResponse,
+  renderUidStatsHtml,
+} from "./uid-request-log.js";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.BILI_MEMORY_PORT || "8787", 10);
@@ -11,8 +18,15 @@ const CLIENT_REQUEST_LIMIT = 180;
 const MAX_TRACKED_CLIENTS = 10000;
 const MAX_PENDING_REQUESTS = 40;
 const MIN_UPSTREAM_INTERVAL_MS = 400;
+const UID_STATS_PATH = "/local/uid-stats";
+const UID_STATS_JSON_PATH = "/local/uid-stats.json";
+const UID_STATS_FILE = process.env.BILI_MEMORY_STATS_FILE || path.join(
+  os.homedir(),
+  "Library/Application Support/ShiguangMemory/data/uid-request-stats.json",
+);
 const responseCache = new Map();
 const clientRequests = new Map();
+const uidRequestLog = createUidRequestLog({ filePath: UID_STATS_FILE, recentLimit: 100 });
 let upstreamQueue = Promise.resolve();
 let pendingRequests = 0;
 let lastUpstreamAt = 0;
@@ -118,6 +132,46 @@ function clientIpFrom(headers) {
   return forwarded || "local";
 }
 
+function isLocalStatsRequest(url, method) {
+  return method === "GET" && (url.pathname === UID_STATS_PATH || url.pathname === UID_STATS_JSON_PATH);
+}
+
+function localStatsResponse(body, contentType) {
+  return {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+    },
+    body: Buffer.from(body),
+  };
+}
+
+async function recordSuccessfulUidRequest(url, response) {
+  if (response.status < 200 || response.status >= 300) return;
+  const uid = url.pathname === "/api/folders"
+    ? url.searchParams.get("uid")
+    : extractUidFromFavoriteResponse(response.body);
+  if (!uid) return;
+  try {
+    await uidRequestLog.record({
+      uid,
+      route: url.pathname,
+      mediaId: url.searchParams.get("mediaId"),
+      page: url.searchParams.get("page"),
+      cache: response.headers["X-Mac-Cache"] || "MISS",
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      message: "UID request log could not be saved",
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+}
+
 async function handleNodeRequest(nodeRequest) {
   const url = new URL(nodeRequest.url || "/", `http://${HOST}:${PORT}`);
   const method = nodeRequest.method || "GET";
@@ -125,6 +179,16 @@ async function handleNodeRequest(nodeRequest) {
   for (const [name, value] of Object.entries(nodeRequest.headers)) {
     if (Array.isArray(value)) headers.set(name, value.join(", "));
     else if (value !== undefined) headers.set(name, value);
+  }
+
+  if (isLocalStatsRequest(url, method)) {
+    if (headers.has("X-Forwarded-Client-IP")) {
+      return jsonResponse({ code: -404, message: "Not found" }, 404, "null");
+    }
+    const state = await uidRequestLog.snapshot();
+    return url.pathname === UID_STATS_JSON_PATH
+      ? localStatsResponse(`${JSON.stringify(state, null, 2)}\n`, "application/json; charset=utf-8")
+      : localStatsResponse(renderUidStatsHtml(state), "text/html; charset=utf-8");
   }
 
   const cacheKey = `${url.pathname}${url.search}`;
@@ -135,7 +199,11 @@ async function handleNodeRequest(nodeRequest) {
   if (bilibiliReadRequest) {
     if (!bypassCache) {
       const cached = readCachedResponse(cacheKey);
-      if (cached) return { ...cached, headers: { ...cached.headers, "X-Mac-Cache": "HIT" } };
+      if (cached) {
+        const response = { ...cached, headers: { ...cached.headers, "X-Mac-Cache": "HIT" } };
+        await recordSuccessfulUidRequest(url, response);
+        return response;
+      }
     }
 
     if (!allowClientRequest(clientIpFrom(headers))) {
@@ -153,6 +221,7 @@ async function handleNodeRequest(nodeRequest) {
     : await handleRequest(request, { ALLOWED_ORIGINS }, {});
   const response = await bufferWebResponse(webResponse);
   response.headers["X-Mac-Cache"] = bypassCache ? "BYPASS" : "MISS";
+  await recordSuccessfulUidRequest(url, response);
   if (!bypassCache && bilibiliReadRequest && response.status >= 200 && response.status < 300) {
     cacheResponse(cacheKey, response);
   }
