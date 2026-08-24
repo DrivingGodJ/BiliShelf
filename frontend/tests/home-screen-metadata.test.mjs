@@ -19,7 +19,7 @@ test("publishes iPhone and installable web app metadata", async () => {
     await readFile(new URL("public/manifest.webmanifest", frontendRoot), "utf8"),
   );
 
-  assert.match(html, /rel="apple-touch-icon"[^>]+apple-touch-icon-v2\.png/);
+  assert.match(html, /rel="apple-touch-icon"[^>]+apple-touch-icon-v3\.png/);
   assert.match(html, /rel="manifest"[^>]+manifest\.webmanifest/);
   assert.match(html, /name="apple-mobile-web-app-title" content="拾光"/);
   assert.equal(manifest.short_name, "拾光");
@@ -28,15 +28,15 @@ test("publishes iPhone and installable web app metadata", async () => {
     manifest.icons.map((icon) => icon.sizes),
     ["192x192", "512x512"],
   );
-  assert.deepEqual(await readPngSize("public/apple-touch-icon-v2.png"), {
+  assert.deepEqual(await readPngSize("public/apple-touch-icon-v3.png"), {
     width: 180,
     height: 180,
   });
-  assert.deepEqual(await readPngSize("public/app-icon-192-v2.png"), {
+  assert.deepEqual(await readPngSize("public/app-icon-192-v3.png"), {
     width: 192,
     height: 192,
   });
-  assert.deepEqual(await readPngSize("public/app-icon-512-v2.png"), {
+  assert.deepEqual(await readPngSize("public/app-icon-512-v3.png"), {
     width: 512,
     height: 512,
   });
