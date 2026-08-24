@@ -1,4 +1,8 @@
-# 拾光 · B站收藏时光机
+<p align="center">
+  <img src="./frontend/public/app-icon-512-v3.png" alt="拾光 Logo" width="136" />
+</p>
+
+<h1 align="center">拾光 · B站收藏时光机</h1>
 
 <p align="center">
   把收藏变成一条可以搜索、回看和偶遇的时间线。
